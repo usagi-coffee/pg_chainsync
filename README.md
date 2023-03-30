@@ -2,14 +2,14 @@
 
 > Proof of Concept - expect bugs and breaking changes.
 
-pg_chainsync aims to allow you to easily watch blockchain blocks, events and more directly inside your PostgreSQL instance. The extension does not aim to enforce any custom schema for your table and aims for using custom handlers that you adjust for your table.
+pg_chainsync aims to allow you to easily watch blockchain blocks, events and more directly inside your PostgreSQL instance. The extension does not enforce any custom schema for your table and let's you use custom handlers that you adjust for your specific use-case (you don't even need to insert if you want!).
 
-The extension is written using [pgx](https://github.com/tcdi/pgx) in rust.
+The extension is written using [pgx](https://github.com/tcdi/pgx) in Rust.
 
 ## Usage
 
 Let's watch blocks and insert them to your custom table
-> For the example let's assume you've got blocks table with number and hash column, the extension does not enforce how your schema looks!
+> For the usage let's assume you've got blocks table with number and hash column, the extension does not enforce how your schema looks, it's up to you!
 
 ```sql
 -- Let's use the extension
@@ -35,10 +35,11 @@ SELECT chainsync.restart();
 Here is the log output after the job has started, for the testing the number of fetched blocks has been limited - it obviously can run indefinitely.
 ![example_output](./extra/usage1.png)
 
+The usage example was run on Potsgresql 15.
 
 ## Installation
 
-> The extension is currently in Proof of Concept stage and does not provide instructions how to install it because it's in very early stage. Refer to the pgx documentation to see how to run the extension that uses worker if you are interested in trying it out.
+> The extension is currently in Proof of Concept stage and does not provide instructions how to install it. Refer to the pgx documentation to see how to run the extension that uses worker if you are interested in trying it out.
 
 
 ## License
