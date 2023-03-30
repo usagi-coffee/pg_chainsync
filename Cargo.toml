@@ -1,0 +1,33 @@
+[package]
+name = "pg_chainsync"
+version = "0.0.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = ["pg15"]
+pg15 = ["pgx/pg15", "pgx-tests/pg15" ]
+pg_test = []
+
+[dependencies]
+pgx = "=0.7.3"
+eyre = { version = "0.6" }
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+ethers = { version = "1.0.0", features = ["ws", "rustls"] }
+serde_json = { version = "1.0" }
+heapless = "0.7.16"
+
+[dev-dependencies]
+pgx-tests = "=0.7.3"
+
+[profile.dev]
+panic = "unwind"
+
+[profile.release]
+panic = "unwind"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
