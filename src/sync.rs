@@ -143,7 +143,7 @@ async fn handle_message(jobs: Arc<Vec<Job>>, stream: &mut MessageStream) {
                     })
                     .catch_others(|_| {
                         error!(
-                            "sync: blocks: handler failed to put block {}",
+                            "sync: blocks: handler failed to put {}",
                             number
                         );
                     })

@@ -29,16 +29,12 @@ pub async fn listen(jobs: Arc<Vec<Job>>, send_message: MessageSender) {
         let (chain, block) = tick;
 
         let number = block.number.unwrap_or(U64::from(0));
-        log!("sync: blocks: {}: found block {}", chain, number);
+        log!("sync: blocks: {}: found {}", chain, number);
 
         match send_message.try_send((chain, Message::Block(block))) {
             Ok(()) => {}
             Err(_) => {
-                warning!(
-                    "sync: blocks: {}: failed to send block {}",
-                    chain,
-                    number
-                )
+                warning!("sync: blocks: {}: failed to send {}", chain, number)
             }
         }
     }
