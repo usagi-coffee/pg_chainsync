@@ -1,22 +1,21 @@
-# pg_chainsync - Watch blockchain inside PostgreSQL
+# pg_chainsync - watch blockchain inside PostgreSQL
 
 > Proof of Concept - expect bugs and breaking changes.
 
-pg_chainsync aims to allow you to easily watch blockchain blocks, events and more directly inside your PostgreSQL instance. The extension does not enforce any custom schema for your table and let's you use custom handlers that you adjust for your specific use-case (you don't even need to insert if you want!).
+pg_chainsync aims to allow you to easily watch blockchain blocks, events and more directly inside your PostgreSQL instance. The extension does not enforce any custom schema for your table and let's you use custom handlers that you adjust for your specific use-case.
 
 The extension is written using [pgx](https://github.com/tcdi/pgx) in Rust.
 
 ## Usage
 
 Let's watch blocks and insert them to your custom table
-> For the usage let's assume you've got blocks table with number and hash column, the extension does not enforce how your schema looks, it's up to you!
+> For the usage let's assume you've got blocks table with number and hash column
 
 ```sql
 -- Let's use the extension
 CREATE EXTENSION pg_chainsync;
 
--- This is your custom handler and your custom table
--- Block type is pg_chainsync type
+-- This is your custom handler
 CREATE FUNCTION custom_block_handler(block chainsync.Block) RETURNS blocks
 AS $$
 INSERT INTO blocks (number, hash)
@@ -35,7 +34,7 @@ SELECT chainsync.restart();
 Here is the log output after the job has started, for the testing the number of fetched blocks has been limited - it obviously can run indefinitely.
 ![example_output](./extra/usage1.png)
 
-The usage example was run on Potsgresql 15.
+The usage example was run on PotsgreSQL 15.
 
 ## Installation
 
