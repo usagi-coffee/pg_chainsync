@@ -17,7 +17,7 @@ CREATE EXTENSION pg_chainsync;
 
 -- This is your custom handler and your custom table
 -- Block type is pg_chainsync type
-CREATE FUNCTION custom_block_handler(block Block) RETURNS blocks
+CREATE FUNCTION custom_block_handler(block chainsync.Block) RETURNS blocks
 AS $$
 INSERT INTO blocks (number, hash)
 VALUES (block.number, block.hash)
@@ -26,7 +26,7 @@ $$
 LANGUAGE SQL;
 
 -- The arguments are chain id, websocket url and name of the handler function
-SELECT add_blocks_job(10, "wss://your-provider-url", "custom_block_handler");
+SELECT chainsync.add_blocks_job(10, 'wss://provider-url', 'custom_block_handler');
 
 -- Restart your database to run the job or call restart on-demand
 SELECT chainsync.restart();

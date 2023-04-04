@@ -1,5 +1,5 @@
 --
-CREATE TYPE Block AS (
+CREATE TYPE chainsync.Block AS (
 	hash TEXT,
 	author TEXT,
 	state_root TEXT,
