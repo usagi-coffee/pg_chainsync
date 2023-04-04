@@ -1,0 +1,18 @@
+{
+  "name": "pg_chainsync",
+  "version": "0.0.0",
+  "description": "> Proof of Concept - expect bugs and breaking changes.",
+  "scripts": {
+    "dev:psql": "psql -p 28815 -h 0.0.0.0 -U jk -d pg_chainsync"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/usagi-coffee/pg_chainsync.git"
+  },
+  "author": "Kamil Jakubus",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/usagi-coffee/pg_chainsync/issues"
+  },
+  "homepage": "https://github.com/usagi-coffee/pg_chainsync#readme"
+}
