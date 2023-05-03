@@ -2,23 +2,23 @@
 
 > Proof of Concept - expect bugs and breaking changes.
 
-pg_chainsync aims to allow you to easily watch blockchain blocks, events and more directly inside your PostgreSQL instance. The extension does not enforce any custom schema for your table and let's you use custom handlers that you adjust for your specific use-case.
+pg_chainsync adds ability to watch blockchain blocks, events and more directly inside your PostgreSQL instance. The extension does not enforce any custom schema for your table and let's you use custom handlers that you adjust for your specific use-case.
 
-The extension is written using [pgx](https://github.com/tcdi/pgx) in Rust.
+The extension is written using [pgrx](https://github.com/tcdi/pgrx) in Rust.
 
 ## Usage
 
-Let's watch blocks and insert them to your custom table
-> For the usage let's assume you've got blocks table with number and hash column
+### Watching new blocks
+> This scenario assumes there exists blocks table with number and hash column
 
 ```sql
 -- Let's use the extension
 CREATE EXTENSION pg_chainsync;
 
--- This is your custom handler
+-- This is your custom handler that inserts new blocks to your table
 CREATE FUNCTION custom_block_handler(block chainsync.Block) RETURNS blocks
 AS $$
-INSERT INTO blocks (number, hash)
+INSERT INTO blocks (number, hash) -- Inserting into your custom blocks table
 VALUES (block.number, block.hash)
 RETURNING *
 $$
@@ -31,10 +31,13 @@ SELECT chainsync.add_blocks_job(10, 'wss://provider-url', 'custom_block_handler'
 SELECT chainsync.restart();
 ```
 
-Here is the log output after the job has started, for the testing the number of fetched blocks has been limited - it obviously can run indefinitely.
+For the optimal performance your handler function should meet the conditions to be [inlined](https://wiki.postgresql.org/wiki/Inlining_of_SQL_functions).
+
+Here is the complete log output, for the testing the number of fetched blocks has been limited to display the full lifecycle.
+
 ![example_output](./extra/usage1.png)
 
-The usage example was run on PotsgreSQL 15.
+The usage examples were run on PotsgreSQL 15.
 
 ## Installation
 
