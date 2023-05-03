@@ -4,4 +4,4 @@ CREATE TABLE chainsync.jobs (
 	chain_id BIGINT NOT NULL,
 	callback TEXT NOT NULL,
 	provider_url TEXT NOT NULL
-)
+);
