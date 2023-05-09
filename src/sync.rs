@@ -146,15 +146,17 @@ async fn handle_message(jobs: Arc<Vec<Job>>, stream: &mut MessageStream) {
                                 .expect("failed to call the handler")
                         }
                     })
-                    .catch_others(|_| {
+                    .catch_rust_panic(|e| {
+                        log!("{:?}", e);
                         error!(
-                            "sync: blocks: handler failed to put {}",
+                            "sync: blocks: failed to call handler for {}",
                             number
                         );
                     })
-                    .catch_rust_panic(|_| {
+                    .catch_others(|e| {
+                        log!("{:?}", e);
                         error!(
-                            "sync: blocks: failed to call handler for {}",
+                            "sync: blocks: handler failed to put {}",
                             number
                         );
                     })
