@@ -8,13 +8,24 @@ The extension is written using [pgrx](https://github.com/tcdi/pgrx) in Rust.
 
 ## Usage
 
+```sql
+CREATE EXTENSION pg_chainsync;
+```
+
+### Worker lifecycle
+
+```sql
+-- Restart your worker on-demand
+SELECT chainsync.restart();
+
+-- Stops the worker
+SELECT chainsync.stop();
+```
+
 ### Watching new blocks
 > This scenario assumes there exists blocks table with number and hash column
 
 ```sql
--- Let's use the extension
-CREATE EXTENSION pg_chainsync;
-
 -- This is your custom handler that inserts new blocks to your table
 CREATE FUNCTION custom_block_handler(block chainsync.Block) RETURNS blocks
 AS $$
@@ -27,8 +38,8 @@ LANGUAGE SQL;
 -- The arguments are chain id, websocket url and name of the handler function
 SELECT chainsync.add_blocks_job(10, 'wss://provider-url', 'custom_block_handler');
 
--- Restart your database to run the job or call restart on-demand
-SELECT chainsync.restart();
+-- Restart worker (or database) to start the job
+SELECT chainsync.stop();
 ```
 
 For the optimal performance your handler function should meet the conditions to be [inlined](https://wiki.postgresql.org/wiki/Inlining_of_SQL_functions).
