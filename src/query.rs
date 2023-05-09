@@ -6,7 +6,7 @@ use ethers::prelude::*;
 
 use crate::types::*;
 
-pub const BLOCK_COMPOSITE_TYPE: &str = "Block";
+pub const BLOCK_COMPOSITE_TYPE: &str = "chainsync.Block";
 
 impl Job {
     pub fn register(
