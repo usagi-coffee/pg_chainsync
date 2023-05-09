@@ -97,11 +97,16 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
 async fn handle_signals() {
     loop {
         if BackgroundWorker::sighup_received() {
-            break;
+            *WORKER_STATUS.exclusive() = WorkerStatus::STOPPING;
+        }
+
+        if BackgroundWorker::sigterm_received() {
+            *WORKER_STATUS.exclusive() = WorkerStatus::STOPPING;
         }
 
         match WORKER_STATUS.share().clone() {
-            WorkerStatus::RESTARTING => return,
+            WorkerStatus::RESTARTING => break,
+            WorkerStatus::STOPPING => break,
             _ => {}
         }
 

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use pgx::bgworkers::*;
 use pgx::prelude::*;
 use pgx::{pg_shmem_init, PgSharedMemoryInitialization};
@@ -13,7 +15,9 @@ pgx::pg_module_magic!();
 #[pg_schema]
 mod chainsync {
     use crate::types::{Job, JobType};
-    use crate::worker::{WorkerStatus, RESTART_COUNT, WORKER_STATUS};
+    use crate::worker::{
+        WorkerStatus, RESTART_COUNT, STOP_COUNT, WORKER_STATUS,
+    };
 
     use pgx::bgworkers::*;
     use pgx::prelude::*;
@@ -31,6 +35,12 @@ mod chainsync {
         } else {
             *WORKER_STATUS.exclusive() = WorkerStatus::RESTARTING;
         }
+    }
+
+    #[pg_extern]
+    fn stop() {
+        *RESTART_COUNT.exclusive() = STOP_COUNT;
+        *WORKER_STATUS.exclusive() = WorkerStatus::STOPPING;
     }
 
     #[pg_extern]
