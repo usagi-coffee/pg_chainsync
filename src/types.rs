@@ -3,6 +3,8 @@ use std::hash::Hash;
 use std::panic::UnwindSafe;
 use std::str;
 
+use serde::Deserialize;
+
 use ethers::prelude::*;
 use ethers::types::{Chain, H256};
 
@@ -37,11 +39,23 @@ impl fmt::Display for JobType {
     }
 }
 
+#[derive(Deserialize)]
+pub struct JobOptions {
+    pub address: Option<String>,
+    pub topic0: Option<String>,
+    pub topic1: Option<String>,
+    pub topic2: Option<String>,
+    pub topic3: Option<String>,
+    pub from_block: Option<i32>,
+    pub to_block: Option<i32>,
+}
+
 pub struct Job {
     pub job_type: JobType,
     pub chain: Chain,
     pub provider_url: String,
     pub callback: String,
+    pub options: Option<JobOptions>,
 
     pub ws: Option<Provider<Ws>>,
 }

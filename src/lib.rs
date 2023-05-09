@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use pgx::bgworkers::*;
 use pgx::prelude::*;
 use pgx::{pg_shmem_init, PgSharedMemoryInitialization};
@@ -49,7 +47,14 @@ mod chainsync {
         provider_url: &str,
         callback: &str,
     ) -> bool {
-        Job::register(JobType::Blocks, chain_id, provider_url, callback)
+        Job::register(
+            JobType::Blocks,
+            chain_id,
+            provider_url,
+            callback,
+            pgx::JsonB(serde_json::Value::Null),
+        )
+    }
     }
 }
 

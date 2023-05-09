@@ -8,7 +8,7 @@ crate-type = ["cdylib"]
 
 [features]
 default = ["pg15"]
-pg15 = ["pgx/pg15", "pgx-tests/pg15" ]
+pg15 = ["pgx/pg15", "pgx-tests/pg15"]
 pg_test = []
 
 [dependencies]
@@ -19,6 +19,7 @@ tokio-stream = "0.1"
 ethers = { version = "1.0.0", features = ["ws", "rustls"] }
 serde_json = { version = "1.0" }
 heapless = "0.7.16"
+serde = "1.0.162"
 
 [dev-dependencies]
 pgx-tests = "=0.7.3"

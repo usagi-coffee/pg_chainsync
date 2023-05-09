@@ -14,6 +14,7 @@ impl Job {
         chain_id: i64,
         provider_url: &str,
         callback: &str,
+        options: pgx::JsonB,
     ) -> bool {
         Spi::run_with_args(
             include_str!("../sql/insert_job.sql"),
@@ -34,6 +35,10 @@ impl Job {
                     PgOid::BuiltIn(PgBuiltInOids::TEXTOID),
                     callback.into_datum(),
                 ),
+                (
+                    PgOid::BuiltIn(PgBuiltInOids::JSONBOID),
+                    options.into_datum(),
+                ),
             ]),
         )
         .is_ok()
@@ -53,6 +58,11 @@ impl Job {
                     continue;
                 }
 
+                let options = table
+                    .get_by_name::<pgx::JsonB, &'static str>("options")
+                    .unwrap()
+                    .unwrap();
+
                 jobs.push(Job {
                     job_type: job_type.unwrap().unwrap().parse().unwrap(),
                     chain: Chain::try_from(
@@ -70,6 +80,7 @@ impl Job {
                         .get_by_name::<String, &'static str>("callback")
                         .unwrap()
                         .unwrap(),
+                    options: serde_json::from_value(options.0).unwrap_or(None),
                     ws: None,
                 });
             }
