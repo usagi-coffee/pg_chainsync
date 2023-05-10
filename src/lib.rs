@@ -55,6 +55,25 @@ mod chainsync {
             pgx::JsonB(serde_json::Value::Null),
         )
     }
+
+    #[pg_extern]
+    fn add_events_job(
+        chain_id: i64,
+        provider_url: &str,
+        callback: &str,
+        options: pgx::JsonB,
+    ) -> bool {
+        if options.0.is_null() || !options.0.is_object() {
+            panic!("provided options are not an object")
+        }
+
+        Job::register(
+            JobType::Events,
+            chain_id,
+            provider_url,
+            callback,
+            options,
+        )
     }
 }
 

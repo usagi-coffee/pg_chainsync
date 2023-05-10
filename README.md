@@ -29,7 +29,7 @@ SELECT chainsync.stop();
 -- This is your custom handler that inserts new blocks to your table
 CREATE FUNCTION custom_block_handler(block chainsync.Block) RETURNS blocks
 AS $$
-INSERT INTO blocks (number, hash) -- Inserting into your custom blocks table
+INSERT INTO blocks (number, hash) -- Inserting into your custom table
 VALUES (block.number, block.hash)
 RETURNING *
 $$
@@ -49,6 +49,32 @@ Here is the complete log output, for the testing the number of fetched blocks ha
 ![example_output](./extra/usage1.png)
 
 The usage examples were run on PotsgreSQL 15.
+
+### Watching new events
+
+```sql
+
+-- This is your custom handler that inserts events to your table
+CREATE FUNCTION custom_event_handler(log chainsync.Log) RETURNS events
+AS $$
+INSERT INTO events (address, data) -- Inserting into your custom table
+VALUES (log.address, log.data)
+RETURNING *
+$$
+LANGUAGE SQL;
+
+-- The arguments are chain id, websocket url, name of the handler function and options
+SELECT chainsync.add_events_job(
+	10,
+	'wss://provider-url',
+	'custom_event_handler',
+	-- Watch every transfer event for specific contract at address
+	'{ "address": "0x....", "event": "Transfer(address,address,uint256)" }'
+);
+
+-- Restart worker (or database) to start the job
+SELECT chainsync.stop();
+```
 
 ## Installation
 

@@ -10,11 +10,13 @@ use ethers::types::{Chain, H256};
 
 pub enum Message {
     Block(ethers::types::Block<H256>),
+    Event(ethers::types::Log, String),
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum JobType {
     Blocks,
+    Events,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +28,7 @@ impl std::str::FromStr for JobType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
             "Blocks" => JobType::Blocks,
+            "Events" => JobType::Events,
             _ => return Err(ParseJobError("Failed to parse job type")),
         })
     }
@@ -35,6 +38,7 @@ impl fmt::Display for JobType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             JobType::Blocks => write!(f, "Blocks"),
+            JobType::Events => write!(f, "Events"),
         }
     }
 }
@@ -42,6 +46,7 @@ impl fmt::Display for JobType {
 #[derive(Deserialize)]
 pub struct JobOptions {
     pub address: Option<String>,
+    pub event: Option<String>,
     pub topic0: Option<String>,
     pub topic1: Option<String>,
     pub topic2: Option<String>,

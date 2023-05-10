@@ -7,6 +7,7 @@ use ethers::prelude::*;
 use crate::types::*;
 
 pub const BLOCK_COMPOSITE_TYPE: &str = "chainsync.Block";
+pub const LOG_COMPOSITE_TYPE: &str = "chainsync.Log";
 
 impl Job {
     pub fn register(
@@ -125,6 +126,51 @@ pub fn call_block_handler(
         block.total_difficulty.unwrap_or_default().as_u64() as i64,
     )?;
     data.set_by_name("size", block.size.unwrap().as_u64() as i64)?;
+
+    Spi::run_with_args(
+        format!("SELECT {}($1)", callback).as_str(),
+        Some(vec![(
+            PgOid::Custom(data.composite_type_oid().unwrap()),
+            data.into_datum(),
+        )]),
+    )
+}
+
+pub fn call_event_handler(
+    callback: &String,
+    event: &Log,
+) -> Result<(), pgx::spi::Error> {
+    let mut data = PgHeapTuple::new_composite_type(LOG_COMPOSITE_TYPE).unwrap();
+
+    data.set_by_name("removed", event.removed.unwrap())?;
+    data.set_by_name("log_index", event.log_index.unwrap().as_u64() as i64)?;
+    data.set_by_name(
+        "transaction_hash",
+        event.transaction_hash.unwrap().encode_hex(),
+    )?;
+    data.set_by_name(
+        "transaction_index",
+        event.transaction_index.unwrap().as_u64() as i64,
+    )?;
+    data.set_by_name(
+        "transaction_log_index",
+        event.transaction_log_index.unwrap_or_default().as_u64() as i64,
+    )?;
+    data.set_by_name("block_hash", event.block_hash.unwrap().encode_hex())?;
+    data.set_by_name(
+        "block_number",
+        event.block_number.unwrap().as_u64() as i64,
+    )?;
+    data.set_by_name("address", event.address.encode_hex())?;
+    data.set_by_name("data", event.data.to_string())?;
+    data.set_by_name(
+        "topics",
+        event
+            .topics
+            .iter()
+            .map(|&topic| topic.encode_hex())
+            .collect::<Vec<String>>(),
+    )?;
 
     Spi::run_with_args(
         format!("SELECT {}($1)", callback).as_str(),

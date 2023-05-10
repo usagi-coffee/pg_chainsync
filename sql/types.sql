@@ -17,3 +17,16 @@ CREATE TYPE chainsync.Block AS (
 	total_difficulty BIGINT,
 	size BIGINT
 );
+
+CREATE TYPE chainsync.Log AS (
+	removed BOOLEAN,
+	log_index BIGINT,
+	transaction_hash TEXT,
+	transaction_index BIGINT,
+	transaction_log_index BIGINT,
+	block_hash TEXT,
+	block_number BIGINT,
+	address TEXT,
+	data TEXT,
+	topics TEXT[]
+);
