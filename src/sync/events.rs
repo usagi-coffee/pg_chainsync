@@ -3,7 +3,7 @@ use pgx::prelude::*;
 
 use std::sync::Arc;
 
-use tokio_stream::StreamMap;
+use tokio_stream::{pending, StreamMap};
 
 use ethers::prelude::*;
 
@@ -50,13 +50,17 @@ pub async fn listen(jobs: Arc<Vec<Job>>, send_message: MessageSender) {
         map.insert(i, stream);
     }
 
+    if map.is_empty() {
+        log!("sync: events: no jobs for events");
+        pending::<()>().next().await;
+        unreachable!();
+    }
+
     log!("sync: events: started listening");
 
     while let Some(tick) = map.next().await {
         let (i, log) = tick;
         let job = &jobs[i];
-
-        log!("found event");
 
         let transaction = log.transaction_hash.unwrap();
         let index = log.log_index.unwrap();

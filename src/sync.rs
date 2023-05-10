@@ -171,7 +171,7 @@ async fn handle_message(jobs: Arc<Vec<Job>>, stream: &mut MessageStream) {
                 let index = log.log_index.unwrap();
 
                 log!(
-                    "sync: blocks: {}: adding {}<{}>",
+                    "sync: events: {}: adding {}<{}>",
                     chain,
                     transaction,
                     index
@@ -185,14 +185,14 @@ async fn handle_message(jobs: Arc<Vec<Job>>, stream: &mut MessageStream) {
                     .catch_rust_panic(|e| {
                         log!("{:?}", e);
                         error!(
-                            "sync: blocks: failed to call handler for {}<{}>",
+                            "sync: events: failed to call handler for {}<{}>",
                             transaction, index
                         );
                     })
                     .catch_others(|e| {
                         log!("{:?}", e);
                         error!(
-                            "sync: blocks: handler failed to put {}<{}>",
+                            "sync: events: handler failed to put {}<{}>",
                             transaction, index
                         );
                     })
