@@ -39,7 +39,7 @@ LANGUAGE SQL;
 SELECT chainsync.add_blocks_job(10, 'wss://provider-url', 'custom_block_handler');
 
 -- Restart worker (or database) to start the job
-SELECT chainsync.stop();
+SELECT chainsync.restart();
 ```
 
 For the optimal performance your handler function should meet the conditions to be [inlined](https://wiki.postgresql.org/wiki/Inlining_of_SQL_functions).
