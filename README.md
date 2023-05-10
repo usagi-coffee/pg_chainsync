@@ -73,7 +73,7 @@ SELECT chainsync.add_events_job(
 );
 
 -- Restart worker (or database) to start the job
-SELECT chainsync.stop();
+SELECT chainsync.restart();
 ```
 
 ## Installation
