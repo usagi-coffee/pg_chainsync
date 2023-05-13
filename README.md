@@ -92,13 +92,13 @@ SELECT chainsync.add_events_job(
 	'custom_event_handler',
 	-- Watch every transfer event for specific contract at address
 	'{ 
-	  "address": "0x....",
-	  "event": "Transfer(address,address,uint256)",
+	    "address": "0x....",
+	    "event": "Transfer(address,address,uint256)",
 
-	  "await_block": {
-		  "check_block": "select_one_block",
-		  "block_handler": "insert_block"
-	  }
+	    "await_block": {
+	        "check_block": "select_one_block",
+	        "block_handler": "insert_block"
+	    }
 	}'
 );
 
