@@ -71,18 +71,40 @@ SELECT chainsync.add_events_job(
 	-- Watch every transfer event for specific contract at address
 	'{ 
 		"address": "0x....",
-		"event": "Transfer(address,address,uint256)" }',
-
-		-- Experimental (Optional)
-		-- Checks and calls block_handler before calling event_handler
-		"await_block": {
-			"check_block": "select_one_block", -- fn(chain, block_number)
-			"block_handler": "insert_block" -- fn(block)
-		}
+		"event": "Transfer(address,address,uint256)"
+	}'
 );
 
 -- Restart worker (or database) to start the job
 SELECT chainsync.restart();
+```
+
+#### Handle blocks before events
+
+> Experimental
+
+`await_block` is a feature that allows you to fetch and handle event's block before handling the event. This is good when you want to e.g join block inside your event handler, this ensures there is always block available for your specific event when you call your event handler.
+
+You can optionally skip block fetching and handling if you specify `check_block` property which is the name of the function that takes `(chain bigint, block bigint)` and returns any value - if it does then it will skip handling this block.
+
+
+```sql
+SELECT chainsync.add_events_job(
+	10,
+	'wss://provider-url',
+	'custom_event_handler',
+	-- Watch every transfer event for specific contract at address
+	'{ 
+		"address": "0x....",
+		"event": "Transfer(address,address,uint256)",
+
+		"await_block": {
+			"check_block": "select_one_block",
+			"block_handler": "insert_block"
+		}
+	}'
+);
+
 ```
 
 ## Installation
