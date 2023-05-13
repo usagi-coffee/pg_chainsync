@@ -8,9 +8,16 @@ use serde::Deserialize;
 use ethers::prelude::*;
 use ethers::types::{Chain, H256};
 
+use tokio::sync::oneshot;
+
+type Callback = String;
+
 pub enum Message {
-    Block(ethers::types::Block<H256>),
-    Event(ethers::types::Log, String),
+    // Job messages
+    Block(Chain, ethers::types::Block<H256>, Callback),
+    Event(Chain, ethers::types::Log, Callback),
+    // Utility messages
+    CheckBlock(Chain, u64, Callback, oneshot::Sender<bool>),
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -44,7 +51,24 @@ impl fmt::Display for JobType {
 }
 
 #[derive(Deserialize)]
+pub struct AwaitBlock {
+    pub check_block: Option<String>,
+    pub block_handler: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct JobOptions {
+    /// Generic
+    // Nothing
+
+    /// Block job
+    // Nothing
+
+    /// Event job
+    // If defined it awaits for block before calling the handler
+    pub await_block: Option<AwaitBlock>,
+
+    // Filter options
     pub address: Option<String>,
     pub event: Option<String>,
     pub topic0: Option<String>,

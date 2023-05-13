@@ -3,6 +3,7 @@ use pgx::prelude::*;
 
 use std::sync::Arc;
 
+use tokio::sync::oneshot;
 use tokio_stream::{pending, StreamMap};
 
 use ethers::prelude::*;
@@ -10,7 +11,7 @@ use ethers::prelude::*;
 use super::{wait_for_messages, MessageSender};
 use crate::types::*;
 
-pub async fn listen(jobs: Arc<Vec<Job>>, send_message: MessageSender) {
+pub async fn listen(jobs: Arc<Vec<Job>>, channel: MessageSender) {
     let mut map = StreamMap::new();
 
     for i in 0..jobs.len() {
@@ -61,21 +62,59 @@ pub async fn listen(jobs: Arc<Vec<Job>>, send_message: MessageSender) {
     while let Some(tick) = map.next().await {
         let (i, log) = tick;
         let job = &jobs[i];
+        let chain = &job.chain;
 
+        let block = log.block_number.unwrap();
         let transaction = log.transaction_hash.unwrap();
         let index = log.log_index.unwrap();
 
         log!(
             "sync: events: {}: found {}<{}> at {}",
-            job.chain,
+            chain,
             transaction,
             index,
-            log.block_number.unwrap()
+            block
         );
 
-        match send_message
-            .try_send((job.chain, Message::Event(log, job.callback.clone())))
-        {
+        if let Some(options) = &job.options {
+            // Await for block logic
+            if let Some(options) = &options.await_block {
+                let AwaitBlock {
+                    check_block,
+                    block_handler,
+                } = &options;
+
+                let (tx, rx) = oneshot::channel::<bool>();
+
+                if let Ok(_) = channel.try_send(Message::CheckBlock(
+                    *chain,
+                    block.as_u64(),
+                    check_block.as_ref().unwrap().clone(),
+                    tx,
+                )) {
+                    let found = rx.await;
+                    if found.is_ok() && found.unwrap() == false {
+                        let _ = channel.try_send(Message::Block(
+                            *chain,
+                            job.ws
+                                .as_ref()
+                                .unwrap()
+                                .get_block(block)
+                                .await
+                                .unwrap()
+                                .unwrap(),
+                            block_handler.as_ref().unwrap().clone(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        match channel.try_send(Message::Event(
+            *chain,
+            log,
+            job.callback.clone(),
+        )) {
             Ok(()) => {}
             Err(_) => {
                 warning!(
@@ -90,5 +129,41 @@ pub async fn listen(jobs: Arc<Vec<Job>>, send_message: MessageSender) {
 
     // Wait until queue gets processed before exiting
     log!("sync: events: waiting for consumer to finish");
-    wait_for_messages(send_message).await;
+    wait_for_messages(channel).await;
+}
+
+use super::call_event_handler;
+use pgx::bgworkers::BackgroundWorker;
+
+pub fn handle_message(message: &Message) {
+    let Message::Event(chain, log, callback) = message else { return; };
+
+    let transaction = log.transaction_hash.unwrap();
+    let index = log.log_index.unwrap();
+
+    log!("sync: events: {}: adding {}<{}>", chain, transaction, index);
+
+    BackgroundWorker::transaction(|| {
+        PgTryBuilder::new(|| {
+            call_event_handler(&callback, &log)
+                .expect("sync: events: failed to call the handler")
+        })
+        .catch_rust_panic(|e| {
+            log!("{:?}", e);
+            warning!(
+                "sync: events: failed to call handler for {}<{}>",
+                transaction,
+                index
+            );
+        })
+        .catch_others(|e| {
+            log!("{:?}", e);
+            warning!(
+                "sync: events: handler failed to put {}<{}>",
+                transaction,
+                index
+            );
+        })
+        .execute();
+    });
 }

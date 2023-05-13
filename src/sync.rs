@@ -5,7 +5,6 @@ use pgx::log;
 
 use ethers::prelude::*;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
@@ -18,11 +17,11 @@ use crate::worker::{WorkerStatus, RESTART_COUNT, WORKER_STATUS};
 mod blocks;
 mod events;
 
-pub type MessageSender = mpsc::Sender<(Chain, Message)>;
-pub type MessageStream = ReceiverStream<(Chain, Message)>;
+pub type MessageSender = mpsc::Sender<Message>;
+pub type MessageStream = ReceiverStream<Message>;
 
 const DATABASE: &str = "pg_chainsync";
-const MESSAGES_CAPACITY: usize = 200;
+const MESSAGES_CAPACITY: usize = 1024;
 
 #[pg_guard]
 #[no_mangle]
@@ -71,7 +70,7 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
         *WORKER_STATUS.exclusive() = WorkerStatus::RUNNING;
 
         let (send_message, receive_message) =
-            mpsc::channel::<(Chain, Message)>(MESSAGES_CAPACITY);
+            mpsc::channel::<Message>(MESSAGES_CAPACITY);
         let mut message_stream = MessageStream::new(receive_message);
 
         runtime.block_on(async {
@@ -79,13 +78,13 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
                 _ = handle_signals() => {
                     log!("sync: received exit signal... exiting");
                 },
-                _ = events::listen(jobs.clone(), send_message.clone()) => {
+                _ = events::listen(Arc::clone(&jobs), send_message.clone()) => {
                     log!("sync: stopped listening to events... exiting");
                 },
-                _ = blocks::listen(jobs.clone(), send_message.clone()) => {
+                _ = blocks::listen(Arc::clone(&jobs), send_message.clone()) => {
                     log!("sync: stopped listening to blocks... exiting");
                 },
-                _ = handle_message(jobs.clone(), &mut message_stream) => {
+                _ = handle_message(&mut message_stream) => {
                     log!("sync: stopped processing messages... exiting");
                 }
             }
@@ -118,86 +117,18 @@ async fn handle_signals() {
     }
 }
 
-async fn handle_message(jobs: Arc<Vec<Job>>, stream: &mut MessageStream) {
-    let mut job_callbacks = HashMap::new();
-
-    job_callbacks.insert(JobType::Blocks, Vec::new());
-    job_callbacks.insert(JobType::Events, Vec::new());
-
-    for job in jobs.iter() {
-        // SAFETY: declarations above ensure that keys exist
-        job_callbacks
-            .get_mut(&job.job_type)
-            .unwrap()
-            .push(job.callback.clone());
-    }
-
-    let block_callbacks = job_callbacks.get(&JobType::Blocks).unwrap();
-
-    while let Some(tick) = stream.next().await {
-        let (chain, message) = tick;
-
+async fn handle_message(stream: &mut MessageStream) {
+    while let Some(message) = stream.next().await {
         match message {
-            Message::Block(block) => {
-                let number = block.number.unwrap_or_default();
-                log!("sync: blocks: {}: adding {}", chain, number);
-
-                BackgroundWorker::transaction(|| {
-                    PgTryBuilder::new(|| {
-                        for callback in block_callbacks.iter() {
-                            call_block_handler(callback, &block)
-                                .expect("failed to call the handler")
-                        }
-                    })
-                    .catch_rust_panic(|e| {
-                        log!("{:?}", e);
-                        error!(
-                            "sync: blocks: failed to call handler for {}",
-                            number
-                        );
-                    })
-                    .catch_others(|e| {
-                        log!("{:?}", e);
-                        error!(
-                            "sync: blocks: handler failed to put {}",
-                            number
-                        );
-                    })
-                    .execute();
-                });
-            }
-            Message::Event(log, callback) => {
-                let transaction = log.transaction_hash.unwrap();
-                let index = log.log_index.unwrap();
-
-                log!(
-                    "sync: events: {}: adding {}<{}>",
-                    chain,
-                    transaction,
-                    index
-                );
-
-                BackgroundWorker::transaction(|| {
-                    PgTryBuilder::new(|| {
-                        call_event_handler(&callback, &log)
-                            .expect("sync: events: failed to call the handler")
-                    })
-                    .catch_rust_panic(|e| {
-                        log!("{:?}", e);
-                        error!(
-                            "sync: events: failed to call handler for {}<{}>",
-                            transaction, index
-                        );
-                    })
-                    .catch_others(|e| {
-                        log!("{:?}", e);
-                        error!(
-                            "sync: events: handler failed to put {}<{}>",
-                            transaction, index
-                        );
-                    })
-                    .execute();
-                });
+            Message::Block(..) => blocks::handle_message(&message),
+            Message::Event(..) => events::handle_message(&message),
+            Message::CheckBlock(chain, number, callback, channel) => {
+                match channel
+                    .send(blocks::check_one(&chain, &number, &callback))
+                {
+                    Ok(..) => {}
+                    Err(..) => {}
+                }
             }
         }
     }
