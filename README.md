@@ -74,7 +74,7 @@ SELECT chainsync.add_events_job(
 		"event": "Transfer(address,address,uint256)" }',
 
 		-- Experimental (Optional)
-		-- If defined this functionality checks and calls block_handler before calling event_handler
+		-- Checks and calls block_handler before calling event_handler
 		"await_block": {
 			"check_block": "select_one_block", -- fn(chain, block_number)
 			"block_handler": "insert_block" -- fn(block)
