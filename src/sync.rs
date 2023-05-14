@@ -130,13 +130,3 @@ async fn handle_message(stream: &mut MessageStream) {
         }
     }
 }
-
-pub async fn wait_for_messages(channel: &Channel) {
-    loop {
-        if channel.sender.capacity() >= MESSAGES_CAPACITY {
-            break;
-        }
-
-        tokio::task::yield_now().await;
-    }
-}

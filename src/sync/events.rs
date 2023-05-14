@@ -8,7 +8,6 @@ use tokio_stream::{pending, StreamMap};
 
 use ethers::prelude::*;
 
-use super::wait_for_messages;
 use crate::channel::Channel;
 use crate::types::*;
 
@@ -123,7 +122,7 @@ pub async fn listen(jobs: Arc<Vec<Job>>, channel: Arc<Channel>) {
 
     // Wait until queue gets processed before exiting
     log!("sync: events: waiting for consumer to finish");
-    wait_for_messages(&channel).await;
+    channel.wait_for_messages().await;
 }
 
 use crate::query::PgHandler;

@@ -27,4 +27,14 @@ impl Channel {
             }
         }
     }
+
+    pub async fn wait_for_messages(&self) {
+        loop {
+            if self.sender.capacity() >= MESSAGES_CAPACITY {
+                break;
+            }
+
+            tokio::task::yield_now().await;
+        }
+    }
 }
