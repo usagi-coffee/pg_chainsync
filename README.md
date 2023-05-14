@@ -1,10 +1,10 @@
-# pg_chainsync - watch blockchain inside PostgreSQL
+# pg_chainsync: access blockchain inside PostgreSQL
 
 > Proof of Concept - expect bugs and breaking changes.
 
-pg_chainsync adds ability to watch blockchain blocks, events and more directly inside your PostgreSQL instance. The extension does not enforce any custom schema for your table and let's you use custom handlers that you adjust for your specific use-case.
+pg_chainsync adds ability to access blockchain blocks, events and more directly inside your PostgreSQL instance. The extension does not enforce any custom schema for your table and let's you use custom handlers that you adjust for your specific use-case.
 
-The extension is written using [pgrx](https://github.com/tcdi/pgrx) in Rust.
+The extension is created with [pgrx](https://github.com/tcdi/pgrx)
 
 ## Usage
 
