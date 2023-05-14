@@ -106,7 +106,30 @@ SELECT chainsync.add_events_job(
 
 ## Installation
 
-> The extension is currently in Proof of Concept stage and does not provide instructions how to install it. Refer to the pgx documentation to see how to run the extension that uses worker if you are interested in trying it out.
+> Please refer to pgrx documentation for full details on how to install background worker extension if it does not work for you
+
+```bash
+# First build the extension
+cargo build --release
+
+# Packaging process should create pg_chainsync-pg15 under target/release
+cargo pgx package
+
+# We need to copy two files to your postgres installation (paths may be different on your system)
+cd target/release
+cp pg_chainsync-pg15/.../pg_chainsync--V.V.V.sql /usr/share/postgresql/extension/
+cp pg_chainsync-pg15/.../pg_chainsync.control /usr/share/postgresql/extension/  
+```
+
+This should be enough to be able to use `CREATE EXTENSION pg_chainsync` but we also need to preload our library because this extension uses background worker so it needs to be run along with the database.
+
+To preload the library you need to modify `postgresql.conf` and alter `shared_preload_libraries` like that:
+
+```
+shared_preload_libraries = 'pg_chainsync.so' # (change requires restart)
+```
+
+After altering the config restart your database and you can check postgres logs to check if it works!
 
 
 ## License
