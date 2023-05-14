@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 
 use crate::channel::*;
 use crate::types::*;
-use crate::worker::{WorkerStatus, RESTART_COUNT, WORKER_STATUS};
+use crate::worker::*;
 
 mod blocks;
 mod events;
@@ -92,26 +92,6 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
 
     *WORKER_STATUS.exclusive() = WorkerStatus::STOPPED;
     log!("sync: worker has exited");
-}
-
-async fn handle_signals() {
-    loop {
-        if BackgroundWorker::sighup_received() {
-            *WORKER_STATUS.exclusive() = WorkerStatus::STOPPING;
-        }
-
-        if BackgroundWorker::sigterm_received() {
-            *WORKER_STATUS.exclusive() = WorkerStatus::STOPPING;
-        }
-
-        match WORKER_STATUS.share().clone() {
-            WorkerStatus::RESTARTING => break,
-            WorkerStatus::STOPPING => break,
-            _ => {}
-        }
-
-        tokio::task::yield_now().await;
-    }
 }
 
 async fn handle_message(stream: &mut MessageStream) {
