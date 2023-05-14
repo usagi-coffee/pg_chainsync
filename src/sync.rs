@@ -16,7 +16,7 @@ use crate::worker::*;
 mod blocks;
 mod events;
 
-const DATABASE: &str = "pg_chainsync";
+const DATABASE: &str = "postgres";
 
 #[pg_guard]
 #[no_mangle]

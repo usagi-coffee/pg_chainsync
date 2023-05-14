@@ -108,8 +108,10 @@ SELECT chainsync.add_events_job(
 
 > Please refer to pgrx documentation for full details on how to install background worker extension if it does not work for you
 
+*IMPORTANT*: currently the database that the worker uses is hard-coded to `postgres` if you are using different database please modify the `DATABASE` constant inside `src/sync.rs` before building.
+
 ```bash
-# First build the extension
+# Build the extension
 cargo build --release
 
 # Packaging process should create pg_chainsync-pg15 under target/release
@@ -129,7 +131,7 @@ To preload the library you need to modify `postgresql.conf` and alter `shared_pr
 shared_preload_libraries = 'pg_chainsync.so' # (change requires restart)
 ```
 
-After altering the config restart your database and you can check postgres logs to check if it works!
+After altering the config restart your database and you can check postgres logs to check if it worked!
 
 
 ## License
