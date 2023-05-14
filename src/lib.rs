@@ -5,6 +5,7 @@ use pgx::{pg_shmem_init, PgSharedMemoryInitialization};
 mod sync;
 mod worker;
 
+pub mod channel;
 pub mod query;
 pub mod types;
 
@@ -12,7 +13,7 @@ pgx::pg_module_magic!();
 
 #[pg_schema]
 mod chainsync {
-    use crate::types::{Job, JobType};
+    use crate::types::{Job, JobKind};
     use crate::worker::{
         WorkerStatus, RESTART_COUNT, STOP_COUNT, WORKER_STATUS,
     };
@@ -48,7 +49,7 @@ mod chainsync {
         callback: &str,
     ) -> bool {
         Job::register(
-            JobType::Blocks,
+            JobKind::Blocks,
             chain_id,
             provider_url,
             callback,
@@ -68,7 +69,7 @@ mod chainsync {
         }
 
         Job::register(
-            JobType::Events,
+            JobKind::Events,
             chain_id,
             provider_url,
             callback,
@@ -78,7 +79,6 @@ mod chainsync {
 }
 
 extension_sql_file!("../sql/types.sql", name = "types_schema");
-extension_sql_file!("../sql/jobs.sql", name = "jobs_schema");
 
 use worker::{RESTART_COUNT, WORKER_STATUS};
 

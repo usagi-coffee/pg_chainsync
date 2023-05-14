@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use pgx::prelude::*;
 
 use pgx::bgworkers::*;
@@ -5,23 +7,16 @@ use pgx::log;
 
 use ethers::prelude::*;
 
-use std::sync::Arc;
-
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 
-use crate::query::{call_block_handler, call_event_handler};
+use crate::channel::*;
 use crate::types::*;
 use crate::worker::{WorkerStatus, RESTART_COUNT, WORKER_STATUS};
 
 mod blocks;
 mod events;
 
-pub type MessageSender = mpsc::Sender<Message>;
-pub type MessageStream = ReceiverStream<Message>;
-
 const DATABASE: &str = "pg_chainsync";
-const MESSAGES_CAPACITY: usize = 1024;
 
 #[pg_guard]
 #[no_mangle]
@@ -71,20 +66,22 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
 
         let (send_message, receive_message) =
             mpsc::channel::<Message>(MESSAGES_CAPACITY);
-        let mut message_stream = MessageStream::new(receive_message);
+
+        let channel = Arc::new(Channel::new(send_message));
+        let mut stream = MessageStream::new(receive_message);
 
         runtime.block_on(async {
             tokio::select! {
                 _ = handle_signals() => {
                     log!("sync: received exit signal... exiting");
                 },
-                _ = events::listen(Arc::clone(&jobs), send_message.clone()) => {
+                _ = events::listen(Arc::clone(&jobs), Arc::clone(&channel)) => {
                     log!("sync: stopped listening to events... exiting");
                 },
-                _ = blocks::listen(Arc::clone(&jobs), send_message.clone()) => {
+                _ = blocks::listen(Arc::clone(&jobs), Arc::clone(&channel)) => {
                     log!("sync: stopped listening to blocks... exiting");
                 },
-                _ = handle_message(&mut message_stream) => {
+                _ = handle_message(&mut stream) => {
                     log!("sync: stopped processing messages... exiting");
                 }
             }
@@ -122,21 +119,21 @@ async fn handle_message(stream: &mut MessageStream) {
         match message {
             Message::Block(..) => blocks::handle_message(&message),
             Message::Event(..) => events::handle_message(&message),
-            Message::CheckBlock(chain, number, callback, channel) => {
-                match channel
+            Message::CheckBlock(chain, number, callback, oneshot) => {
+                if oneshot
                     .send(blocks::check_one(&chain, &number, &callback))
+                    .is_err()
                 {
-                    Ok(..) => {}
-                    Err(..) => {}
+                    warning!("sync: check_block: failed to send on channel, event job stalled");
                 }
             }
         }
     }
 }
 
-pub async fn wait_for_messages(send_event: MessageSender) {
+pub async fn wait_for_messages(channel: &Channel) {
     loop {
-        if send_event.capacity() >= MESSAGES_CAPACITY {
+        if channel.sender.capacity() >= MESSAGES_CAPACITY {
             break;
         }
 

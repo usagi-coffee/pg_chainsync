@@ -1,6 +1,5 @@
 use std::fmt;
 use std::hash::Hash;
-use std::panic::UnwindSafe;
 use std::str;
 
 use serde::Deserialize;
@@ -10,50 +9,35 @@ use ethers::types::{Chain, H256};
 
 use tokio::sync::oneshot;
 
-type Callback = String;
+pub type Callback = String;
+pub type Block = ethers::types::Block<H256>;
+pub type Log = ethers::types::Log;
 
 pub enum Message {
     // Job messages
-    Block(Chain, ethers::types::Block<H256>, Callback),
-    Event(Chain, ethers::types::Log, Callback),
+    Block(Chain, Block, Callback),
+    Event(Chain, Log, Callback),
+
     // Utility messages
     CheckBlock(Chain, u64, Callback, oneshot::Sender<bool>),
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub enum JobType {
+pub enum JobKind {
     Blocks,
     Events,
 }
 
-#[derive(Debug, Clone)]
-pub struct ParseJobError(&'static str);
+pub struct Job {
+    pub id: i64,
+    pub kind: JobKind,
+    pub chain: Chain,
+    pub provider_url: String,
+    pub status: String,
+    pub callback: String,
+    pub options: Option<JobOptions>,
 
-impl std::str::FromStr for JobType {
-    type Err = ParseJobError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "Blocks" => JobType::Blocks,
-            "Events" => JobType::Events,
-            _ => return Err(ParseJobError("Failed to parse job type")),
-        })
-    }
-}
-
-impl fmt::Display for JobType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            JobType::Blocks => write!(f, "Blocks"),
-            JobType::Events => write!(f, "Events"),
-        }
-    }
-}
-
-#[derive(Deserialize)]
-pub struct AwaitBlock {
-    pub check_block: Option<String>,
-    pub block_handler: Option<String>,
+    pub ws: Option<Provider<Ws>>,
 }
 
 #[derive(Deserialize)]
@@ -79,14 +63,32 @@ pub struct JobOptions {
     pub to_block: Option<i32>,
 }
 
-pub struct Job {
-    pub job_type: JobType,
-    pub chain: Chain,
-    pub provider_url: String,
-    pub callback: String,
-    pub options: Option<JobOptions>,
-
-    pub ws: Option<Provider<Ws>>,
+#[derive(Deserialize)]
+pub struct AwaitBlock {
+    pub check_block: Option<String>,
+    pub block_handler: Option<String>,
 }
 
-impl UnwindSafe for Job {}
+#[derive(Debug, Clone)]
+pub struct ParseJobError(&'static str);
+
+impl std::str::FromStr for JobKind {
+    type Err = ParseJobError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "Blocks" => JobKind::Blocks,
+            "Events" => JobKind::Events,
+            _ => return Err(ParseJobError("Failed to parse job type")),
+        })
+    }
+}
+
+impl fmt::Display for JobKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            JobKind::Blocks => write!(f, "Blocks"),
+            JobKind::Events => write!(f, "Events"),
+        }
+    }
+}

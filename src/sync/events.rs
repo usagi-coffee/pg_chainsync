@@ -8,16 +8,17 @@ use tokio_stream::{pending, StreamMap};
 
 use ethers::prelude::*;
 
-use super::{wait_for_messages, MessageSender};
+use super::wait_for_messages;
+use crate::channel::Channel;
 use crate::types::*;
 
-pub async fn listen(jobs: Arc<Vec<Job>>, channel: MessageSender) {
+pub async fn listen(jobs: Arc<Vec<Job>>, channel: Arc<Channel>) {
     let mut map = StreamMap::new();
 
     for i in 0..jobs.len() {
         let job = &jobs[i];
 
-        if job.job_type != JobType::Events {
+        if job.kind != JobKind::Events {
             continue;
         }
 
@@ -86,7 +87,7 @@ pub async fn listen(jobs: Arc<Vec<Job>>, channel: MessageSender) {
 
                 let (tx, rx) = oneshot::channel::<bool>();
 
-                if let Ok(_) = channel.try_send(Message::CheckBlock(
+                if channel.send(Message::CheckBlock(
                     *chain,
                     block.as_u64(),
                     check_block.as_ref().unwrap().clone(),
@@ -94,7 +95,7 @@ pub async fn listen(jobs: Arc<Vec<Job>>, channel: MessageSender) {
                 )) {
                     let found = rx.await;
                     if found.is_ok() && found.unwrap() == false {
-                        let _ = channel.try_send(Message::Block(
+                        channel.send(Message::Block(
                             *chain,
                             job.ws
                                 .as_ref()
@@ -110,29 +111,22 @@ pub async fn listen(jobs: Arc<Vec<Job>>, channel: MessageSender) {
             }
         }
 
-        match channel.try_send(Message::Event(
-            *chain,
-            log,
-            job.callback.clone(),
-        )) {
-            Ok(()) => {}
-            Err(_) => {
-                warning!(
-                    "sync: events: {}: failed to send {}<{}>",
-                    job.chain,
-                    transaction,
-                    index
-                )
-            }
+        if !channel.send(Message::Event(*chain, log, job.callback.clone())) {
+            warning!(
+                "sync: events: {}: failed to send {}<{}>",
+                job.chain,
+                transaction,
+                index
+            )
         }
     }
 
     // Wait until queue gets processed before exiting
     log!("sync: events: waiting for consumer to finish");
-    wait_for_messages(channel).await;
+    wait_for_messages(&channel).await;
 }
 
-use super::call_event_handler;
+use crate::query::PgHandler;
 use pgx::bgworkers::BackgroundWorker;
 
 pub fn handle_message(message: &Message) {
@@ -145,7 +139,7 @@ pub fn handle_message(message: &Message) {
 
     BackgroundWorker::transaction(|| {
         PgTryBuilder::new(|| {
-            call_event_handler(&callback, &log)
+            log.call_handler(&callback)
                 .expect("sync: events: failed to call the handler")
         })
         .catch_rust_panic(|e| {

@@ -7,16 +7,17 @@ use tokio_stream::{pending, StreamMap};
 
 use ethers::prelude::*;
 
-use super::{wait_for_messages, MessageSender};
+use super::wait_for_messages;
+use crate::channel::Channel;
 use crate::types::*;
 
-pub async fn listen(jobs: Arc<Vec<Job>>, channel: MessageSender) {
+pub async fn listen(jobs: Arc<Vec<Job>>, channel: Arc<Channel>) {
     let mut map = StreamMap::new();
 
     for i in 0..jobs.len() {
         let job = &jobs[i];
 
-        if job.job_type != JobType::Blocks {
+        if job.kind != JobKind::Blocks {
             continue;
         }
 
@@ -41,24 +42,15 @@ pub async fn listen(jobs: Arc<Vec<Job>>, channel: MessageSender) {
         let number = block.number.unwrap_or(U64::from(0));
         log!("sync: blocks: {}: found {}", chain, number);
 
-        match channel.try_send(Message::Block(
-            *chain,
-            block,
-            job.callback.clone(),
-        )) {
-            Ok(()) => {}
-            Err(_) => {
-                warning!("sync: blocks: {}: failed to send {}", chain, number)
-            }
-        }
+        channel.send(Message::Block(*chain, block, job.callback.clone()));
     }
 
     // Wait until queue gets processed before exiting
     log!("sync: blocks: waiting for consumer to finish");
-    wait_for_messages(channel).await;
+    wait_for_messages(&channel).await;
 }
 
-use super::call_block_handler;
+use crate::query::PgHandler;
 use pgx::bgworkers::BackgroundWorker;
 
 pub fn handle_message(message: &Message) {
@@ -69,7 +61,8 @@ pub fn handle_message(message: &Message) {
 
     BackgroundWorker::transaction(|| {
         PgTryBuilder::new(|| {
-            call_block_handler(callback, &block)
+            block
+                .call_handler(callback)
                 .expect("sync: blocks: failed to call the handler {}")
         })
         .catch_rust_panic(|e| {

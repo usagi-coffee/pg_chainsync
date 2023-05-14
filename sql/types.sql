@@ -1,4 +1,14 @@
 --
+CREATE TABLE chainsync.jobs (
+	id SERIAL NOT NULL,
+	kind TEXT NOT NULL, -- Blocks, Events
+	chain_id BIGINT NOT NULL,
+	callback TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'STOPPED',
+	provider_url TEXT NOT NULL,
+	options JSONB
+);
+
 CREATE TYPE chainsync.Block AS (
 	hash TEXT,
 	author TEXT,
