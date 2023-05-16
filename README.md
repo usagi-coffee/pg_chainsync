@@ -115,8 +115,10 @@ cargo build --release
 # Packaging process should create pg_chainsync-pg15 under target/release
 cargo pgx package
 
-# Copy two files to your postgres installation (paths may be different on your system)
+# Copy files to your postgres installation (paths may be different on your system)
 cd target/release
+cp pg_chainsync-pg15/.../pg_chainsync.so /usr/lib/postgresql/
+# Replace V.V.V with version
 cp pg_chainsync-pg15/.../pg_chainsync--V.V.V.sql /usr/share/postgresql/extension/
 cp pg_chainsync-pg15/.../pg_chainsync.control /usr/share/postgresql/extension/  
 ```
