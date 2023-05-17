@@ -25,7 +25,8 @@ CREATE TYPE chainsync.Block AS (
 	timestamp TIMESTAMPTZ,
 	difficulty BIGINT,
 	total_difficulty BIGINT,
-	size BIGINT
+	size BIGINT,
+	chain BIGINT
 );
 
 CREATE TYPE chainsync.Log AS (
@@ -38,5 +39,6 @@ CREATE TYPE chainsync.Log AS (
 	block_number BIGINT,
 	address TEXT,
 	data TEXT,
-	topics TEXT[]
+	topics TEXT[],
+	chain BIGINT
 );

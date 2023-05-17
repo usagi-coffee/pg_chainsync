@@ -10,7 +10,11 @@ pub const BLOCK_COMPOSITE_TYPE: &str = "chainsync.Block";
 pub const LOG_COMPOSITE_TYPE: &str = "chainsync.Log";
 
 pub trait PgHandler {
-    fn call_handler(&self, callback: &String) -> Result<(), pgx::spi::Error>;
+    fn call_handler(
+        &self,
+        chain: &Chain,
+        callback: &String,
+    ) -> Result<(), pgx::spi::Error>;
 }
 
 impl Job {
@@ -118,10 +122,15 @@ impl Job {
 }
 
 impl PgHandler for Block {
-    fn call_handler(&self, callback: &String) -> Result<(), pgx::spi::Error> {
+    fn call_handler(
+        &self,
+        chain: &Chain,
+        callback: &String,
+    ) -> Result<(), pgx::spi::Error> {
         let mut data =
             PgHeapTuple::new_composite_type(BLOCK_COMPOSITE_TYPE).unwrap();
 
+        data.set_by_name("chain", *chain as i64)?;
         data.set_by_name("hash", self.hash.unwrap_or_default().encode_hex())?;
         data.set_by_name("number", self.number.unwrap().as_u64() as i64)?;
         data.set_by_name(
@@ -147,9 +156,9 @@ impl PgHandler for Block {
         data.set_by_name("gas_limit", self.gas_limit.as_u64() as i64)?;
         data.set_by_name(
             "timestamp",
-            pgx::TimestampWithTimeZone::try_from(
-                self.timestamp.as_u64() as i64
-            ),
+            pgx::TimestampWithTimeZone::from(pgx::Timestamp::try_from(
+                self.timestamp.as_usize() as i64,
+            )),
         )?;
         data.set_by_name("difficulty", self.difficulty.as_u64() as i64)?;
         data.set_by_name(
@@ -169,10 +178,15 @@ impl PgHandler for Block {
 }
 
 impl PgHandler for Log {
-    fn call_handler(&self, callback: &String) -> Result<(), pgx::spi::Error> {
+    fn call_handler(
+        &self,
+        chain: &Chain,
+        callback: &String,
+    ) -> Result<(), pgx::spi::Error> {
         let mut data =
             PgHeapTuple::new_composite_type(LOG_COMPOSITE_TYPE).unwrap();
 
+        data.set_by_name("chain", *chain as i64)?;
         data.set_by_name("removed", self.removed.unwrap())?;
         data.set_by_name("log_index", self.log_index.unwrap().as_u64() as i64)?;
         data.set_by_name(

@@ -61,7 +61,7 @@ pub fn handle_message(message: &Message) {
     BackgroundWorker::transaction(|| {
         PgTryBuilder::new(|| {
             block
-                .call_handler(callback)
+                .call_handler(&chain, callback)
                 .expect("sync: blocks: failed to call the handler {}")
         })
         .catch_rust_panic(|e| {
