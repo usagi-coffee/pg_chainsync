@@ -196,7 +196,7 @@ impl PgHandler for Log {
             self.block_number.unwrap().as_u64() as i64,
         )?;
         data.set_by_name("address", self.address.encode_hex())?;
-        data.set_by_name("data", self.data.to_string())?;
+        data.set_by_name("data", self.data.to_owned().encode_hex())?;
         data.set_by_name(
             "topics",
             self.topics

@@ -59,8 +59,8 @@ pub struct JobOptions {
     pub topic1: Option<String>,
     pub topic2: Option<String>,
     pub topic3: Option<String>,
-    pub from_block: Option<i32>,
-    pub to_block: Option<i32>,
+    pub from_block: Option<i64>,
+    pub to_block: Option<i64>,
 }
 
 #[derive(Deserialize)]
