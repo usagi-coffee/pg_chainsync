@@ -134,12 +134,6 @@ impl PgHandler for Block {
         data.set_by_name("hash", self.hash.unwrap_or_default().encode_hex())?;
         data.set_by_name("number", self.number.unwrap().as_u64() as i64)?;
         data.set_by_name(
-            "timestamp",
-            pgx::TimestampWithTimeZone::try_from(
-                self.timestamp.as_u64() as i64
-            ),
-        )?;
-        data.set_by_name(
             "author",
             self.author.unwrap_or_default().encode_hex(),
         )?;
