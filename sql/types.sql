@@ -22,7 +22,7 @@ CREATE TYPE chainsync.Block AS (
 	gas_limit BIGINT,
 	base_fee_per_gas BIGINT,
 	extra_data TEXT,
-	timestamp TIMESTAMPTZ,
+	timestamp BIGINT,
 	difficulty BIGINT,
 	total_difficulty BIGINT,
 	size BIGINT,

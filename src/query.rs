@@ -154,12 +154,7 @@ impl PgHandler for Block {
         data.set_by_name("receipts_root", self.receipts_root.encode_hex())?;
         data.set_by_name("gas_used", self.gas_used.as_u64() as i64)?;
         data.set_by_name("gas_limit", self.gas_limit.as_u64() as i64)?;
-        data.set_by_name(
-            "timestamp",
-            pgx::TimestampWithTimeZone::from(pgx::Timestamp::try_from(
-                self.timestamp.as_usize() as i64,
-            )),
-        )?;
+        data.set_by_name("timestamp", self.timestamp.as_u64() as i64)?;
         data.set_by_name("difficulty", self.difficulty.as_u64() as i64)?;
         data.set_by_name(
             "total_difficulty",
