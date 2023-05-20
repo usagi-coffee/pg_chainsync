@@ -4,7 +4,7 @@ use pgx::prelude::*;
 use std::sync::Arc;
 
 use tokio::sync::oneshot;
-use tokio_stream::{pending, StreamMap};
+use tokio_stream::{pending, StreamMap, StreamNotifyClose};
 
 use ethers::prelude::*;
 
@@ -27,7 +27,7 @@ pub async fn listen(jobs: Arc<Vec<Job>>, channel: Arc<Channel>) {
         let provider = job.ws.as_ref().unwrap();
         let stream = provider.subscribe_logs(&filter).await.unwrap();
 
-        map.insert(i, stream);
+        map.insert(i, StreamNotifyClose::new(stream));
     }
 
     if map.is_empty() {
@@ -41,67 +41,77 @@ pub async fn listen(jobs: Arc<Vec<Job>>, channel: Arc<Channel>) {
     while let Some(tick) = map.next().await {
         let (i, log) = tick;
         let job = &jobs[i];
-        let chain = &job.chain;
 
-        let block = log.block_number.unwrap();
-        let transaction = log.transaction_hash.unwrap();
-        let index = log.log_index.unwrap();
-
-        log!(
-            "sync: events: {}: found {}<{}> at {}",
-            chain,
-            transaction,
-            index,
-            block
-        );
-
-        if let Some(options) = &job.options {
-            // Await for block logic
-            if let Some(options) = &options.await_block {
-                let AwaitBlock {
-                    check_block,
-                    block_handler,
-                } = &options;
-
-                let (tx, rx) = oneshot::channel::<bool>();
-
-                if channel.send(Message::CheckBlock(
-                    *chain,
-                    block.as_u64(),
-                    check_block.as_ref().unwrap().clone(),
-                    tx,
-                )) {
-                    let found = rx.await;
-                    if found.is_ok() && found.unwrap() == false {
-                        channel.send(Message::Block(
-                            *chain,
-                            job.ws
-                                .as_ref()
-                                .unwrap()
-                                .get_block(block)
-                                .await
-                                .unwrap()
-                                .unwrap(),
-                            block_handler.as_ref().unwrap().clone(),
-                        ));
-                    }
-                }
-            }
+        if log.is_none() {
+            println!("sync: events: stream {} has ended", job.id);
+            continue;
         }
 
-        if !channel.send(Message::Event(*chain, log, job.callback.clone())) {
-            warning!(
-                "sync: events: {}: failed to send {}<{}>",
-                job.chain,
-                transaction,
-                index
-            )
-        }
+        handle_log(job, log.unwrap(), &channel).await;
     }
 
     // Wait until queue gets processed before exiting
     log!("sync: events: waiting for consumer to finish");
     channel.wait_for_messages().await;
+}
+
+pub async fn handle_log(job: &Job, log: ethers::types::Log, channel: &Channel) {
+    let chain = &job.chain;
+
+    let block = log.block_number.unwrap();
+    let transaction = log.transaction_hash.unwrap();
+    let index = log.log_index.unwrap();
+
+    log!(
+        "sync: events: {}: found {}<{}> at {}",
+        chain,
+        transaction,
+        index,
+        block
+    );
+
+    if let Some(options) = &job.options {
+        // Await for block logic
+        if let Some(options) = &options.await_block {
+            let AwaitBlock {
+                check_block,
+                block_handler,
+            } = &options;
+
+            let (tx, rx) = oneshot::channel::<bool>();
+
+            if channel.send(Message::CheckBlock(
+                *chain,
+                block.as_u64(),
+                check_block.as_ref().unwrap().clone(),
+                tx,
+            )) {
+                let found = rx.await;
+                if found.is_ok() && found.unwrap() == false {
+                    channel.send(Message::Block(
+                        *chain,
+                        job.ws
+                            .as_ref()
+                            .unwrap()
+                            .get_block(block)
+                            .await
+                            .unwrap()
+                            .unwrap(),
+                        block_handler.as_ref().unwrap().clone(),
+                    ));
+                }
+            }
+        }
+    }
+
+    if !channel.send(Message::Event(*chain, log, job.callback.clone())) {
+        warning!(
+            "sync: events: {}: failed to send {}<{}>",
+            job.chain,
+            transaction,
+            index
+        )
+    }
 }
 
 use crate::query::PgHandler;
