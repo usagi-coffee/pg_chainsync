@@ -22,28 +22,7 @@ pub async fn listen(jobs: Arc<Vec<Job>>, channel: Arc<Channel>) {
         }
 
         let options = job.options.as_ref().unwrap();
-
-        let mut filter = Filter::new().from_block(BlockNumber::Latest);
-
-        if let Some(address) = &options.address {
-            filter = filter.address(address.parse::<Address>().unwrap());
-        }
-
-        if let Some(event) = &options.event {
-            filter = filter.event(event);
-        }
-
-        if let Some(topic0) = &options.topic0 {
-            filter = filter.topic0(topic0.parse::<H256>().unwrap());
-        }
-
-        if let Some(to_block) = &options.to_block {
-            filter = filter.to_block(to_block.clone());
-        }
-
-        if let Some(from_block) = &options.from_block {
-            filter = filter.from_block(from_block.clone());
-        }
+        let filter = build_filter(&options);
 
         let provider = job.ws.as_ref().unwrap();
         let stream = provider.subscribe_logs(&filter).await.unwrap();
@@ -159,4 +138,30 @@ pub fn handle_message(message: &Message) {
         })
         .execute();
     });
+}
+
+fn build_filter(options: &JobOptions) -> Filter {
+    let mut filter = Filter::new().from_block(BlockNumber::Latest);
+
+    if let Some(address) = &options.address {
+        filter = filter.address(address.parse::<Address>().unwrap());
+    }
+
+    if let Some(event) = &options.event {
+        filter = filter.event(event);
+    }
+
+    if let Some(topic0) = &options.topic0 {
+        filter = filter.topic0(topic0.parse::<H256>().unwrap());
+    }
+
+    if let Some(from_block) = &options.from_block {
+        filter = filter.from_block(from_block.clone());
+    }
+
+    if let Some(_) = &options.to_block {
+        todo!("to_block implies oneshot/get_logs");
+    }
+
+    filter
 }
