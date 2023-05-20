@@ -5,7 +5,7 @@ use pgx::prelude::warning;
 
 use crate::types::Message;
 
-pub const MESSAGES_CAPACITY: usize = 1024;
+pub const MESSAGES_CAPACITY: usize = 32768;
 
 pub type MessageStream = ReceiverStream<Message>;
 

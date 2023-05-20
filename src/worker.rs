@@ -2,9 +2,13 @@ use pgx::lwlock::PgLwLock;
 use pgx::PGXSharedMemory;
 
 use pgx::bgworkers::BackgroundWorker;
+use pgx::log;
+
+use crate::types::{Job, JobKind, Message};
 
 pub static WORKER_STATUS: PgLwLock<WorkerStatus> = PgLwLock::new();
 pub static RESTART_COUNT: PgLwLock<i32> = PgLwLock::new();
+pub static TASKS: PgLwLock<heapless::Vec<i64, 32>> = PgLwLock::new();
 
 // Should be more than restart count
 pub static STOP_COUNT: i32 = 999;
@@ -22,6 +26,7 @@ pub enum WorkerStatus {
 unsafe impl PGXSharedMemory for WorkerStatus {}
 
 use crate::channel::Channel;
+use crate::sync::events;
 use std::sync::Arc;
 
 pub async fn handle_signals(_: Arc<Channel>) {
@@ -38,6 +43,65 @@ pub async fn handle_signals(_: Arc<Channel>) {
             WorkerStatus::RESTARTING => break,
             WorkerStatus::STOPPING => break,
             _ => {}
+        }
+
+        tokio::task::yield_now().await;
+    }
+}
+
+use ethers::providers::Middleware;
+use tokio::sync::oneshot;
+use tokio::time::{sleep_until, Duration, Instant};
+
+pub async fn handle_tasks(channel: Arc<Channel>) {
+    loop {
+        if let Some(task) = TASKS.exclusive().pop() {
+            // FIXME: wait some time for commit when adding tasks
+            sleep_until(Instant::now() + Duration::from_millis(100)).await;
+
+            let (tx, rx) = oneshot::channel::<Option<Job>>();
+            channel.send(Message::Job(task, tx));
+
+            let job = rx.await;
+
+            if let Err(_) = job {
+                log!("sync: tasks: failed to fetch job for task {}", task);
+                continue;
+            }
+
+            let job = job.unwrap();
+
+            if job.is_none() {
+                log!("sync: tasks: failed to find job for task {}", task);
+                continue;
+            }
+
+            let mut job = job.unwrap();
+
+            if !job.connect().await {
+                log!("sync: tasks: failed to create provider for {}", task,);
+                continue;
+            };
+
+            let chain = &job.chain;
+
+            match job.kind {
+                JobKind::Blocks => todo!("block tasks are not yet implemented"),
+                JobKind::Events => {
+                    let filter = events::build_filter(&job.options.unwrap());
+                    let logs = job.ws.as_ref().unwrap().get_logs(&filter).await;
+
+                    if let Ok(mut logs) = logs {
+                        for log in logs.drain(0..) {
+                            channel.send(Message::Event(
+                                *chain,
+                                log,
+                                job.callback.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
         }
 
         tokio::task::yield_now().await;

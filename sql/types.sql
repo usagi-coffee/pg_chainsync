@@ -6,6 +6,7 @@ CREATE TABLE chainsync.jobs (
 	callback TEXT NOT NULL,
 	status TEXT NOT NULL DEFAULT 'STOPPED',
 	provider_url TEXT NOT NULL,
+	oneshot BOOLEAN NOT NULL,
 	options JSONB
 );
 

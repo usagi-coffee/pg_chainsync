@@ -14,6 +14,9 @@ pub type Block = ethers::types::Block<H256>;
 pub type Log = ethers::types::Log;
 
 pub enum Message {
+    Job(i64, oneshot::Sender<Option<Job>>),
+    Jobs(oneshot::Sender<Vec<Job>>),
+
     // Job messages
     Block(Chain, Block, Callback),
     Event(Chain, Log, Callback),
@@ -28,6 +31,7 @@ pub enum JobKind {
     Events,
 }
 
+#[derive(Clone)]
 pub struct Job {
     pub id: i64,
     pub kind: JobKind,
@@ -35,15 +39,30 @@ pub struct Job {
     pub provider_url: String,
     pub status: String,
     pub callback: String,
+    pub oneshot: bool,
     pub options: Option<JobOptions>,
 
     pub ws: Option<Provider<Ws>>,
 }
 
-#[derive(Deserialize)]
+impl Job {
+    pub async fn connect(&mut self) -> bool {
+        let provider = Provider::<Ws>::connect(&self.provider_url).await;
+
+        if provider.is_ok() {
+            self.ws = Some(provider.unwrap());
+            return true;
+        }
+
+        false
+    }
+}
+
+#[derive(Clone, Deserialize)]
 pub struct JobOptions {
     /// Generic
-    // Nothing
+    pub from_block: Option<i64>,
+    pub to_block: Option<i64>,
 
     /// Block job
     // Nothing
@@ -59,11 +78,9 @@ pub struct JobOptions {
     pub topic1: Option<String>,
     pub topic2: Option<String>,
     pub topic3: Option<String>,
-    pub from_block: Option<i64>,
-    pub to_block: Option<i64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct AwaitBlock {
     pub check_block: Option<String>,
     pub block_handler: Option<String>,

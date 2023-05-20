@@ -23,11 +23,12 @@ impl Job {
         chain_id: i64,
         provider_url: &str,
         callback: &str,
+        oneshot: bool,
         options: pgx::JsonB,
-    ) -> bool {
-        Spi::run_with_args(
+    ) -> i64 {
+        match Spi::get_one_with_args(
             include_str!("../sql/insert_job.sql"),
-            Some(vec![
+            vec![
                 (
                     PgOid::BuiltIn(PgBuiltInOids::TEXTOID),
                     job_type.to_string().into_datum(),
@@ -44,13 +45,16 @@ impl Job {
                     PgOid::BuiltIn(PgBuiltInOids::TEXTOID),
                     callback.into_datum(),
                 ),
+                (PgOid::BuiltIn(PgBuiltInOids::BOOLOID), oneshot.into_datum()),
                 (
                     PgOid::BuiltIn(PgBuiltInOids::JSONBOID),
                     options.into_datum(),
                 ),
-            ]),
-        )
-        .is_ok()
+            ],
+        ) {
+            Ok(id) => id.unwrap(),
+            Err(_) => -1,
+        }
     }
 
     pub fn update(&mut self, status: &String) -> bool {
@@ -109,6 +113,10 @@ impl Job {
                         .unwrap(),
                     status: table
                         .get_by_name::<String, &'static str>("status")
+                        .unwrap()
+                        .unwrap(),
+                    oneshot: table
+                        .get_by_name::<bool, &'static str>("oneshot")
                         .unwrap()
                         .unwrap(),
                     options: serde_json::from_value(options.0).unwrap_or(None),

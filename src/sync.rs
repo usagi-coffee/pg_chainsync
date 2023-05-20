@@ -13,8 +13,8 @@ use crate::channel::*;
 use crate::types::*;
 use crate::worker::*;
 
-mod blocks;
-mod events;
+pub mod blocks;
+pub mod events;
 
 const DATABASE: &str = "postgres";
 
@@ -50,45 +50,38 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
 
     log!("sync: {} jobs found", jobs.len());
     for job in jobs.iter_mut() {
-        let provider = runtime.block_on(async {
-            Provider::<Ws>::connect(&job.provider_url).await
-        });
-
-        if provider.is_ok() {
-            job.ws = Some(provider.unwrap());
-        }
+        runtime.block_on(async { job.connect().await });
     }
 
     let jobs = Arc::new(jobs);
 
-    if jobs.len() > 0 {
-        *WORKER_STATUS.exclusive() = WorkerStatus::RUNNING;
+    *WORKER_STATUS.exclusive() = WorkerStatus::RUNNING;
 
-        let (send_message, receive_message) =
-            mpsc::channel::<Message>(MESSAGES_CAPACITY);
+    let (send_message, receive_message) =
+        mpsc::channel::<Message>(MESSAGES_CAPACITY);
 
-        let channel = Arc::new(Channel::new(send_message));
-        let mut stream = MessageStream::new(receive_message);
+    let channel = Arc::new(Channel::new(send_message));
+    let mut stream = MessageStream::new(receive_message);
 
-        runtime.block_on(async {
-            tokio::select! {
-                _ = handle_signals(Arc::clone(&channel)) => {
-                    log!("sync: received exit signal... exiting");
-                },
-                _ = events::listen(Arc::clone(&jobs), Arc::clone(&channel)) => {
-                    log!("sync: stopped listening to events... exiting");
-                },
-                _ = blocks::listen(Arc::clone(&jobs), Arc::clone(&channel)) => {
-                    log!("sync: stopped listening to blocks... exiting");
-                },
-                _ = handle_message(&mut stream) => {
-                    log!("sync: stopped processing messages... exiting");
-                }
+    runtime.block_on(async {
+        tokio::select! {
+            _ = handle_signals(Arc::clone(&channel)) => {
+                log!("sync: received exit signal... exiting");
+            },
+            _ = events::listen(Arc::clone(&jobs), Arc::clone(&channel)) => {
+                log!("sync: stopped listening to events... exiting");
+            },
+            _ = blocks::listen(Arc::clone(&jobs), Arc::clone(&channel)) => {
+                log!("sync: stopped listening to blocks... exiting");
+            },
+            _ = handle_message(&mut stream) => {
+                log!("sync: stopped processing messages... exiting");
             }
-        });
-    } else {
-        log!("sync: no jobs found... exiting");
-    }
+            _ = handle_tasks(Arc::clone(&channel)) => {
+                log!("sync: tasks: stopped tasks... exiting");
+            },
+        }
+    });
 
     *WORKER_STATUS.exclusive() = WorkerStatus::STOPPED;
     log!("sync: worker has exited");
@@ -97,6 +90,40 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
 async fn handle_message(stream: &mut MessageStream) {
     while let Some(message) = stream.next().await {
         match message {
+            Message::Job(id, oneshot) => {
+                // TODO: query_one
+                let jobs = BackgroundWorker::transaction(|| {
+                    PgTryBuilder::new(Job::query_all)
+                        .catch_others(|_| Err(pgx::spi::Error::NoTupleTable))
+                        .execute()
+                })
+                .unwrap_or(Vec::new());
+
+                match jobs.into_iter().find(|job| job.id == id) {
+                    Some(job) => {
+                        if oneshot.send(Some(job)).is_err() {
+                            warning!("sync: jobs: failed to send on channel");
+                        }
+                    }
+                    None => {
+                        if oneshot.send(None).is_err() {
+                            warning!("sync: jobs: failed to send on channel");
+                        }
+                    }
+                };
+            }
+            Message::Jobs(oneshot) => {
+                let jobs = BackgroundWorker::transaction(|| {
+                    PgTryBuilder::new(Job::query_all)
+                        .catch_others(|_| Err(pgx::spi::Error::NoTupleTable))
+                        .execute()
+                })
+                .unwrap_or(Vec::new());
+
+                if oneshot.send(jobs).is_err() {
+                    warning!("sync: jobs: failed to send on channel");
+                }
+            }
             Message::Block(..) => blocks::handle_message(&message),
             Message::Event(..) => events::handle_message(&message),
             Message::CheckBlock(chain, number, callback, oneshot) => {

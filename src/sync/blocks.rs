@@ -3,7 +3,7 @@ use pgx::prelude::*;
 
 use std::sync::Arc;
 
-use tokio_stream::{pending, StreamMap};
+use tokio_stream::{pending, StreamMap, StreamNotifyClose};
 
 use ethers::prelude::*;
 
@@ -16,13 +16,13 @@ pub async fn listen(jobs: Arc<Vec<Job>>, channel: Arc<Channel>) {
     for i in 0..jobs.len() {
         let job = &jobs[i];
 
-        if job.kind != JobKind::Blocks {
+        if job.kind != JobKind::Blocks || job.oneshot {
             continue;
         }
 
         let stream = job.ws.as_ref().unwrap().subscribe_blocks().await.unwrap();
 
-        map.insert(i, stream);
+        map.insert(i, StreamNotifyClose::new(stream));
     }
 
     if map.is_empty() {
@@ -36,17 +36,31 @@ pub async fn listen(jobs: Arc<Vec<Job>>, channel: Arc<Channel>) {
     while let Some(tick) = map.next().await {
         let (i, block) = tick;
         let job = &jobs[i];
-        let chain = &job.chain;
 
-        let number = block.number.unwrap_or(U64::from(0));
-        log!("sync: blocks: {}: found {}", chain, number);
+        if block.is_none() {
+            println!("sync: blocks: stream {} has ended", job.id);
+            continue;
+        }
 
-        channel.send(Message::Block(*chain, block, job.callback.clone()));
+        handle_block(job, block.unwrap(), &channel).await;
     }
 
     // Wait until queue gets processed before exiting
     log!("sync: blocks: waiting for consumer to finish");
     channel.wait_for_messages().await;
+}
+
+pub async fn handle_block(
+    job: &Job,
+    block: ethers::types::Block<H256>,
+    channel: &Channel,
+) {
+    let chain = &job.chain;
+
+    let number = block.number.unwrap_or(U64::from(0));
+    log!("sync: blocks: {}: found {}", chain, number);
+
+    channel.send(Message::Block(*chain, block, job.callback.clone()));
 }
 
 use crate::query::PgHandler;

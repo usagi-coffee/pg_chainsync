@@ -17,7 +17,7 @@ pub async fn listen(jobs: Arc<Vec<Job>>, channel: Arc<Channel>) {
     for i in 0..jobs.len() {
         let job = &jobs[i];
 
-        if job.kind != JobKind::Events {
+        if job.kind != JobKind::Events || job.oneshot {
             continue;
         }
 
@@ -150,7 +150,7 @@ pub fn handle_message(message: &Message) {
     });
 }
 
-fn build_filter(options: &JobOptions) -> Filter {
+pub fn build_filter(options: &JobOptions) -> Filter {
     let mut filter = Filter::new().from_block(BlockNumber::Latest);
 
     if let Some(address) = &options.address {
@@ -169,8 +169,8 @@ fn build_filter(options: &JobOptions) -> Filter {
         filter = filter.from_block(from_block.clone());
     }
 
-    if let Some(_) = &options.to_block {
-        todo!("to_block implies oneshot/get_logs");
+    if let Some(to_block) = &options.to_block {
+        filter = filter.to_block(to_block.clone());
     }
 
     filter
