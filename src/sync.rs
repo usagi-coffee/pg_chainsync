@@ -72,7 +72,7 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
 
         runtime.block_on(async {
             tokio::select! {
-                _ = handle_signals() => {
+                _ = handle_signals(Arc::clone(&channel)) => {
                     log!("sync: received exit signal... exiting");
                 },
                 _ = events::listen(Arc::clone(&jobs), Arc::clone(&channel)) => {

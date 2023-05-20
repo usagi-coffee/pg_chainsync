@@ -21,7 +21,10 @@ pub enum WorkerStatus {
 
 unsafe impl PGXSharedMemory for WorkerStatus {}
 
-pub async fn handle_signals() {
+use crate::channel::Channel;
+use std::sync::Arc;
+
+pub async fn handle_signals(_: Arc<Channel>) {
     loop {
         if BackgroundWorker::sighup_received() {
             *WORKER_STATUS.exclusive() = WorkerStatus::STOPPING;
