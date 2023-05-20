@@ -117,7 +117,7 @@ SELECT chainsync.add_events_job(
 
 Task is a type of job that is designed to run only once when called and will not restart alongside with the database, you can use the same api like for registering jobs to register tasks.
 
-Use `chainsync.add_events_task` and soon `chainsync.add_blocks_task` (not yet implemented) with the same arguments as in registering jobs and it should run once on-demand.
+Use `chainsync.add_events_task` and `chainsync.add_blocks_task` with the same arguments as in registering jobs and it should run once on-demand.
 
 ## Installation
 

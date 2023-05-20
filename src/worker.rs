@@ -86,7 +86,28 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
             let chain = &job.chain;
 
             match job.kind {
-                JobKind::Blocks => todo!("block tasks are not yet implemented"),
+                JobKind::Blocks => {
+                    let ws = job.ws.as_ref().unwrap();
+                    let options = &job.options.unwrap();
+
+                    let mut to = options.to_block.unwrap_or(0);
+                    if options.to_block.is_none() {
+                        to = ws.get_block_number().await.unwrap().as_u64()
+                            as i64;
+                    }
+
+                    for i in options.from_block.unwrap()..to {
+                        if let Ok(block) = ws.get_block(i as u64).await {
+                            if let Some(block) = block {
+                                channel.send(Message::Block(
+                                    *chain,
+                                    block,
+                                    job.callback.clone(),
+                                ));
+                            }
+                        }
+                    }
+                }
                 JobKind::Events => {
                     let filter = events::build_filter(&job.options.unwrap());
                     let logs = job.ws.as_ref().unwrap().get_logs(&filter).await;
