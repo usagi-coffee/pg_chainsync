@@ -74,7 +74,7 @@ pub async fn handle_log(job: &Job, log: ethers::types::Log, channel: &Channel) {
         // Await for block logic
         if let Some(options) = &options.await_block {
             let AwaitBlock {
-                check_block,
+                check_handler,
                 block_handler,
             } = &options;
 
@@ -83,7 +83,7 @@ pub async fn handle_log(job: &Job, log: ethers::types::Log, channel: &Channel) {
             if channel.send(Message::CheckBlock(
                 *chain,
                 block.as_u64(),
-                check_block.as_ref().unwrap().clone(),
+                check_handler.as_ref().unwrap().clone(),
                 tx,
             )) {
                 let found = rx.await;

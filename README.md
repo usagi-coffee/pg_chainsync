@@ -82,7 +82,7 @@ SELECT chainsync.restart();
 
 `await_block` is a feature that allows you to fetch and handle event's block before handling the event. This is good when you want to e.g join block inside your event handler, this ensures there is always block available for your specific event when you call your event handler.
 
-You can optionally skip block fetching and handling if you specify `check_block` property which is the name of the function that takes `(chain bigint, block bigint)` and returns any value - if it does then it will skip handling this block.
+You can optionally skip block fetching and handling if you specify `check_handler` property which is the name of the function that takes `(chain bigint, block bigint)` and returns any value - if it does then it will skip handling this block.
 
 
 ```sql
@@ -96,7 +96,7 @@ SELECT chainsync.add_events_job(
 	    "event": "Transfer(address,address,uint256)",
 
 	    "await_block": {
-	        "check_block": "select_one_block",
+	        "check_handler": "select_one_block",
 	        "block_handler": "insert_block"
 	    }
 	}'

@@ -82,7 +82,7 @@ pub struct JobOptions {
 
 #[derive(Clone, Deserialize)]
 pub struct AwaitBlock {
-    pub check_block: Option<String>,
+    pub check_handler: Option<String>,
     pub block_handler: Option<String>,
 }
 
