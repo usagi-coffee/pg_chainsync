@@ -165,6 +165,18 @@ pub fn build_filter(options: &JobOptions) -> Filter {
         filter = filter.topic0(topic0.parse::<H256>().unwrap());
     }
 
+    if let Some(topic1) = &options.topic1 {
+        filter = filter.topic1(topic1.parse::<H256>().unwrap());
+    }
+
+    if let Some(topic2) = &options.topic2 {
+        filter = filter.topic2(topic2.parse::<H256>().unwrap());
+    }
+
+    if let Some(topic3) = &options.topic3 {
+        filter = filter.topic3(topic3.parse::<H256>().unwrap());
+    }
+
     if let Some(from_block) = &options.from_block {
         filter = filter.from_block(from_block.clone());
     }
