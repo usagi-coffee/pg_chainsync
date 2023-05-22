@@ -112,10 +112,80 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                     }
                 }
                 JobKind::Events => {
-                    let filter = events::build_filter(&job.options.unwrap());
-                    let logs = job.ws.as_ref().unwrap().get_logs(&filter).await;
+                    let ws = job.ws.as_ref().unwrap();
+                    let options = &job.options.unwrap();
 
-                    if let Ok(mut logs) = logs {
+                    let mut filter = events::build_filter(options);
+
+                    let from_block = options.from_block.unwrap_or(0);
+                    let mut to_block = options.to_block.unwrap_or(0);
+                    if options.to_block.is_none() {
+                        to_block = ws.get_block_number().await.unwrap().as_u64()
+                            as i64;
+                    }
+
+                    if let Some(blocktick) = options.blocktick {
+                        let splits = ((to_block - from_block) as f64
+                            / blocktick as f64)
+                            .ceil() as i64;
+
+                        log!("sync: tasks: {}: found {} splits", task, splits);
+
+                        for i in 1..splits {
+                            let mut from = from_block + (i - 1) * blocktick;
+                            let to = std::cmp::min(to_block, from + blocktick);
+
+                            if i > 1 {
+                                from = from + 1;
+                            }
+
+                            filter = filter.from_block(from).to_block(to);
+
+                            log!(
+                                "sync: tasks: {}: fetching blocks {} to {}",
+                                task,
+                                from,
+                                to
+                            );
+
+                            let logs = job
+                                .ws
+                                .as_ref()
+                                .unwrap()
+                                .get_logs(&filter)
+                                .await;
+
+                            if let Ok(mut logs) = logs {
+                                for log in logs.drain(0..) {
+                                    channel.send(Message::Event(
+                                        *chain,
+                                        log,
+                                        job.callback.clone(),
+                                    ));
+                                }
+                            } else {
+                                log!(
+                                    "sync: tasks: {}: failed to fetch split {}, aborting...",
+                                    task,
+                                    i
+                                );
+                                break;
+                            }
+                        }
+                    } else {
+                        let logs =
+                            job.ws.as_ref().unwrap().get_logs(&filter).await;
+
+                        if let Err(_) = logs {
+                            log!(
+                                "sync: tasks: failed to get logs for {}",
+                                task
+                            );
+
+                            continue;
+                        }
+
+                        let mut logs = logs.unwrap();
                         for log in logs.drain(0..) {
                             channel.send(Message::Event(
                                 *chain,
