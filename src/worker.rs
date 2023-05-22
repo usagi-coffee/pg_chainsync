@@ -2,7 +2,7 @@ use pgx::lwlock::PgLwLock;
 use pgx::PGXSharedMemory;
 
 use pgx::bgworkers::BackgroundWorker;
-use pgx::log;
+use pgx::{log, warning};
 
 use crate::types::{Job, JobKind, Message};
 
@@ -57,6 +57,8 @@ use tokio::sync::oneshot;
 pub async fn handle_tasks(channel: Arc<Channel>) {
     loop {
         if let Some(task) = TASKS.exclusive().pop() {
+            log!("sync: tasks: got task {}", task);
+
             // FIXME: wait some time for commit when adding tasks
             sleep_until(Instant::now() + Duration::from_millis(100)).await;
 
@@ -66,21 +68,21 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
             let job = rx.await;
 
             if let Err(_) = job {
-                log!("sync: tasks: failed to fetch job for task {}", task);
+                warning!("sync: tasks: failed to fetch job for task {}", task);
                 continue;
             }
 
             let job = job.unwrap();
 
             if job.is_none() {
-                log!("sync: tasks: failed to find job for task {}", task);
+                warning!("sync: tasks: failed to find job for task {}", task);
                 continue;
             }
 
             let mut job = job.unwrap();
 
             if !job.connect().await {
-                log!("sync: tasks: failed to create provider for {}", task,);
+                warning!("sync: tasks: failed to create provider for {}", task,);
                 continue;
             };
 
