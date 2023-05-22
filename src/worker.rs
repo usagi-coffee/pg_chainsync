@@ -29,6 +29,8 @@ use crate::channel::Channel;
 use crate::sync::events;
 use std::sync::Arc;
 
+use tokio::time::{sleep_until, Duration, Instant};
+
 pub async fn handle_signals(_: Arc<Channel>) {
     loop {
         if BackgroundWorker::sighup_received() {
@@ -45,13 +47,12 @@ pub async fn handle_signals(_: Arc<Channel>) {
             _ => {}
         }
 
-        tokio::task::yield_now().await;
+        sleep_until(Instant::now() + Duration::from_millis(100)).await;
     }
 }
 
 use ethers::providers::Middleware;
 use tokio::sync::oneshot;
-use tokio::time::{sleep_until, Duration, Instant};
 
 pub async fn handle_tasks(channel: Arc<Channel>) {
     loop {
@@ -125,6 +126,6 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
             }
         }
 
-        tokio::task::yield_now().await;
+        sleep_until(Instant::now() + Duration::from_millis(250)).await;
     }
 }
