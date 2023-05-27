@@ -1,5 +1,5 @@
-use pgx::log;
-use pgx::prelude::*;
+use pgrx::log;
+use pgrx::prelude::*;
 
 use std::sync::Arc;
 
@@ -115,7 +115,7 @@ pub async fn handle_log(job: &Job, log: ethers::types::Log, channel: &Channel) {
 }
 
 use crate::query::PgHandler;
-use pgx::bgworkers::BackgroundWorker;
+use pgrx::bgworkers::BackgroundWorker;
 
 pub fn handle_message(message: &Message) {
     let Message::Event(chain, log, callback) = message else { return; };

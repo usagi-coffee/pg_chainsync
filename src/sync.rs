@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use pgx::prelude::*;
+use pgrx::prelude::*;
 
-use pgx::bgworkers::*;
-use pgx::log;
+use pgrx::bgworkers::*;
+use pgrx::log;
 
 use ethers::prelude::*;
 
@@ -43,7 +43,7 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
 
     let mut jobs = BackgroundWorker::transaction(|| {
         PgTryBuilder::new(Job::query_all)
-            .catch_others(|_| Err(pgx::spi::Error::NoTupleTable))
+            .catch_others(|_| Err(pgrx::spi::Error::NoTupleTable))
             .execute()
     })
     .unwrap_or(Vec::new());
@@ -94,7 +94,7 @@ async fn handle_message(stream: &mut MessageStream) {
                 // TODO: query_one
                 let jobs = BackgroundWorker::transaction(|| {
                     PgTryBuilder::new(Job::query_all)
-                        .catch_others(|_| Err(pgx::spi::Error::NoTupleTable))
+                        .catch_others(|_| Err(pgrx::spi::Error::NoTupleTable))
                         .execute()
                 })
                 .unwrap_or(Vec::new());
@@ -115,7 +115,7 @@ async fn handle_message(stream: &mut MessageStream) {
             Message::Jobs(oneshot) => {
                 let jobs = BackgroundWorker::transaction(|| {
                     PgTryBuilder::new(Job::query_all)
-                        .catch_others(|_| Err(pgx::spi::Error::NoTupleTable))
+                        .catch_others(|_| Err(pgrx::spi::Error::NoTupleTable))
                         .execute()
                 })
                 .unwrap_or(Vec::new());

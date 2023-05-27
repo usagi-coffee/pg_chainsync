@@ -1,5 +1,5 @@
-use pgx::log;
-use pgx::prelude::*;
+use pgrx::log;
+use pgrx::prelude::*;
 
 use std::sync::Arc;
 
@@ -64,7 +64,7 @@ pub async fn handle_block(
 }
 
 use crate::query::PgHandler;
-use pgx::bgworkers::BackgroundWorker;
+use pgrx::bgworkers::BackgroundWorker;
 
 pub fn handle_message(message: &Message) {
     let Message::Block(chain, block, callback) = message else { return; };

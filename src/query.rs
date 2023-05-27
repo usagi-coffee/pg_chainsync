@@ -1,5 +1,5 @@
-use pgx::prelude::*;
-use pgx::{IntoDatum, PgOid};
+use pgrx::prelude::*;
+use pgrx::{IntoDatum, PgOid};
 
 use ethers::abi::AbiEncode;
 use ethers::prelude::{Chain, Log};
@@ -14,7 +14,7 @@ pub trait PgHandler {
         &self,
         chain: &Chain,
         callback: &String,
-    ) -> Result<(), pgx::spi::Error>;
+    ) -> Result<(), pgrx::spi::Error>;
 }
 
 impl Job {
@@ -24,7 +24,7 @@ impl Job {
         provider_url: &str,
         callback: &str,
         oneshot: bool,
-        options: pgx::JsonB,
+        options: pgrx::JsonB,
     ) -> i64 {
         match Spi::get_one_with_args(
             include_str!("../sql/insert_job.sql"),
@@ -72,7 +72,7 @@ impl Job {
         return false;
     }
 
-    pub fn query_all() -> Result<Vec<Job>, pgx::spi::Error> {
+    pub fn query_all() -> Result<Vec<Job>, pgrx::spi::Error> {
         Spi::connect(|client| {
             let mut table =
                 client.select("SELECT * FROM chainsync.jobs", None, None)?;
@@ -86,7 +86,7 @@ impl Job {
                 }
 
                 let options = table
-                    .get_by_name::<pgx::JsonB, &'static str>("options")
+                    .get_by_name::<pgrx::JsonB, &'static str>("options")
                     .unwrap()
                     .unwrap();
 
@@ -134,7 +134,7 @@ impl PgHandler for Block {
         &self,
         chain: &Chain,
         callback: &String,
-    ) -> Result<(), pgx::spi::Error> {
+    ) -> Result<(), pgrx::spi::Error> {
         let mut data =
             PgHeapTuple::new_composite_type(BLOCK_COMPOSITE_TYPE).unwrap();
 
@@ -179,7 +179,7 @@ impl PgHandler for Log {
         &self,
         chain: &Chain,
         callback: &String,
-    ) -> Result<(), pgx::spi::Error> {
+    ) -> Result<(), pgrx::spi::Error> {
         let mut data =
             PgHeapTuple::new_composite_type(LOG_COMPOSITE_TYPE).unwrap();
 

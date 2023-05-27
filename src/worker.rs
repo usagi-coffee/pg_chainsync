@@ -1,8 +1,8 @@
-use pgx::lwlock::PgLwLock;
-use pgx::PGXSharedMemory;
+use pgrx::lwlock::PgLwLock;
+use pgrx::PGRXSharedMemory;
 
-use pgx::bgworkers::BackgroundWorker;
-use pgx::{log, warning};
+use pgrx::bgworkers::BackgroundWorker;
+use pgrx::{log, warning};
 
 use crate::types::{Job, JobKind, Message};
 
@@ -23,7 +23,7 @@ pub enum WorkerStatus {
     STOPPED,
 }
 
-unsafe impl PGXSharedMemory for WorkerStatus {}
+unsafe impl PGRXSharedMemory for WorkerStatus {}
 
 use crate::channel::Channel;
 use crate::sync::events;

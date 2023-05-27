@@ -1,6 +1,6 @@
-use pgx::bgworkers::*;
-use pgx::prelude::*;
-use pgx::{pg_shmem_init, PgSharedMemoryInitialization};
+use pgrx::bgworkers::*;
+use pgrx::prelude::*;
+use pgrx::{pg_shmem_init, PgSharedMemoryInitialization};
 
 mod sync;
 mod worker;
@@ -9,7 +9,7 @@ pub mod channel;
 pub mod query;
 pub mod types;
 
-pgx::pg_module_magic!();
+pgrx::pg_module_magic!();
 
 #[pg_schema]
 mod chainsync {
@@ -18,8 +18,8 @@ mod chainsync {
         WorkerStatus, RESTART_COUNT, STOP_COUNT, TASKS, WORKER_STATUS,
     };
 
-    use pgx::bgworkers::*;
-    use pgx::prelude::*;
+    use pgrx::bgworkers::*;
+    use pgrx::prelude::*;
 
     #[pg_extern]
     fn restart() {
@@ -54,7 +54,7 @@ mod chainsync {
             provider_url,
             callback,
             false,
-            pgx::JsonB(serde_json::Value::Null),
+            pgrx::JsonB(serde_json::Value::Null),
         )
     }
 
@@ -70,7 +70,7 @@ mod chainsync {
             provider_url,
             callback,
             true,
-            pgx::JsonB(serde_json::Value::Null),
+            pgrx::JsonB(serde_json::Value::Null),
         );
 
         if task <= 0 {
@@ -89,7 +89,7 @@ mod chainsync {
         chain_id: i64,
         provider_url: &str,
         callback: &str,
-        options: pgx::JsonB,
+        options: pgrx::JsonB,
     ) -> i64 {
         if options.0.is_null() || !options.0.is_object() {
             panic!("provided options are not an object")
@@ -110,7 +110,7 @@ mod chainsync {
         chain_id: i64,
         provider_url: &str,
         callback: &str,
-        options: pgx::JsonB,
+        options: pgrx::JsonB,
     ) -> i64 {
         if options.0.is_null() || !options.0.is_object() {
             panic!("provided options are not an object")

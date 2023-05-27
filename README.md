@@ -140,11 +140,14 @@ SELECT chainsync.add_events_task(
 > ***IMPORTANT***: currently the database that the worker uses is hard-coded to `postgres` if you are using different database please modify the `DATABASE` constant inside `src/sync.rs` before building.
 
 ```bash
+# Install pgrx
+cargo install --locked cargo-pgrx
+
 # Build the extension
 cargo build --release
 
 # Packaging process should create pg_chainsync-pg15 under target/release
-cargo pgx package
+cargo pgrx package
 
 # Copy files to your postgres installation (paths may be different on your system)
 cd target/release
