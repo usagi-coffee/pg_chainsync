@@ -3,6 +3,7 @@ use pgrx::{IntoDatum, PgOid};
 
 use ethers::abi::AbiEncode;
 use ethers::prelude::{Chain, Log};
+use ethers::utils::hex;
 
 use crate::types::*;
 
@@ -203,8 +204,11 @@ impl PgHandler for Log {
             "block_number",
             self.block_number.unwrap().as_u64() as i64,
         )?;
-        data.set_by_name("address", self.address.encode_hex())?;
-        data.set_by_name("data", self.data.to_owned().encode_hex())?;
+        data.set_by_name("address", format!("{:#x}", self.address))?;
+        data.set_by_name(
+            "data",
+            format!("{}", hex::encode(self.data.to_owned().encode())),
+        )?;
         data.set_by_name(
             "topics",
             self.topics
