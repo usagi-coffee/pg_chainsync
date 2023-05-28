@@ -10,7 +10,9 @@ use ethers::prelude::*;
 use tokio::sync::mpsc;
 
 use crate::channel::*;
+use crate::tasks;
 use crate::types::*;
+use crate::worker;
 use crate::worker::*;
 
 pub mod blocks;
@@ -65,19 +67,19 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
 
     runtime.block_on(async {
         tokio::select! {
-            _ = handle_signals(Arc::clone(&channel)) => {
+            _ = worker::handle_signals(Arc::clone(&channel)) => {
                 log!("sync: received exit signal... exiting");
-            },
-            _ = events::listen(Arc::clone(&jobs), Arc::clone(&channel)) => {
-                log!("sync: stopped listening to events... exiting");
             },
             _ = blocks::listen(Arc::clone(&jobs), Arc::clone(&channel)) => {
                 log!("sync: stopped listening to blocks... exiting");
             },
+            _ = events::listen(Arc::clone(&jobs), Arc::clone(&channel)) => {
+                log!("sync: stopped listening to events... exiting");
+            },
             _ = handle_message(&mut stream) => {
                 log!("sync: stopped processing messages... exiting");
             }
-            _ = handle_tasks(Arc::clone(&channel)) => {
+            _ = tasks::handle_tasks(Arc::clone(&channel)) => {
                 log!("sync: tasks: stopped tasks... exiting");
             },
         }

@@ -2,9 +2,6 @@ use pgrx::lwlock::PgLwLock;
 use pgrx::PGRXSharedMemory;
 
 use pgrx::bgworkers::BackgroundWorker;
-use pgrx::{log, warning};
-
-use crate::types::{Job, JobKind, Message};
 
 pub static WORKER_STATUS: PgLwLock<WorkerStatus> = PgLwLock::new();
 pub static RESTART_COUNT: PgLwLock<i32> = PgLwLock::new();
@@ -26,7 +23,6 @@ pub enum WorkerStatus {
 unsafe impl PGRXSharedMemory for WorkerStatus {}
 
 use crate::channel::Channel;
-use crate::sync::events;
 use std::sync::Arc;
 
 use tokio::time::{sleep_until, Duration, Instant};
@@ -48,136 +44,5 @@ pub async fn handle_signals(_: Arc<Channel>) {
         }
 
         sleep_until(Instant::now() + Duration::from_millis(100)).await;
-    }
-}
-
-use ethers::providers::Middleware;
-use tokio::sync::oneshot;
-
-pub async fn handle_tasks(channel: Arc<Channel>) {
-    loop {
-        if let Some(task) = TASKS.exclusive().pop() {
-            log!("sync: tasks: got task {}", task);
-
-            // FIXME: wait some time for commit when adding tasks
-            sleep_until(Instant::now() + Duration::from_millis(100)).await;
-
-            let (tx, rx) = oneshot::channel::<Option<Job>>();
-            channel.send(Message::Job(task, tx));
-
-            let job = rx.await;
-
-            if let Err(_) = job {
-                warning!("sync: tasks: failed to fetch job for task {}", task);
-                continue;
-            }
-
-            let job = job.unwrap();
-
-            if job.is_none() {
-                warning!("sync: tasks: failed to find job for task {}", task);
-                continue;
-            }
-
-            let mut job = job.unwrap();
-
-            if !job.connect().await {
-                warning!("sync: tasks: failed to create provider for {}", task,);
-                continue;
-            };
-
-            let chain = &job.chain;
-            let options = &job.options.as_ref().unwrap();
-            let ws = job.ws.as_ref().unwrap();
-
-            match job.kind {
-                JobKind::Blocks => {
-                    let mut to = options.to_block.unwrap_or(0);
-                    if options.to_block.is_none() {
-                        to = ws.get_block_number().await.unwrap().as_u64()
-                            as i64;
-                    }
-
-                    for i in options.from_block.unwrap()..to {
-                        if let Ok(block) = ws.get_block(i as u64).await {
-                            if let Some(block) = block {
-                                channel.send(Message::Block(
-                                    *chain,
-                                    block,
-                                    job.callback.clone(),
-                                ));
-                            }
-                        }
-                    }
-                }
-                JobKind::Events => {
-                    let mut filter = events::build_filter(options);
-
-                    let from_block = options.from_block.unwrap_or(0);
-                    let mut to_block = options.to_block.unwrap_or(0);
-                    if options.to_block.is_none() {
-                        to_block = ws.get_block_number().await.unwrap().as_u64()
-                            as i64;
-                    }
-
-                    if let Some(blocktick) = options.blocktick {
-                        let splits = ((to_block - from_block) as f64
-                            / blocktick as f64)
-                            .ceil() as i64;
-
-                        log!("sync: tasks: {}: found {} splits", task, splits);
-
-                        for i in 1..=splits {
-                            let mut from = from_block + (i - 1) * blocktick;
-                            let to = std::cmp::min(to_block, from + blocktick);
-
-                            if i > 1 {
-                                from = from + 1;
-                            }
-
-                            log!(
-                                "sync: tasks: {}: fetching blocks {} to {} ({} / {})",
-                                task,
-                                from,
-                                to,
-                                i,
-                                splits
-                            );
-
-                            filter = filter.from_block(from).to_block(to);
-
-                            if let Ok(mut logs) = ws.get_logs(&filter).await {
-                                for log in logs.drain(0..) {
-                                    events::handle_log(&job, log, &channel)
-                                        .await;
-                                }
-                            } else {
-                                log!(
-                                    "sync: tasks: {}: failed to fetch split {}, aborting...",
-                                    task,
-                                    i
-                                );
-                                break;
-                            }
-                        }
-                    } else {
-                        match ws.get_logs(&filter).await {
-                            Ok(mut logs) => {
-                                for log in logs.drain(0..) {
-                                    events::handle_log(&job, log, &channel)
-                                        .await;
-                                }
-                            }
-                            Err(_) => log!(
-                                "sync: tasks: failed to get logs for {}, aborting...",
-                                task
-                            ),
-                        }
-                    }
-                }
-            }
-        }
-
-        sleep_until(Instant::now() + Duration::from_millis(250)).await;
     }
 }
