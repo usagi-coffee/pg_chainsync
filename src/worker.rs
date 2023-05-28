@@ -142,10 +142,12 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                             filter = filter.from_block(from).to_block(to);
 
                             log!(
-                                "sync: tasks: {}: fetching blocks {} to {}",
+                                "sync: tasks: {}: fetching blocks {} to {} ({} / {})",
                                 task,
                                 from,
-                                to
+                                to,
+                                i,
+                                splits
                             );
 
                             let logs = job
