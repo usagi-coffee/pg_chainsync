@@ -87,12 +87,11 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
             };
 
             let chain = &job.chain;
+            let options = &job.options.as_ref().unwrap();
+            let ws = job.ws.as_ref().unwrap();
 
             match job.kind {
                 JobKind::Blocks => {
-                    let ws = job.ws.as_ref().unwrap();
-                    let options = &job.options.unwrap();
-
                     let mut to = options.to_block.unwrap_or(0);
                     if options.to_block.is_none() {
                         to = ws.get_block_number().await.unwrap().as_u64()
@@ -112,9 +111,6 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                     }
                 }
                 JobKind::Events => {
-                    let ws = job.ws.as_ref().unwrap();
-                    let options = &job.options.unwrap();
-
                     let mut filter = events::build_filter(options);
 
                     let from_block = options.from_block.unwrap_or(0);
@@ -139,8 +135,6 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                                 from = from + 1;
                             }
 
-                            filter = filter.from_block(from).to_block(to);
-
                             log!(
                                 "sync: tasks: {}: fetching blocks {} to {} ({} / {})",
                                 task,
@@ -150,20 +144,12 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                                 splits
                             );
 
-                            let logs = job
-                                .ws
-                                .as_ref()
-                                .unwrap()
-                                .get_logs(&filter)
-                                .await;
+                            filter = filter.from_block(from).to_block(to);
 
-                            if let Ok(mut logs) = logs {
+                            if let Ok(mut logs) = ws.get_logs(&filter).await {
                                 for log in logs.drain(0..) {
-                                    channel.send(Message::Event(
-                                        *chain,
-                                        log,
-                                        job.callback.clone(),
-                                    ));
+                                    events::handle_log(&job, log, &channel)
+                                        .await;
                                 }
                             } else {
                                 log!(
@@ -175,25 +161,17 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                             }
                         }
                     } else {
-                        let logs =
-                            job.ws.as_ref().unwrap().get_logs(&filter).await;
-
-                        if let Err(_) = logs {
-                            log!(
-                                "sync: tasks: failed to get logs for {}",
+                        match ws.get_logs(&filter).await {
+                            Ok(mut logs) => {
+                                for log in logs.drain(0..) {
+                                    events::handle_log(&job, log, &channel)
+                                        .await;
+                                }
+                            }
+                            Err(_) => log!(
+                                "sync: tasks: failed to get logs for {}, aborting...",
                                 task
-                            );
-
-                            continue;
-                        }
-
-                        let mut logs = logs.unwrap();
-                        for log in logs.drain(0..) {
-                            channel.send(Message::Event(
-                                *chain,
-                                log,
-                                job.callback.clone(),
-                            ));
+                            ),
                         }
                     }
                 }
