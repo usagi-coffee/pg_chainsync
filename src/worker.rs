@@ -127,7 +127,7 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
 
                         log!("sync: tasks: {}: found {} splits", task, splits);
 
-                        for i in 1..splits {
+                        for i in 1..=splits {
                             let mut from = from_block + (i - 1) * blocktick;
                             let to = std::cmp::min(to_block, from + blocktick);
 
