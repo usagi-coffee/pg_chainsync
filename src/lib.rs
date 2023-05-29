@@ -22,6 +22,8 @@ mod chainsync {
     use pgrx::bgworkers::*;
     use pgrx::prelude::*;
 
+    use std::time::{Duration, Instant};
+
     #[pg_extern]
     fn restart() {
         *RESTART_COUNT.exclusive() = 0;
@@ -32,8 +34,27 @@ mod chainsync {
                 .set_library("pg_chainsync")
                 .enable_spi_access()
                 .load_dynamic();
-        } else {
-            *WORKER_STATUS.exclusive() = WorkerStatus::RESTARTING;
+
+            return;
+        }
+
+        *WORKER_STATUS.exclusive() = WorkerStatus::RESTARTING;
+
+        let start = Instant::now();
+        loop {
+            if *WORKER_STATUS.share() == WorkerStatus::STOPPED {
+                BackgroundWorkerBuilder::new("pg_chainsync: sync worker")
+                    .set_function("background_worker_sync")
+                    .set_library("pg_chainsync")
+                    .enable_spi_access()
+                    .load_dynamic();
+
+                break;
+            }
+
+            if start.elapsed() > Duration::from_secs(30) {
+                panic!("Waited too long for restart... panicing")
+            }
         }
     }
 
