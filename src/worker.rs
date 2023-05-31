@@ -2,6 +2,7 @@ use pgrx::lwlock::PgLwLock;
 use pgrx::PGRXSharedMemory;
 
 use pgrx::bgworkers::BackgroundWorker;
+use pgrx::bgworkers::*;
 
 pub static WORKER_STATUS: PgLwLock<WorkerStatus> = PgLwLock::new();
 pub static RESTART_COUNT: PgLwLock<i32> = PgLwLock::new();
@@ -21,6 +22,13 @@ pub enum WorkerStatus {
 }
 
 unsafe impl PGRXSharedMemory for WorkerStatus {}
+
+pub fn spawn() -> BackgroundWorkerBuilder {
+    BackgroundWorkerBuilder::new("pg_chainsync: sync worker")
+        .set_function("background_worker_sync")
+        .set_library("pg_chainsync")
+        .enable_spi_access()
+}
 
 use crate::channel::Channel;
 use std::sync::Arc;

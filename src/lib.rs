@@ -1,4 +1,3 @@
-use pgrx::bgworkers::*;
 use pgrx::prelude::*;
 use pgrx::{pg_shmem_init, PgSharedMemoryInitialization};
 
@@ -15,11 +14,9 @@ pgrx::pg_module_magic!();
 #[pg_schema]
 mod chainsync {
     use crate::types::{Job, JobKind};
-    use crate::worker::{
-        WorkerStatus, RESTART_COUNT, STOP_COUNT, TASKS, WORKER_STATUS,
-    };
+    use crate::worker;
+    use crate::worker::*;
 
-    use pgrx::bgworkers::*;
     use pgrx::prelude::*;
 
     use std::time::{Duration, Instant};
@@ -29,12 +26,7 @@ mod chainsync {
         *RESTART_COUNT.exclusive() = 0;
 
         if *WORKER_STATUS.exclusive() == WorkerStatus::STOPPED {
-            BackgroundWorkerBuilder::new("pg_chainsync: sync worker")
-                .set_function("background_worker_sync")
-                .set_library("pg_chainsync")
-                .enable_spi_access()
-                .load_dynamic();
-
+            worker::spawn().load_dynamic();
             return;
         }
 
@@ -43,13 +35,8 @@ mod chainsync {
         let start = Instant::now();
         loop {
             if *WORKER_STATUS.share() == WorkerStatus::STOPPED {
-                BackgroundWorkerBuilder::new("pg_chainsync: sync worker")
-                    .set_function("background_worker_sync")
-                    .set_library("pg_chainsync")
-                    .enable_spi_access()
-                    .load_dynamic();
-
-                break;
+                worker::spawn().load_dynamic();
+                return;
             }
 
             if start.elapsed() > Duration::from_secs(30) {
@@ -165,9 +152,5 @@ pub extern "C" fn _PG_init() {
     pg_shmem_init!(RESTART_COUNT);
     pg_shmem_init!(TASKS);
 
-    BackgroundWorkerBuilder::new("pg_chainsync: sync worker")
-        .set_function("background_worker_sync")
-        .set_library("pg_chainsync")
-        .enable_spi_access()
-        .load();
+    worker::spawn().load();
 }
