@@ -41,6 +41,11 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
         .build()
         .expect("sync: Failed to create async runtime");
 
+    if *worker::TASKS_PRELOADED.exclusive() == false {
+        tasks::preload();
+        *worker::TASKS_PRELOADED.exclusive() = true;
+    }
+
     log!("sync: worker has started!");
 
     let mut jobs = BackgroundWorker::transaction(|| {

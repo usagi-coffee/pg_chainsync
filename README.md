@@ -117,6 +117,8 @@ SELECT chainsync.add_events_job(
 
 Task is a type of job that is designed to run only once when called and will not restart alongside with the database, you can use the same api like for registering jobs to register tasks.
 
+You can also be mark tasks as "preload", that means they will get restarted when the extension gets preloaded e.g when database re/starts.
+
 Use `chainsync.add_events_task` and `chainsync.add_blocks_task` with the same arguments as in registering jobs and it should run once on-demand.
 
 > Hint: Most providers limit the number of events/range of blocks returned from getLogs method so it will just fail, in this case you can use blocktick option that splits fetching into multiple calls, blocktick means range of blocks per call. This does not apply to watching events because they start from latest block.
@@ -130,10 +132,12 @@ SELECT chainsync.add_events_task(
         "address": "0x....",
         "event": "Transfer(address,address,uint256)",
         "from_block": 12345,
-        "blocktick": 10000
+        "blocktick": 10000,
+        "preload": false
     }'
 );
 ```
+
 
 ## Installation
 

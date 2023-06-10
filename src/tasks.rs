@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use pgrx::bgworkers::BackgroundWorker;
 use pgrx::{log, warning};
 
 use ethers::providers::Middleware;
@@ -12,6 +13,31 @@ use crate::sync::events;
 use crate::types::{Job, JobKind, Message};
 
 use crate::worker::TASKS;
+
+pub fn preload() {
+    let tasks = BackgroundWorker::transaction(|| Job::query_all());
+
+    if tasks.is_err() {
+        warning!("sync: failed to preload tasks");
+        return;
+    }
+
+    let tasks = tasks.unwrap();
+
+    for task in tasks {
+        if !task.oneshot {
+            continue;
+        }
+
+        if let Some(options) = task.options {
+            if options.preload.unwrap_or(false) {
+                if TASKS.exclusive().push(task.id).is_err() {
+                    warning!("sync: failed to preload {}", task.id);
+                }
+            }
+        }
+    }
+}
 
 pub async fn handle_tasks(channel: Arc<Channel>) {
     loop {
