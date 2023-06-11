@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use std::sync::Arc;
 
 use pgrx::bgworkers::BackgroundWorker;
@@ -8,17 +9,21 @@ use ethers::providers::Middleware;
 use tokio::sync::oneshot;
 use tokio::time::{sleep_until, Duration, Instant};
 
+use cron::Schedule;
+use tokio_cron::{Job as CronJob, Scheduler};
+
 use crate::channel::Channel;
 use crate::sync::events;
 use crate::types::{Job, JobKind, Message};
 
 use crate::worker::TASKS;
 
-pub fn preload() {
+pub async fn setup() {
+    let mut scheduler = Scheduler::utc();
     let tasks = BackgroundWorker::transaction(|| Job::query_all());
 
     if tasks.is_err() {
-        warning!("sync: failed to preload tasks");
+        warning!("sync: tasks: failed to setup tasks");
         return;
     }
 
@@ -30,10 +35,40 @@ pub fn preload() {
         }
 
         if let Some(options) = task.options {
+            // Preload
             if options.preload.unwrap_or(false) {
                 if TASKS.exclusive().push(task.id).is_err() {
-                    warning!("sync: failed to preload {}", task.id);
+                    warning!("sync: tasks: failed to enqueue {}", task.id);
                 }
+            }
+
+            // CRON
+            if let Some(cron) = options.cron {
+                if Schedule::from_str(&cron).is_err() {
+                    warning!(
+                        "sync: tasks: task {} has incorrect cron expression {}",
+                        task.id,
+                        cron
+                    );
+
+                    continue;
+                }
+
+                scheduler.add(CronJob::new_sync(cron, move || {
+                    for id in &*TASKS.share() {
+                        if id == &task.id {
+                            warning!(
+                                "sync: tasks: task {} already in queue",
+                                task.id
+                            );
+                            return;
+                        }
+                    }
+
+                    if TASKS.exclusive().push(task.id).is_err() {
+                        warning!("sync: tasks: failed to enqueue {}", task.id);
+                    }
+                }));
             }
         }
     }

@@ -62,6 +62,7 @@ impl Job {
 pub struct JobOptions {
     /// Generic
     pub preload: Option<bool>,
+    pub cron: Option<String>,
     pub blocktick: Option<i64>,
     pub from_block: Option<i64>,
     pub to_block: Option<i64>,

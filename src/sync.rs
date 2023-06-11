@@ -41,11 +41,6 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
         .build()
         .expect("sync: Failed to create async runtime");
 
-    if *worker::TASKS_PRELOADED.exclusive() == false {
-        tasks::preload();
-        *worker::TASKS_PRELOADED.exclusive() = true;
-    }
-
     log!("sync: worker has started!");
 
     let mut jobs = BackgroundWorker::transaction(|| {
@@ -71,6 +66,11 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
     let mut stream = MessageStream::new(receive_message);
 
     runtime.block_on(async {
+        if *worker::TASKS_SETUP.exclusive() == false {
+            tasks::setup().await;
+            *worker::TASKS_SETUP.exclusive() = true;
+        }
+
         tokio::select! {
             _ = worker::handle_signals(Arc::clone(&channel)) => {
                 log!("sync: received exit signal... exiting");
