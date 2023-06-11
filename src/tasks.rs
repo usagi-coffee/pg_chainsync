@@ -16,12 +16,14 @@ use crate::channel::Channel;
 use crate::sync::events;
 use crate::types::{Job, JobKind, Message};
 
-use crate::worker::TASKS;
+use crate::worker::{TASKS, TASKS_PRELOADED};
 
 pub async fn setup() {
-    let mut scheduler = Scheduler::utc();
-    let tasks = BackgroundWorker::transaction(|| Job::query_all());
+    let preloaded = *TASKS_PRELOADED.share();
 
+    let mut scheduler = Scheduler::utc();
+
+    let tasks = BackgroundWorker::transaction(|| Job::query_all());
     if tasks.is_err() {
         warning!("sync: tasks: failed to setup tasks");
         return;
@@ -36,13 +38,15 @@ pub async fn setup() {
 
         if let Some(options) = task.options {
             // Preload
-            if options.preload.unwrap_or(false) {
-                if TASKS.exclusive().push(task.id).is_err() {
-                    warning!("sync: tasks: failed to enqueue {}", task.id);
+            if !preloaded {
+                if options.preload.unwrap_or(false) {
+                    if TASKS.exclusive().push(task.id).is_err() {
+                        warning!("sync: tasks: failed to enqueue {}", task.id);
+                    }
                 }
             }
 
-            // CRON
+            // Cron
             if let Some(cron) = options.cron {
                 if Schedule::from_str(&cron).is_err() {
                     warning!(
@@ -72,6 +76,8 @@ pub async fn setup() {
             }
         }
     }
+
+    *TASKS_PRELOADED.exclusive() = true;
 }
 
 pub async fn handle_tasks(channel: Arc<Channel>) {

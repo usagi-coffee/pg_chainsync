@@ -66,10 +66,7 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
     let mut stream = MessageStream::new(receive_message);
 
     runtime.block_on(async {
-        if *worker::TASKS_SETUP.exclusive() == false {
-            tasks::setup().await;
-            *worker::TASKS_SETUP.exclusive() = true;
-        }
+        tasks::setup().await;
 
         tokio::select! {
             _ = worker::handle_signals(Arc::clone(&channel)) => {
