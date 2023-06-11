@@ -27,7 +27,7 @@ SELECT chainsync.stop();
 
 ```sql
 -- This is your custom handler that inserts new blocks to your table
-CREATE FUNCTION custom_block_handler(block chainsync.Block) RETURNS blocks
+CREATE FUNCTION custom_block_handler(block chainsync.Block, job_id bigint) RETURNS blocks
 AS $$
 INSERT INTO blocks (number, hash) -- Inserting into your custom table
 VALUES (block.number, block.hash)
@@ -55,7 +55,7 @@ The usage examples were run on PotsgreSQL 15.
 ```sql
 
 -- This is your custom handler that inserts events to your table
-CREATE FUNCTION custom_event_handler(log chainsync.Log) RETURNS events
+CREATE FUNCTION custom_event_handler(log chainsync.Log, job_id bigint) RETURNS events
 AS $$
 INSERT INTO events (address, data) -- Inserting into your custom table
 VALUES (log.address, log.data)

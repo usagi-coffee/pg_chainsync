@@ -131,6 +131,7 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                                     *chain,
                                     block,
                                     job.callback.clone(),
+                                    Some(job.id),
                                 ));
                             }
                         }

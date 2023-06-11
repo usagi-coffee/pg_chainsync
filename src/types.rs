@@ -18,8 +18,8 @@ pub enum Message {
     Jobs(oneshot::Sender<Vec<Job>>),
 
     // Job messages
-    Block(Chain, Block, Callback),
-    Event(Chain, Log, Callback),
+    Block(Chain, Block, Callback, Option<i64>),
+    Event(Chain, Log, Callback, Option<i64>),
 
     // Utility messages
     CheckBlock(Chain, u64, Callback, oneshot::Sender<bool>),

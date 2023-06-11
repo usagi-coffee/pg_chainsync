@@ -60,14 +60,19 @@ pub async fn handle_block(
     let number = block.number.unwrap_or(U64::from(0));
     log!("sync: blocks: {}: found {}", chain, number);
 
-    channel.send(Message::Block(*chain, block, job.callback.clone()));
+    channel.send(Message::Block(
+        *chain,
+        block,
+        job.callback.clone(),
+        Some(job.id),
+    ));
 }
 
 use crate::query::PgHandler;
 use pgrx::bgworkers::BackgroundWorker;
 
 pub fn handle_message(message: &Message) {
-    let Message::Block(chain, block, callback) = message else { return; };
+    let Message::Block(chain, block, callback, job_id) = message else { return; };
 
     let number = block.number.unwrap_or_default();
     log!("sync: blocks: {}: adding {}", chain, number);
@@ -75,7 +80,7 @@ pub fn handle_message(message: &Message) {
     BackgroundWorker::transaction(|| {
         PgTryBuilder::new(|| {
             block
-                .call_handler(&chain, callback)
+                .call_handler(&chain, callback, &job_id.unwrap_or(-1))
                 .expect("sync: blocks: failed to call the handler {}")
         })
         .catch_rust_panic(|e| {

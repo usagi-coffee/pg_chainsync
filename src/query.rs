@@ -15,6 +15,7 @@ pub trait PgHandler {
         &self,
         chain: &Chain,
         callback: &String,
+        job_id: &i64,
     ) -> Result<(), pgrx::spi::Error>;
 }
 
@@ -135,6 +136,7 @@ impl PgHandler for Block {
         &self,
         chain: &Chain,
         callback: &String,
+        job_id: &i64,
     ) -> Result<(), pgrx::spi::Error> {
         let mut data =
             PgHeapTuple::new_composite_type(BLOCK_COMPOSITE_TYPE).unwrap();
@@ -166,11 +168,14 @@ impl PgHandler for Block {
         data.set_by_name("size", self.size.unwrap().as_u64() as i64)?;
 
         Spi::run_with_args(
-            format!("SELECT {}($1)", callback).as_str(),
-            Some(vec![(
-                PgOid::Custom(data.composite_type_oid().unwrap()),
-                data.into_datum(),
-            )]),
+            format!("SELECT {}($1, $2)", callback).as_str(),
+            Some(vec![
+                (
+                    PgOid::Custom(data.composite_type_oid().unwrap()),
+                    data.into_datum(),
+                ),
+                (PgOid::BuiltIn(PgBuiltInOids::INT8OID), job_id.into_datum()),
+            ]),
         )
     }
 }
@@ -180,6 +185,7 @@ impl PgHandler for Log {
         &self,
         chain: &Chain,
         callback: &String,
+        job_id: &i64,
     ) -> Result<(), pgrx::spi::Error> {
         let mut data =
             PgHeapTuple::new_composite_type(LOG_COMPOSITE_TYPE).unwrap();
@@ -218,11 +224,14 @@ impl PgHandler for Log {
         )?;
 
         Spi::run_with_args(
-            format!("SELECT {}($1)", callback).as_str(),
-            Some(vec![(
-                PgOid::Custom(data.composite_type_oid().unwrap()),
-                data.into_datum(),
-            )]),
+            format!("SELECT {}($1, $2)", callback).as_str(),
+            Some(vec![
+                (
+                    PgOid::Custom(data.composite_type_oid().unwrap()),
+                    data.into_datum(),
+                ),
+                (PgOid::BuiltIn(PgBuiltInOids::INT8OID), job_id.into_datum()),
+            ]),
         )
     }
 }

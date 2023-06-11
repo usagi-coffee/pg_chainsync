@@ -98,13 +98,19 @@ pub async fn handle_log(job: &Job, log: ethers::types::Log, channel: &Channel) {
                             .unwrap()
                             .unwrap(),
                         block_handler.as_ref().unwrap().clone(),
+                        Some(job.id),
                     ));
                 }
             }
         }
     }
 
-    if !channel.send(Message::Event(*chain, log, job.callback.clone())) {
+    if !channel.send(Message::Event(
+        *chain,
+        log,
+        job.callback.clone(),
+        Some(job.id),
+    )) {
         warning!(
             "sync: events: {}: failed to send {}<{}>",
             job.chain,
@@ -118,7 +124,7 @@ use crate::query::PgHandler;
 use pgrx::bgworkers::BackgroundWorker;
 
 pub fn handle_message(message: &Message) {
-    let Message::Event(chain, log, callback) = message else { return; };
+    let Message::Event(chain, log, callback, job) = message else { return; };
 
     let transaction = log.transaction_hash.unwrap();
     let index = log.log_index.unwrap();
@@ -127,7 +133,7 @@ pub fn handle_message(message: &Message) {
 
     BackgroundWorker::transaction(|| {
         PgTryBuilder::new(|| {
-            log.call_handler(&chain, &callback)
+            log.call_handler(&chain, &callback, &job.unwrap_or(-1))
                 .expect("sync: events: failed to call the handler")
         })
         .catch_rust_panic(|e| {
