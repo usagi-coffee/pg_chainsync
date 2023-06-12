@@ -173,18 +173,23 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
 
                             filter = filter.from_block(from).to_block(to);
 
-                            if let Ok(mut logs) = ws.get_logs(&filter).await {
-                                for log in logs.drain(0..) {
-                                    events::handle_log(&job, log, &channel)
-                                        .await;
+                            match ws.get_logs(&filter).await {
+                                Ok(mut logs) => {
+                                    for log in logs.drain(0..) {
+                                        events::handle_log(&job, log, &channel)
+                                            .await;
+                                    }
                                 }
-                            } else {
-                                log!(
-                                    "sync: tasks: {}: failed to fetch split {}, aborting...",
-                                    task,
-                                    i
-                                );
-                                break;
+                                Err(e) => {
+                                    log!("{}", e);
+                                    warning!(
+                                        "sync: tasks: {}: failed to fetch split {}, aborting...",
+                                        task,
+                                        i
+                                    );
+
+                                    break;
+                                }
                             }
                         }
                     } else {
@@ -195,10 +200,13 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                                         .await;
                                 }
                             }
-                            Err(_) => log!(
-                                "sync: tasks: failed to get logs for {}, aborting...",
-                                task
-                            ),
+                            Err(e) => {
+                                log!("{}", e);
+                                warning!(
+                                    "sync: tasks: failed to get logs for {}, aborting...",
+                                    task
+                                );
+                            }
                         }
                     }
                 }
