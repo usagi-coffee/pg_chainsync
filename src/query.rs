@@ -143,7 +143,10 @@ impl PgHandler for Block {
 
         data.set_by_name("chain", *chain as i64)?;
         data.set_by_name("hash", self.hash.unwrap_or_default().encode_hex())?;
-        data.set_by_name("number", self.number.unwrap().as_u64() as i64)?;
+        data.set_by_name(
+            "number",
+            pgrx::AnyNumeric::try_from(self.number.unwrap().as_u64()),
+        )?;
         data.set_by_name(
             "author",
             self.author.unwrap_or_default().encode_hex(),
@@ -157,15 +160,36 @@ impl PgHandler for Block {
         )?;
 
         data.set_by_name("receipts_root", self.receipts_root.encode_hex())?;
-        data.set_by_name("gas_used", self.gas_used.as_u64() as i64)?;
-        data.set_by_name("gas_limit", self.gas_limit.as_u64() as i64)?;
-        data.set_by_name("timestamp", self.timestamp.as_u64() as i64)?;
-        data.set_by_name("difficulty", self.difficulty.as_u64() as i64)?;
         data.set_by_name(
-            "total_difficulty",
-            self.total_difficulty.unwrap_or_default().as_u64() as i64,
+            "gas_used",
+            pgrx::AnyNumeric::try_from(self.gas_used.as_u128()),
         )?;
-        data.set_by_name("size", self.size.unwrap().as_u64() as i64)?;
+        data.set_by_name(
+            "gas_limit",
+            pgrx::AnyNumeric::try_from(self.gas_limit.as_u128()),
+        )?;
+        data.set_by_name(
+            "timestamp",
+            pgrx::AnyNumeric::try_from(self.timestamp.as_u128()),
+        )?;
+        data.set_by_name(
+            "difficulty",
+            pgrx::AnyNumeric::try_from(self.difficulty.as_u128()),
+        )?;
+
+        if let Some(total_difficulty) = self.total_difficulty {
+            data.set_by_name(
+                "total_difficulty",
+                pgrx::AnyNumeric::try_from(total_difficulty.as_u128()),
+            )?;
+        }
+
+        if let Some(size) = self.size {
+            data.set_by_name(
+                "size",
+                pgrx::AnyNumeric::try_from(size.as_u128()),
+            )?;
+        }
 
         Spi::run_with_args(
             format!("SELECT {}($1, $2)", callback).as_str(),
@@ -208,7 +232,7 @@ impl PgHandler for Log {
         data.set_by_name("block_hash", self.block_hash.unwrap().encode_hex())?;
         data.set_by_name(
             "block_number",
-            self.block_number.unwrap().as_u64() as i64,
+            pgrx::AnyNumeric::try_from(self.block_number.unwrap().as_u64()),
         )?;
         data.set_by_name("address", format!("{:#x}", self.address))?;
         data.set_by_name(
