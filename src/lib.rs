@@ -52,6 +52,15 @@ mod chainsync {
     }
 
     #[pg_extern]
+    fn run_task(task: i64) -> i64 {
+        if let Err(_) = TASKS.exclusive().push(task) {
+            panic!("failed to enqueue the task")
+        }
+
+        task
+    }
+
+    #[pg_extern]
     fn add_blocks_job(
         chain_id: i64,
         provider_url: &str,
