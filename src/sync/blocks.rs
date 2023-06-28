@@ -26,6 +26,7 @@ pub async fn listen(jobs: Arc<Vec<Job>>, channel: Arc<Channel>) {
 
         let stream = job.ws.as_ref().unwrap().subscribe_blocks().await.unwrap();
 
+        log!("sync: blocks: {} started listening", job.id);
         map.insert(i, StreamNotifyClose::new(stream));
     }
 
