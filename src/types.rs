@@ -47,7 +47,9 @@ pub struct Job {
 
 impl Job {
     pub async fn connect(&mut self) -> bool {
-        let provider = Provider::<Ws>::connect(&self.provider_url).await;
+        let provider =
+            Provider::<Ws>::connect_with_reconnects(&self.provider_url, 5)
+                .await;
 
         if provider.is_ok() {
             self.ws = Some(provider.unwrap());

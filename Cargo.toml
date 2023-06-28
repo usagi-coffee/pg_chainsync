@@ -12,11 +12,11 @@ pg15 = ["pgrx/pg15", "pgrx-tests/pg15"]
 pg_test = []
 
 [dependencies]
-pgrx = "=0.9.0"
+pgrx = "=0.9.6"
 eyre = { version = "0.6" }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
-ethers = { version = "1.0.0", features = ["ws", "rustls"] }
+ethers = { version = "2.0", features = ["ws", "rustls"]}
 serde_json = { version = "1.0" }
 heapless = "0.7.16"
 serde = "1.0.162"
@@ -24,7 +24,7 @@ tokio-cron = "0.1.2"
 cron = "0.12.0"
 
 [dev-dependencies]
-pgrx-tests = "=0.9.0"
+pgrx-tests = "=0.9.6"
 
 [profile.dev]
 panic = "unwind"

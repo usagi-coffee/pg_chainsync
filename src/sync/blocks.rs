@@ -3,9 +3,13 @@ use pgrx::prelude::*;
 
 use std::sync::Arc;
 
-use tokio_stream::{pending, StreamMap, StreamNotifyClose};
+use ethers::providers::Middleware;
 
-use ethers::prelude::*;
+use tokio_stream::{pending, StreamExt, StreamMap, StreamNotifyClose};
+
+use ethers::types::{Chain, H256, U64};
+
+use crate::types::Job;
 
 use crate::channel::Channel;
 use crate::types::*;

@@ -3,10 +3,11 @@ use pgrx::prelude::*;
 
 use std::sync::Arc;
 
-use tokio::sync::oneshot;
-use tokio_stream::{pending, StreamMap, StreamNotifyClose};
+use ethers::providers::Middleware;
+use ethers::types::{Address, BlockNumber, Filter, H256};
 
-use ethers::prelude::*;
+use tokio::sync::oneshot;
+use tokio_stream::{pending, StreamExt, StreamMap, StreamNotifyClose};
 
 use crate::channel::Channel;
 use crate::types::*;

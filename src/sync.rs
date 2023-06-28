@@ -5,9 +5,8 @@ use pgrx::prelude::*;
 use pgrx::bgworkers::*;
 use pgrx::log;
 
-use ethers::prelude::*;
-
 use tokio::sync::mpsc;
+use tokio_stream::StreamExt;
 
 use crate::channel::*;
 use crate::tasks;
