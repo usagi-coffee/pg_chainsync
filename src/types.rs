@@ -45,11 +45,14 @@ pub struct Job {
     pub ws: Option<Provider<Ws>>,
 }
 
+const RECONNECT_COUNT: usize = usize::MAX;
 impl Job {
     pub async fn connect(&mut self) -> bool {
-        let provider =
-            Provider::<Ws>::connect_with_reconnects(&self.provider_url, 5)
-                .await;
+        let provider = Provider::<Ws>::connect_with_reconnects(
+            &self.provider_url,
+            RECONNECT_COUNT,
+        )
+        .await;
 
         if provider.is_ok() {
             self.ws = Some(provider.unwrap());
