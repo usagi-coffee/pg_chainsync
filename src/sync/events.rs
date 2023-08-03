@@ -1,3 +1,4 @@
+use ethers::providers::SubscriptionStream;
 use pgrx::log;
 use pgrx::prelude::*;
 
@@ -22,14 +23,8 @@ pub async fn listen(jobs: Arc<Vec<Job>>, channel: Arc<Channel>) {
             continue;
         }
 
-        let options = job.options.as_ref().unwrap();
-        let filter = build_filter(&options);
-
-        let provider = job.ws.as_ref().unwrap();
-        let stream = provider.subscribe_logs(&filter).await.unwrap();
-
         log!("sync: events: {} started listening", job.id);
-        map.insert(i, StreamNotifyClose::new(stream));
+        map.insert(i, StreamNotifyClose::new(build_stream(&job).await));
     }
 
     if map.is_empty() {
@@ -45,7 +40,8 @@ pub async fn listen(jobs: Arc<Vec<Job>>, channel: Arc<Channel>) {
         let job = &jobs[i];
 
         if log.is_none() {
-            println!("sync: events: stream {} has ended", job.id);
+            warning!("sync: events: stream {} has ended, restarting", job.id);
+            map.insert(i, StreamNotifyClose::new(build_stream(&job).await));
             continue;
         }
 
@@ -194,4 +190,14 @@ pub fn build_filter(options: &JobOptions) -> Filter {
     }
 
     filter
+}
+
+pub async fn build_stream(
+    job: &Job,
+) -> SubscriptionStream<'_, ethers::providers::Ws, Log> {
+    let options = job.options.as_ref().unwrap();
+    let filter = build_filter(&options);
+
+    let provider = job.ws.as_ref().unwrap();
+    provider.subscribe_logs(&filter).await.unwrap()
 }

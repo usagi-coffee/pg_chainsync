@@ -1,3 +1,4 @@
+use ethers::providers::SubscriptionStream;
 use pgrx::log;
 use pgrx::prelude::*;
 
@@ -24,10 +25,8 @@ pub async fn listen(jobs: Arc<Vec<Job>>, channel: Arc<Channel>) {
             continue;
         }
 
-        let stream = job.ws.as_ref().unwrap().subscribe_blocks().await.unwrap();
-
         log!("sync: blocks: {} started listening", job.id);
-        map.insert(i, StreamNotifyClose::new(stream));
+        map.insert(i, StreamNotifyClose::new(build_stream(&job).await));
     }
 
     if map.is_empty() {
@@ -43,7 +42,8 @@ pub async fn listen(jobs: Arc<Vec<Job>>, channel: Arc<Channel>) {
         let job = &jobs[i];
 
         if block.is_none() {
-            println!("sync: blocks: stream {} has ended", job.id);
+            warning!("sync: blocks: stream {} has ended", job.id);
+            map.insert(i, StreamNotifyClose::new(build_stream(&job).await));
             continue;
         }
 
@@ -132,4 +132,11 @@ pub fn check_one(chain: &Chain, number: &u64, callback: &String) -> bool {
         })
         .execute()
     })
+}
+
+pub async fn build_stream(
+    job: &Job,
+) -> SubscriptionStream<'_, ethers::providers::Ws, ethers::types::Block<H256>> {
+    let provider = job.ws.as_ref().unwrap();
+    provider.subscribe_blocks().await.unwrap()
 }
