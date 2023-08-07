@@ -194,7 +194,7 @@ pub fn build_filter(options: &JobOptions) -> Filter {
 
 pub async fn build_stream(
     job: &Job,
-) -> SubscriptionStream<'_, ethers::providers::Ws, Log> {
+) -> SubscriptionStream<'_, ethers::providers::Ws, ethers::types::Log> {
     let options = job.options.as_ref().unwrap();
     let filter = build_filter(&options);
 
