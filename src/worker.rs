@@ -11,6 +11,7 @@ pub static TASKS: PgLwLock<heapless::Vec<i64, 32>> = PgLwLock::new();
 
 // Should be more than restart count
 pub static STOP_COUNT: i32 = 999;
+pub static RESTART_TIME: u64 = 3000;
 
 #[derive(Debug, Copy, Clone, Default, PartialEq)]
 pub enum WorkerStatus {
@@ -29,6 +30,7 @@ pub fn spawn() -> BackgroundWorkerBuilder {
         .set_function("background_worker_sync")
         .set_library("pg_chainsync")
         .enable_spi_access()
+        .set_restart_time(Some(Duration::from_millis(RESTART_TIME)))
 }
 
 use crate::channel::Channel;
