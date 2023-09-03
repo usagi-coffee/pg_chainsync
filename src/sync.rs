@@ -42,7 +42,7 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
 
     log!("sync: worker has started!");
 
-    let mut jobs = BackgroundWorker::transaction(|| {
+    let jobs = BackgroundWorker::transaction(|| {
         PgTryBuilder::new(Job::query_all)
             .catch_others(|_| Err(pgrx::spi::Error::NoTupleTable))
             .execute()
@@ -50,11 +50,6 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
     .unwrap_or(Vec::new());
 
     log!("sync: {} jobs found", jobs.len());
-    for job in jobs.iter_mut() {
-        runtime.block_on(async { job.connect().await });
-    }
-
-    let jobs = Arc::new(jobs);
 
     *WORKER_STATUS.exclusive() = WorkerStatus::RUNNING;
 
@@ -71,10 +66,10 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
             _ = worker::handle_signals(Arc::clone(&channel)) => {
                 log!("sync: received exit signal... exiting");
             },
-            _ = blocks::listen(Arc::clone(&jobs), Arc::clone(&channel)) => {
+            _ = blocks::listen(Arc::clone(&channel)) => {
                 log!("sync: stopped listening to blocks... exiting");
             },
-            _ = events::listen(Arc::clone(&jobs), Arc::clone(&channel)) => {
+            _ = events::listen(Arc::clone(&channel)) => {
                 log!("sync: stopped listening to events... exiting");
             },
             _ = handle_message(&mut stream) => {

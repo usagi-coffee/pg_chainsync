@@ -3,6 +3,7 @@ use pgrx::log;
 use pgrx::prelude::*;
 
 use std::sync::Arc;
+use tokio::sync::oneshot;
 
 use ethers::providers::Middleware;
 
@@ -15,44 +16,59 @@ use crate::types::Job;
 use crate::channel::Channel;
 use crate::types::*;
 
-pub async fn listen(jobs: Arc<Vec<Job>>, channel: Arc<Channel>) {
-    let mut map = StreamMap::new();
-
-    for i in 0..jobs.len() {
-        let job = &jobs[i];
-
-        if job.kind != JobKind::Blocks || job.oneshot {
-            continue;
+pub async fn listen(channel: Arc<Channel>) {
+    loop {
+        let (tx, rx) = oneshot::channel::<Vec<Job>>();
+        if !channel.send(Message::Jobs(tx)) {
+            break;
         }
 
-        log!("sync: blocks: {} started listening", job.id);
-        map.insert(i, StreamNotifyClose::new(build_stream(&job).await));
-    }
+        if let Ok(mut jobs) = rx.await {
+            let mut map = StreamMap::new();
 
-    if map.is_empty() {
-        log!("sync: blocks: no jobs for blocks");
-        pending::<()>().next().await;
-        unreachable!();
-    }
+            for job in jobs.iter_mut() {
+                if job.kind != JobKind::Blocks || job.oneshot {
+                    continue;
+                }
 
-    log!("sync: blocks: started listening");
+                job.connect().await;
+            }
 
-    while let Some(tick) = map.next().await {
-        let (i, block) = tick;
-        let job = &jobs[i];
+            for i in 0..jobs.len() {
+                let job = &jobs[i];
 
-        if block.is_none() {
-            warning!("sync: blocks: stream {} has ended", job.id);
-            map.insert(i, StreamNotifyClose::new(build_stream(&job).await));
-            continue;
+                if job.kind != JobKind::Blocks || job.oneshot {
+                    continue;
+                }
+
+                log!("sync: blocks: {} started listening", job.id);
+                map.insert(i, StreamNotifyClose::new(build_stream(&job).await));
+            }
+
+            if map.is_empty() {
+                log!("sync: blocks: no jobs for blocks");
+                pending::<()>().next().await;
+                unreachable!();
+            }
+
+            log!("sync: blocks: started listening");
+
+            while let Some(tick) = map.next().await {
+                let (i, block) = tick;
+                let job = &jobs[i];
+
+                if block.is_none() {
+                    warning!(
+                        "sync: blocks: stream {} has ended, restarting providers",
+                        job.id
+                    );
+                    break;
+                }
+
+                handle_block(job, block.unwrap(), &channel).await;
+            }
         }
-
-        handle_block(job, block.unwrap(), &channel).await;
     }
-
-    // Wait until queue gets processed before exiting
-    log!("sync: blocks: waiting for consumer to finish");
-    channel.wait_for_messages().await;
 }
 
 pub async fn handle_block(

@@ -13,44 +13,61 @@ use tokio_stream::{pending, StreamExt, StreamMap, StreamNotifyClose};
 use crate::channel::Channel;
 use crate::types::*;
 
-pub async fn listen(jobs: Arc<Vec<Job>>, channel: Arc<Channel>) {
-    let mut map = StreamMap::new();
-
-    for i in 0..jobs.len() {
-        let job = &jobs[i];
-
-        if job.kind != JobKind::Events || job.oneshot {
-            continue;
+pub async fn listen(channel: Arc<Channel>) {
+    loop {
+        let (tx, rx) = oneshot::channel::<Vec<Job>>();
+        if !channel.send(Message::Jobs(tx)) {
+            break;
         }
 
-        log!("sync: events: {} started listening", job.id);
-        map.insert(i, StreamNotifyClose::new(build_stream(&job).await));
-    }
+        if let Ok(mut jobs) = rx.await {
+            let mut map = StreamMap::new();
 
-    if map.is_empty() {
-        log!("sync: events: no jobs for events");
-        pending::<()>().next().await;
-        unreachable!();
-    }
+            for job in jobs.iter_mut() {
+                if job.kind != JobKind::Events || job.oneshot {
+                    continue;
+                }
 
-    log!("sync: events: started listening");
+                job.connect().await;
+            }
 
-    while let Some(tick) = map.next().await {
-        let (i, log) = tick;
-        let job = &jobs[i];
+            for i in 0..jobs.len() {
+                let job = &jobs[i];
 
-        if log.is_none() {
-            warning!("sync: events: stream {} has ended, restarting", job.id);
-            map.insert(i, StreamNotifyClose::new(build_stream(&job).await));
-            continue;
+                if job.kind != JobKind::Events || job.oneshot {
+                    continue;
+                }
+
+                log!("sync: events: {} started listening", job.id);
+                map.insert(i, StreamNotifyClose::new(build_stream(&job).await));
+            }
+
+            if map.is_empty() {
+                log!("sync: events: no jobs for events");
+                pending::<()>().next().await;
+                unreachable!();
+            }
+
+            log!("sync: events: started listening");
+
+            while let Some(tick) = map.next().await {
+                let (i, log) = tick;
+                let job = &jobs[i];
+
+                if log.is_none() {
+                    warning!(
+                        "sync: events: stream {} has ended, restarting providers",
+                        job.id
+                    );
+                    break;
+                }
+
+                handle_log(job, log.unwrap(), &channel).await;
+            }
+
+            map.clear();
         }
-
-        handle_log(job, log.unwrap(), &channel).await;
     }
-
-    // Wait until queue gets processed before exiting
-    log!("sync: events: waiting for consumer to finish");
-    channel.wait_for_messages().await;
 }
 
 pub async fn handle_log(job: &Job, log: ethers::types::Log, channel: &Channel) {
