@@ -38,8 +38,8 @@ pub async fn listen(channel: Arc<Channel>) {
                     continue;
                 }
 
-                log!("sync: events: {} started listening", job.id);
                 map.insert(i, StreamNotifyClose::new(build_stream(&job).await));
+                log!("sync: events: {} started listening", job.id);
             }
 
             if map.is_empty() {
@@ -54,15 +54,16 @@ pub async fn listen(channel: Arc<Channel>) {
                 let (i, log) = tick;
                 let job = &jobs[i];
 
-                if log.is_none() {
-                    warning!(
-                        "sync: events: stream {} has ended, restarting providers",
-                        job.id
-                    );
-                    break;
+                match log {
+                    Some(log) => handle_log(job, log, &channel).await,
+                    None => {
+                        warning!(
+                            "sync: events: stream {} has ended, restarting providers",
+                            job.id
+                        );
+                        break;
+                    }
                 }
-
-                handle_log(job, log.unwrap(), &channel).await;
             }
 
             map.clear();
@@ -74,7 +75,13 @@ pub async fn handle_log(job: &Job, log: ethers::types::Log, channel: &Channel) {
     let chain = &job.chain;
 
     let block = log.block_number.unwrap();
-    let transaction = log.transaction_hash.unwrap();
+
+    if log.log_index.is_none() {
+        log!("sync: events: found pending {}", block);
+        return;
+    }
+
+    let transaction = log.transaction_hash.unwrap(); 
     let index = log.log_index.unwrap();
 
     log!(
