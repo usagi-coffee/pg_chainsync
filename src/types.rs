@@ -4,6 +4,8 @@ use std::str;
 
 use serde::Deserialize;
 
+use anyhow::Result;
+
 use ethers::prelude::*;
 use ethers::types::{Chain, H256};
 
@@ -47,19 +49,21 @@ pub struct Job {
 
 const RECONNECT_COUNT: usize = usize::MAX;
 impl Job {
-    pub async fn connect(&mut self) -> bool {
-        let provider = Provider::<Ws>::connect_with_reconnects(
+    pub async fn connect(&mut self) -> Result<(), ProviderError> {
+        match Provider::<Ws>::connect_with_reconnects(
             &self.provider_url,
             RECONNECT_COUNT,
         )
-        .await;
-
-        if provider.is_ok() {
-            self.ws = Some(provider.unwrap());
-            return true;
+        .await {
+            Ok(provider) => {
+                self.ws = Some(provider);
+                Ok(())
+            },
+            Err(err) => {
+                self.ws = None;
+                Err(err)
+            }
         }
-
-        false
     }
 }
 

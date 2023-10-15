@@ -1,6 +1,8 @@
 use ethers::providers::SubscriptionStream;
-use pgrx::log;
+use pgrx::{warning, log};
 use pgrx::prelude::*;
+
+use anyhow::{Context, Result};
 
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -17,7 +19,7 @@ use crate::channel::Channel;
 use crate::types::*;
 
 pub async fn listen(channel: Arc<Channel>) {
-    loop {
+    'sync: loop {
         let (tx, rx) = oneshot::channel::<Vec<Job>>();
         if !channel.send(Message::Jobs(tx)) {
             break;
@@ -31,7 +33,13 @@ pub async fn listen(channel: Arc<Channel>) {
                     continue;
                 }
 
-                job.connect().await;
+                match job.connect().await {
+                    Ok(_) => {},
+                    Err(err) => {
+                        warning!("sync: blocks: {}: ws: {}", job.id, err);
+                        continue 'sync;
+                    }
+                }
             }
 
             for i in 0..jobs.len() {
@@ -41,8 +49,20 @@ pub async fn listen(channel: Arc<Channel>) {
                     continue;
                 }
 
-                log!("sync: blocks: {} started listening", job.id);
-                map.insert(i, StreamNotifyClose::new(build_stream(&job).await));
+                if job.ws.is_none() {
+                    continue 'sync;
+                }
+
+                match build_stream(&job).await {
+                    Ok(stream) => {
+                        log!("sync: blocks: {} started listening", job.id);
+                        map.insert(i, StreamNotifyClose::new(stream));
+                    },
+                    Err(err) => {
+                        warning!("sync: blocks: {}: {}", job.id, err);
+                        continue 'sync;
+                    }
+                }
             }
 
             if map.is_empty() {
@@ -152,7 +172,7 @@ pub fn check_one(chain: &Chain, number: &u64, callback: &String) -> bool {
 
 pub async fn build_stream(
     job: &Job,
-) -> SubscriptionStream<'_, ethers::providers::Ws, ethers::types::Block<H256>> {
-    let provider = job.ws.as_ref().unwrap();
-    provider.subscribe_blocks().await.unwrap()
+) -> Result<SubscriptionStream<'_, ethers::providers::Ws, ethers::types::Block<H256>>> {
+    let provider = job.ws.as_ref().context("Invalid provider")?;
+    Ok(provider.subscribe_blocks().await?)
 }

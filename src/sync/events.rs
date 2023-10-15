@@ -1,8 +1,10 @@
 use ethers::providers::SubscriptionStream;
-use pgrx::log;
+use pgrx::{log, warning};
 use pgrx::prelude::*;
 
 use std::sync::Arc;
+
+use anyhow::{Context, Result};
 
 use ethers::providers::Middleware;
 use ethers::types::{Address, BlockNumber, Filter, H256};
@@ -14,7 +16,7 @@ use crate::channel::Channel;
 use crate::types::*;
 
 pub async fn listen(channel: Arc<Channel>) {
-    loop {
+    'sync: loop {
         let (tx, rx) = oneshot::channel::<Vec<Job>>();
         if !channel.send(Message::Jobs(tx)) {
             break;
@@ -28,7 +30,10 @@ pub async fn listen(channel: Arc<Channel>) {
                     continue;
                 }
 
-                job.connect().await;
+                if let Err(err) = job.connect().await {
+                    warning!("sync: events: {}: ws: {}", job.id, err);
+                    continue 'sync;
+                }
             }
 
             for i in 0..jobs.len() {
@@ -38,8 +43,20 @@ pub async fn listen(channel: Arc<Channel>) {
                     continue;
                 }
 
-                map.insert(i, StreamNotifyClose::new(build_stream(&job).await));
-                log!("sync: events: {} started listening", job.id);
+                if job.ws.is_none() {
+                    continue 'sync;
+                }
+
+                match build_stream(&job).await {
+                    Ok(stream) => {
+                        map.insert(i, StreamNotifyClose::new(stream));
+                        log!("sync: events: {}: started listening", job.id);
+                    },
+                    Err(err) => {
+                        warning!("sync: events: {}: {}", job.id, err);
+                        continue 'sync;
+                    }
+                }
             }
 
             if map.is_empty() {
@@ -218,10 +235,10 @@ pub fn build_filter(options: &JobOptions) -> Filter {
 
 pub async fn build_stream(
     job: &Job,
-) -> SubscriptionStream<'_, ethers::providers::Ws, ethers::types::Log> {
-    let options = job.options.as_ref().unwrap();
+) -> Result<SubscriptionStream<'_, ethers::providers::Ws, ethers::types::Log>> {
+    let options = job.options.as_ref().context("Options not found")?;
     let filter = build_filter(&options);
 
-    let provider = job.ws.as_ref().unwrap();
-    provider.subscribe_logs(&filter).await.unwrap()
+    let provider = job.ws.as_ref().context("Invalid provider")?;
+    Ok(provider.subscribe_logs(&filter).await?)
 }

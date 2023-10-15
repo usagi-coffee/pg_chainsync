@@ -22,6 +22,7 @@ heapless = "0.7.16"
 serde = "1.0.162"
 tokio-cron = "0.1.2"
 cron = "0.12.0"
+anyhow = "1.0.75"
 
 [dev-dependencies]
 pgrx-tests = "=0.9.6"
