@@ -1,6 +1,6 @@
 use ethers::providers::SubscriptionStream;
-use pgrx::{warning, log};
 use pgrx::prelude::*;
+use pgrx::{log, warning};
 
 use anyhow::{Context, Result};
 
@@ -34,7 +34,7 @@ pub async fn listen(channel: Arc<Channel>) {
                 }
 
                 match job.connect().await {
-                    Ok(_) => {},
+                    Ok(_) => {}
                     Err(err) => {
                         warning!("sync: blocks: {}: ws: {}", job.id, err);
                         continue 'sync;
@@ -57,7 +57,7 @@ pub async fn listen(channel: Arc<Channel>) {
                     Ok(stream) => {
                         log!("sync: blocks: {} started listening", job.id);
                         map.insert(i, StreamNotifyClose::new(stream));
-                    },
+                    }
                     Err(err) => {
                         warning!("sync: blocks: {}: {}", job.id, err);
                         continue 'sync;
@@ -113,7 +113,9 @@ use crate::query::PgHandler;
 use pgrx::bgworkers::BackgroundWorker;
 
 pub fn handle_message(message: &Message) {
-    let Message::Block(chain, block, callback, job_id) = message else { return; };
+    let Message::Block(chain, block, callback, job_id) = message else {
+        return;
+    };
 
     let number = block.number.unwrap_or_default();
     log!("sync: blocks: {}: adding {}", chain, number);
@@ -172,7 +174,9 @@ pub fn check_one(chain: &Chain, number: &u64, callback: &String) -> bool {
 
 pub async fn build_stream(
     job: &Job,
-) -> Result<SubscriptionStream<'_, ethers::providers::Ws, ethers::types::Block<H256>>> {
+) -> Result<
+    SubscriptionStream<'_, ethers::providers::Ws, ethers::types::Block<H256>>,
+> {
     let provider = job.ws.as_ref().context("Invalid provider")?;
     Ok(provider.subscribe_blocks().await?)
 }

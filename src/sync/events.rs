@@ -1,6 +1,6 @@
 use ethers::providers::SubscriptionStream;
-use pgrx::{log, warning};
 use pgrx::prelude::*;
+use pgrx::{log, warning};
 
 use std::sync::Arc;
 
@@ -10,6 +10,7 @@ use ethers::providers::Middleware;
 use ethers::types::{Address, BlockNumber, Filter, H256};
 
 use tokio::sync::oneshot;
+use tokio::time::{sleep, Duration};
 use tokio_stream::{pending, StreamExt, StreamMap, StreamNotifyClose};
 
 use crate::channel::Channel;
@@ -51,7 +52,7 @@ pub async fn listen(channel: Arc<Channel>) {
                     Ok(stream) => {
                         map.insert(i, StreamNotifyClose::new(stream));
                         log!("sync: events: {}: started listening", job.id);
-                    },
+                    }
                     Err(err) => {
                         warning!("sync: events: {}: {}", job.id, err);
                         continue 'sync;
@@ -98,7 +99,7 @@ pub async fn handle_log(job: &Job, log: ethers::types::Log, channel: &Channel) {
         return;
     }
 
-    let transaction = log.transaction_hash.unwrap(); 
+    let transaction = log.transaction_hash.unwrap();
     let index = log.log_index.unwrap();
 
     log!(
@@ -127,18 +128,27 @@ pub async fn handle_log(job: &Job, log: ethers::types::Log, channel: &Channel) {
             )) {
                 let found = rx.await;
                 if found.is_ok() && found.unwrap() == false {
-                    channel.send(Message::Block(
-                        *chain,
-                        job.ws
-                            .as_ref()
-                            .unwrap()
-                            .get_block(block)
-                            .await
-                            .unwrap()
-                            .unwrap(),
-                        block_handler.as_ref().unwrap().clone(),
-                        Some(job.id),
-                    ));
+                    // Retry finding block until available
+                    let mut retries = 0;
+                    loop {
+                        if retries > 20 {
+                            panic!("sync: events: too many retries to get the block...");
+                        }
+
+                        if let Ok(Some(block)) = job.ws.as_ref().unwrap().get_block(block).await {
+                            channel.send(Message::Block(
+                                *chain,
+                                block,
+                                block_handler.as_ref().unwrap().clone(),
+                                Some(job.id),
+                            ));
+                            break;
+                        }
+
+                        log!("sync: events: could not find block {}, retrying", block);
+                        sleep(Duration::from_millis(1000)).await;
+                        retries = retries + 1;
+                    }
                 }
             }
         }
@@ -163,7 +173,9 @@ use crate::query::PgHandler;
 use pgrx::bgworkers::BackgroundWorker;
 
 pub fn handle_message(message: &Message) {
-    let Message::Event(chain, log, callback, job) = message else { return; };
+    let Message::Event(chain, log, callback, job) = message else {
+        return;
+    };
 
     let transaction = log.transaction_hash.unwrap();
     let index = log.log_index.unwrap();

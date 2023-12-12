@@ -108,7 +108,11 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
             let mut job = job.unwrap();
 
             if let Err(err) = job.connect().await {
-                warning!("sync: tasks: failed to create provider for {}, {}", task, err);
+                warning!(
+                    "sync: tasks: failed to create provider for {}, {}",
+                    task,
+                    err
+                );
                 continue;
             };
 

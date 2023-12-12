@@ -54,11 +54,12 @@ impl Job {
             &self.provider_url,
             RECONNECT_COUNT,
         )
-        .await {
+        .await
+        {
             Ok(provider) => {
                 self.ws = Some(provider);
                 Ok(())
-            },
+            }
             Err(err) => {
                 self.ws = None;
                 Err(err)
