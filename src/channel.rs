@@ -5,7 +5,7 @@ use pgrx::prelude::warning;
 
 use crate::types::Message;
 
-pub const MESSAGES_CAPACITY: usize = 32768;
+pub const MESSAGES_CAPACITY: usize = 10_000_000;
 
 pub type MessageStream = ReceiverStream<Message>;
 
@@ -38,3 +38,4 @@ impl Channel {
         }
     }
 }
+    
