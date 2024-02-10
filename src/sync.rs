@@ -63,21 +63,21 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
         tasks::setup().await;
 
         tokio::select! {
-            _ = worker::handle_signals(Arc::clone(&channel)) => {
-                log!("sync: received exit signal... exiting");
-            },
-            _ = blocks::listen(Arc::clone(&channel)) => {
-                log!("sync: stopped listening to blocks... exiting");
-            },
-            _ = events::listen(Arc::clone(&channel)) => {
-                log!("sync: stopped listening to events... exiting");
-            },
-            _ = handle_message(&mut stream) => {
-                log!("sync: stopped processing messages... exiting");
-            }
-            _ = tasks::handle_tasks(Arc::clone(&channel)) => {
-                log!("sync: tasks: stopped tasks... exiting");
-            },
+             _ = worker::handle_signals(Arc::clone(&channel)) => {
+                 log!("sync: received exit signal... exiting");
+             },
+             _ = blocks::listen(Arc::clone(&channel)) => {
+                 log!("sync: stopped listening to blocks... exiting");
+             },
+             _ = events::listen(Arc::clone(&channel)) => {
+                 log!("sync: stopped listening to events... exiting");
+             },
+             _ = handle_message(&mut stream) => {
+                 log!("sync: stopped processing messages... exiting");
+             }
+             _ = tasks::handle_tasks(Arc::clone(&channel)) => {
+                 log!("sync: tasks: stopped tasks... exiting");
+             },
         }
     });
 

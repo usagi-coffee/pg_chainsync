@@ -5,4 +5,4 @@
 **/*.rs.bk
 Cargo.lock
 install.sh
-remote.install.sh
+*.install.sh

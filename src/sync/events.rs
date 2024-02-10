@@ -135,7 +135,9 @@ pub async fn handle_log(job: &Job, log: ethers::types::Log, channel: &Channel) {
                             panic!("sync: events: too many retries to get the block...");
                         }
 
-                        if let Ok(Some(block)) = job.ws.as_ref().unwrap().get_block(block).await {
+                        if let Ok(Some(block)) =
+                            job.ws.as_ref().unwrap().get_block(block).await
+                        {
                             channel.send(Message::Block(
                                 *chain,
                                 block,
@@ -145,7 +147,10 @@ pub async fn handle_log(job: &Job, log: ethers::types::Log, channel: &Channel) {
                             break;
                         }
 
-                        log!("sync: events: could not find block {}, retrying", block);
+                        log!(
+                            "sync: events: could not find block {}, retrying",
+                            block
+                        );
                         sleep(Duration::from_millis(1000)).await;
                         retries = retries + 1;
                     }

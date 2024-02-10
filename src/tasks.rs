@@ -152,14 +152,21 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                     }
 
                     if let Some(blocktick) = options.blocktick {
-                        let splits = ((to_block - from_block) as f64
-                            / blocktick as f64)
-                            .ceil() as i64;
+                        let recalculate_splits = |blocktick: i64| {
+                            ((to_block - from_block) as f64 / blocktick as f64)
+                                .ceil() as i64
+                        };
+
+                        let mut current_blocktick = blocktick;
+                        let mut current_from = from_block;
+                        let mut splits = recalculate_splits(blocktick);
 
                         log!("sync: tasks: {}: found {} splits", task, splits);
 
-                        for i in 1..=splits {
-                            let mut from = from_block + (i - 1) * blocktick;
+                        let mut retries = 0;
+                        let mut i = 1;
+                        while i <= splits {
+                            let mut from = current_from + (i - 1) * blocktick;
                             let to = std::cmp::min(to_block, from + blocktick);
 
                             if i > 1 {
@@ -179,22 +186,49 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
 
                             match ws.get_logs(&filter).await {
                                 Ok(mut logs) => {
+                                    retries = 0;
                                     for log in logs.drain(0..) {
                                         events::handle_log(&job, log, &channel)
                                             .await;
                                     }
                                 }
-                                Err(e) => {
-                                    log!("{}", e);
-                                    warning!(
-                                        "sync: tasks: {}: failed to fetch split {}, aborting...",
+                                Err(_) => {
+                                    if current_blocktick <= 1 || retries >= 15 {
+                                        warning!(
+                                            "sync: tasks: {}: failed to fetch with reduced blocktick, aborting...",
+                                            task,
+                                        );
+
+                                        break;
+                                    }
+
+                                    log!(
+                                        "sync: tasks: {}: reducing blocktick from {} to {}",
                                         task,
-                                        i
+                                        current_blocktick,
+                                        (current_blocktick as f64 / 2 as f64).floor(),
                                     );
 
-                                    break;
+                                    sleep_until(
+                                        Instant::now()
+                                            + Duration::from_millis(200),
+                                    )
+                                    .await;
+
+                                    current_blocktick =
+                                        (current_blocktick as f64 / 2 as f64)
+                                            .floor()
+                                            as i64;
+                                    current_from = from;
+                                    splits =
+                                        recalculate_splits(current_blocktick);
+                                    retries = 0;
+                                    i = 1;
+                                    continue;
                                 }
                             }
+
+                            i = i + 1;
                         }
                     } else {
                         match ws.get_logs(&filter).await {
