@@ -166,8 +166,8 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                         let mut retries = 0;
                         let mut i = 1;
                         while i <= splits {
-                            let mut from = current_from + (i - 1) * blocktick;
-                            let to = std::cmp::min(to_block, from + blocktick);
+                            let mut from = current_from + (i - 1) * current_blocktick;
+                            let to = std::cmp::min(to_block, from + current_blocktick);
 
                             if i > 1 {
                                 from = from + 1;
@@ -192,8 +192,9 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                                             .await;
                                     }
                                 }
-                                Err(_) => {
-                                    if current_blocktick <= 1 || retries >= 15 {
+                                Err(e) => {
+                                    println!("{}", e);
+                                    if current_blocktick <= 1 || retries >= 20 {
                                         warning!(
                                             "sync: tasks: {}: failed to fetch with reduced blocktick, aborting...",
                                             task,
