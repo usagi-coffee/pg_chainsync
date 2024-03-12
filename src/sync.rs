@@ -6,6 +6,7 @@ use pgrx::bgworkers::*;
 use pgrx::log;
 
 use tokio::sync::mpsc;
+use tokio_cron::Scheduler;
 use tokio_stream::StreamExt;
 
 use crate::channel::*;
@@ -60,7 +61,8 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
     let mut stream = MessageStream::new(receive_message);
 
     runtime.block_on(async {
-        tasks::setup().await;
+        let mut scheduler = Scheduler::utc();
+        tasks::setup(&mut scheduler).await;
 
         tokio::select! {
              _ = worker::handle_signals(Arc::clone(&channel)) => {

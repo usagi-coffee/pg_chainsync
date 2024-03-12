@@ -18,10 +18,8 @@ use crate::types::{Job, JobKind, Message};
 
 use crate::worker::{TASKS, TASKS_PRELOADED};
 
-pub async fn setup() {
+pub async fn setup(scheduler: &mut Scheduler) {
     let preloaded = *TASKS_PRELOADED.share();
-
-    let mut scheduler = Scheduler::utc();
 
     let tasks = BackgroundWorker::transaction(|| Job::query_all());
     if tasks.is_err() {
@@ -59,16 +57,6 @@ pub async fn setup() {
                 }
 
                 scheduler.add(CronJob::new_sync(cron, move || {
-                    for id in &*TASKS.share() {
-                        if id == &task.id {
-                            warning!(
-                                "sync: tasks: task {} already in queue",
-                                task.id
-                            );
-                            return;
-                        }
-                    }
-
                     if TASKS.exclusive().push(task.id).is_err() {
                         warning!("sync: tasks: failed to enqueue {}", task.id);
                     }
@@ -82,7 +70,9 @@ pub async fn setup() {
 
 pub async fn handle_tasks(channel: Arc<Channel>) {
     loop {
-        if let Some(task) = TASKS.exclusive().pop() {
+        let task: Option<i64> = { TASKS.exclusive().pop() };
+
+        if let Some(task) = task {
             log!("sync: tasks: got task {}", task);
 
             // FIXME: wait some time for commit when adding tasks
