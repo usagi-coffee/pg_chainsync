@@ -152,22 +152,28 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                     }
 
                     if let Some(blocktick) = options.blocktick {
-                        let recalculate_splits = |blocktick: i64| {
-                            ((to_block - from_block) as f64 / blocktick as f64)
-                                .ceil() as i64
-                        };
+                        let recalculate_splits =
+                            |from: i64, to: i64, blocktick: i64| {
+                                ((to - from) as f64 / blocktick as f64).ceil()
+                                    as i64
+                            };
 
                         let mut current_blocktick = blocktick;
                         let mut current_from = from_block;
-                        let mut splits = recalculate_splits(blocktick);
+                        let mut splits =
+                            recalculate_splits(from_block, to_block, blocktick);
 
                         log!("sync: tasks: {}: found {} splits", task, splits);
 
                         let mut retries = 0;
                         let mut i = 1;
                         while i <= splits {
-                            let mut from = current_from + (i - 1) * current_blocktick;
-                            let to = std::cmp::min(to_block, from + current_blocktick);
+                            let mut from =
+                                current_from + (i - 1) * current_blocktick;
+                            let to = std::cmp::min(
+                                to_block,
+                                from + current_blocktick,
+                            );
 
                             if i > 1 {
                                 from = from + 1;
@@ -221,8 +227,14 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                                             .floor()
                                             as i64;
                                     current_from = from;
-                                    splits =
-                                        recalculate_splits(current_blocktick);
+                                    splits = recalculate_splits(
+                                        current_from,
+                                        std::cmp::min(
+                                            to_block,
+                                            current_from + current_blocktick,
+                                        ),
+                                        current_blocktick,
+                                    );
                                     retries = 0;
                                     i = 1;
                                     continue;
