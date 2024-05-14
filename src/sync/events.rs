@@ -72,16 +72,13 @@ pub async fn listen(channel: Arc<Channel>) {
                 let (i, log) = tick;
                 let job = &jobs[i];
 
-                match log {
-                    Some(log) => handle_log(job, log, &channel).await,
-                    None => {
-                        warning!(
-                            "sync: events: stream {} has ended, restarting providers",
-                            job.id
-                        );
-                        break;
-                    }
+                if log.is_none() {
+                    warning!("sync: events: stream {} has ended, restarting providers", job.id);
+                    break;
                 }
+
+                // SAFETY: unwrap is safe because we checked for None
+                handle_log(job, log.unwrap(), &channel).await;
             }
 
             map.clear();
