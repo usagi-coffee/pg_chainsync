@@ -3,7 +3,8 @@
   "version": "0.0.0",
   "description": "> Proof of Concept - expect bugs and breaking changes.",
   "scripts": {
-    "dev:psql": "psql -p 28815 -h 0.0.0.0 -U jk -d pg_chainsync"
+    "dev": "sh dev.sh",
+    "dev:psql": "psql -p 5432 -U postgres -h localhost"
   },
   "repository": {
     "type": "git",

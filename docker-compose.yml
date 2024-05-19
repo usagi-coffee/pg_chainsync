@@ -1,0 +1,29 @@
+services:
+  database:
+    container_name: pg-chainsync
+    build: 
+      context: .
+      dockerfile: ./dev/Dockerfile.db
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./dev/dev.sql:/docker-entrypoint-initdb.d/99_dev.sql:z
+      - ./target/release/pg_chainsync-pg16/usr/lib64/pgsql/pg_chainsync.so:/usr/lib/postgresql/16/lib/pg_chainsync.so:z
+      - ./target/release/pg_chainsync-pg16/usr/share/pgsql/extension/pg_chainsync.control:/usr/share/postgresql/16/extension/pg_chainsync.control:z
+      - ./target/release/pg_chainsync-pg16/usr/share/pgsql/extension/pg_chainsync--0.0.0.sql:/usr/share/postgresql/16/extension/pg_chainsync--0.0.0.sql:z
+    ports:
+      - 5432:5432
+    networks:
+      - net-chainsync
+  foundry:
+    container_name: pg-chainsync-foundry
+    build:
+      context: .
+      dockerfile: ./dev/Dockerfile.foundry
+    ports:
+      - 8545:8545
+    networks:
+      - net-chainsync
+networks:
+  net-chainsync:
+    driver: bridge
