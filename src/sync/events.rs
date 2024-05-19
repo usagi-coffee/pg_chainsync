@@ -10,13 +10,15 @@ use ethers::providers::Middleware;
 use ethers::types::{Address, BlockNumber, Filter, H256};
 
 use tokio::sync::oneshot;
-use tokio::time::{sleep, Duration};
-use tokio_stream::{pending, StreamExt, StreamMap, StreamNotifyClose};
+use tokio::time::{sleep, sleep_until, timeout, Duration, Instant};
+use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
+
+use bus::BusReader;
 
 use crate::channel::Channel;
 use crate::types::*;
 
-pub async fn listen(channel: Arc<Channel>) {
+pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
     'sync: loop {
         let (tx, rx) = oneshot::channel::<Vec<Job>>();
         if !channel.send(Message::Jobs(tx)) {
@@ -60,28 +62,51 @@ pub async fn listen(channel: Arc<Channel>) {
                 }
             }
 
-            if map.is_empty() {
-                log!("sync: events: no jobs for events");
-                pending::<()>().next().await;
-                unreachable!();
-            }
-
             log!("sync: events: started listening");
 
-            while let Some(tick) = map.next().await {
-                let (i, log) = tick;
-                let job = &jobs[i];
-
-                if log.is_none() {
-                    warning!("sync: events: stream {} has ended, restarting providers", job.id);
-                    break;
+            let mut drain = false;
+            loop {
+                match signals.try_recv() {
+                    Ok(signal) => {
+                        if signal == Signal::RestartEvents {
+                            drain = true;
+                        }
+                    }
+                    Err(..) => {}
                 }
 
-                // SAFETY: unwrap is safe because we checked for None
-                handle_log(job, log.unwrap(), &channel).await;
-            }
+                if map.is_empty() {
+                    sleep_until(Instant::now() + Duration::from_millis(100))
+                        .await;
 
-            map.clear();
+                    if drain {
+                        continue 'sync;
+                    }
+                    continue;
+                }
+
+                match timeout(Duration::from_secs(1), map.next()).await {
+                    Ok(Some(tick)) => {
+                        let (i, log) = tick;
+                        let job = &jobs[i];
+
+                        if log.is_none() {
+                            warning!("sync: events: stream {} has ended, restarting providers", job.id);
+                            continue 'sync;
+                        }
+
+                        // SAFETY: unwrap is safe because we checked for None
+                        handle_log(job, log.unwrap(), &channel).await;
+                    }
+                    // If it took more than 1 second the stream is probably drained so we can "almost"
+                    // safely restart the providers
+                    _ => {
+                        if drain {
+                            continue 'sync;
+                        }
+                    }
+                }
+            }
         }
     }
 }

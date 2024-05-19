@@ -9,6 +9,8 @@ use tokio::sync::mpsc;
 use tokio_cron::Scheduler;
 use tokio_stream::StreamExt;
 
+use bus::Bus;
+
 use crate::channel::*;
 use crate::tasks;
 use crate::types::*;
@@ -57,6 +59,8 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
     let (send_message, receive_message) =
         mpsc::channel::<Message>(MESSAGES_CAPACITY);
 
+    let mut signal_bus = Bus::<Signal>::new(64);
+
     let channel = Arc::new(Channel::new(send_message));
     let mut stream = MessageStream::new(receive_message);
 
@@ -64,14 +68,17 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
         let mut scheduler = Scheduler::utc();
         tasks::setup(&mut scheduler).await;
 
+        let blocks_rx = signal_bus.add_rx();
+        let events_rx = signal_bus.add_rx();
+
         tokio::select! {
-             _ = worker::handle_signals(Arc::clone(&channel)) => {
+             _ = worker::handle_signals(Arc::clone(&channel), signal_bus) => {
                  log!("sync: received exit signal... exiting");
              },
-             _ = blocks::listen(Arc::clone(&channel)) => {
+             _ = blocks::listen(Arc::clone(&channel), blocks_rx) => {
                  log!("sync: stopped listening to blocks... exiting");
              },
-             _ = events::listen(Arc::clone(&channel)) => {
+             _ = events::listen(Arc::clone(&channel), events_rx) => {
                  log!("sync: stopped listening to events... exiting");
              },
              _ = handle_message(&mut stream) => {

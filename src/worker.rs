@@ -4,8 +4,17 @@ use pgrx::PGRXSharedMemory;
 use pgrx::bgworkers::BackgroundWorker;
 use pgrx::bgworkers::*;
 
+use crate::channel::Channel;
+use std::sync::Arc;
+
+use tokio::time::{sleep_until, Duration, Instant};
+
+use crate::types::*;
+use bus::Bus;
+
 pub static WORKER_STATUS: PgLwLock<WorkerStatus> = PgLwLock::new();
 pub static RESTART_COUNT: PgLwLock<i32> = PgLwLock::new();
+pub static SIGNALS: PgLwLock<heapless::Vec<u8, 32>> = PgLwLock::new();
 pub static TASKS_PRELOADED: PgLwLock<bool> = PgLwLock::new();
 pub static TASKS: PgLwLock<heapless::Vec<i64, 32>> = PgLwLock::new();
 
@@ -33,12 +42,7 @@ pub fn spawn() -> BackgroundWorkerBuilder {
         .set_restart_time(Some(Duration::from_millis(RESTART_TIME)))
 }
 
-use crate::channel::Channel;
-use std::sync::Arc;
-
-use tokio::time::{sleep_until, Duration, Instant};
-
-pub async fn handle_signals(_: Arc<Channel>) {
+pub async fn handle_signals(_: Arc<Channel>, mut bus: Bus<Signal>) {
     loop {
         if BackgroundWorker::sighup_received() {
             *WORKER_STATUS.exclusive() = WorkerStatus::STOPPING;
@@ -52,6 +56,11 @@ pub async fn handle_signals(_: Arc<Channel>) {
             WorkerStatus::RESTARTING => break,
             WorkerStatus::STOPPING => break,
             _ => {}
+        }
+
+        let signal = { SIGNALS.exclusive().pop() };
+        if let Some(signal) = signal {
+            bus.broadcast(signal.into());
         }
 
         sleep_until(Instant::now() + Duration::from_millis(100)).await;

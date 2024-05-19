@@ -66,14 +66,23 @@ mod chainsync {
         provider_url: &str,
         callback: &str,
     ) -> i64 {
-        Job::register(
+        let id = Job::register(
             JobKind::Blocks,
             chain_id,
             provider_url,
             callback,
             false,
             pgrx::JsonB(serde_json::Value::Null),
-        )
+        );
+
+        if let Err(_) = SIGNALS
+            .exclusive()
+            .push(crate::types::Signal::RestartBlocks as u8)
+        {
+            panic!("failed to send signal");
+        }
+
+        id
     }
 
     #[pg_extern]
@@ -113,14 +122,23 @@ mod chainsync {
             panic!("provided options are not an object")
         }
 
-        Job::register(
+        let id = Job::register(
             JobKind::Events,
             chain_id,
             provider_url,
             callback,
             false,
             options,
-        )
+        );
+
+        if let Err(_) = SIGNALS
+            .exclusive()
+            .push(crate::types::Signal::RestartEvents as u8)
+        {
+            panic!("failed to send signal");
+        }
+
+        id
     }
 
     #[pg_extern]
@@ -153,7 +171,7 @@ mod chainsync {
 
 extension_sql_file!("../sql/types.sql", name = "types_schema");
 
-use worker::{RESTART_COUNT, TASKS, TASKS_PRELOADED, WORKER_STATUS};
+use worker::{RESTART_COUNT, SIGNALS, TASKS, TASKS_PRELOADED, WORKER_STATUS};
 
 #[pg_guard]
 pub extern "C" fn _PG_init() {
@@ -161,6 +179,7 @@ pub extern "C" fn _PG_init() {
     pg_shmem_init!(RESTART_COUNT);
     pg_shmem_init!(TASKS);
     pg_shmem_init!(TASKS_PRELOADED);
+    pg_shmem_init!(SIGNALS);
 
     worker::spawn().load();
 }

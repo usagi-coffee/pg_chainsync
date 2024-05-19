@@ -38,7 +38,7 @@ LANGUAGE SQL;
 -- The arguments are chain id, websocket url and name of the handler function
 SELECT chainsync.add_blocks_job(10, 'wss://provider-url', 'custom_block_handler');
 
--- Restart worker (or database) to start the job
+-- Optional: Restart worker (or entire database)
 SELECT chainsync.restart();
 ```
 
@@ -72,7 +72,7 @@ SELECT chainsync.add_events_job(
 	'{ "address": "0x....", "event": "Transfer(address,address,uint256)" }'
 );
 
--- Restart worker (or database) to start the job
+-- Optional: Restart worker (or entire database)
 SELECT chainsync.restart();
 ```
 

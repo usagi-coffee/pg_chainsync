@@ -15,6 +15,14 @@ pub type Callback = String;
 pub type Block = ethers::types::Block<H256>;
 pub type Log = ethers::types::Log;
 
+#[derive(Clone, PartialEq)]
+#[repr(u8)]
+pub enum Signal {
+    Unknown = 0,
+    RestartBlocks = 1,
+    RestartEvents = 2,
+}
+
 pub enum Message {
     Job(i64, oneshot::Sender<Option<Job>>),
     Jobs(oneshot::Sender<Vec<Job>>),
@@ -120,5 +128,15 @@ impl fmt::Display for JobKind {
             JobKind::Blocks => write!(f, "Blocks"),
             JobKind::Events => write!(f, "Events"),
         }
+    }
+}
+
+impl From<u8> for Signal {
+    fn from(orig: u8) -> Self {
+        match orig {
+            1 => return Signal::RestartBlocks,
+            2 => return Signal::RestartEvents,
+            _ => return Signal::Unknown,
+        };
     }
 }
