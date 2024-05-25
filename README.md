@@ -101,12 +101,12 @@ SELECT chainsync.add_events_task(
 
 #### Cron tasks
 
-Cron jobs aresupported, you can use `add_events_cron` function to run a cron task.
+Cron jobs are supported, you can use `add_events_cron` function to run a cron task.
 
 > Hint: cron expression value should be 6 characters because it supports seconds resolution e.g `0 * * * * *` - will run every minute
 
 ```sql
-SELECT chainsync.add_events_task(
+SELECT chainsync.add_events_cron(
     1,
     'wss://provider-url',
     '0 * * * * *', -- Run every minute
@@ -208,7 +208,7 @@ After altering the config restart your database and you can check postgres logs 
 
 ## Demo
 
-You can check out how the extension work in action by running the development docker-compose file with `docker compose` or `podman compose`, it will build the extension and run the database, run the extension and listen for some events that get sent by erc20 container.
+You can check out how the extension work in action by running the development docker-compose file with `docker compose` or `podman compose`, it will build the extension, run the database, run the extension and listen for some events that get sent by erc20 container.
 
 ## License
 
