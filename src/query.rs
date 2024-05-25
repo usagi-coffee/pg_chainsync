@@ -26,6 +26,8 @@ impl Job {
         provider_url: &str,
         callback: &str,
         oneshot: bool,
+        preload: bool,
+        cron: Option<&str>,
         options: pgrx::JsonB,
     ) -> i64 {
         match Spi::get_one_with_args(
@@ -48,6 +50,8 @@ impl Job {
                     callback.into_datum(),
                 ),
                 (PgOid::BuiltIn(PgBuiltInOids::BOOLOID), oneshot.into_datum()),
+                (PgOid::BuiltIn(PgBuiltInOids::BOOLOID), preload.into_datum()),
+                (PgOid::BuiltIn(PgBuiltInOids::TEXTOID), cron.into_datum()),
                 (
                     PgOid::BuiltIn(PgBuiltInOids::JSONBOID),
                     options.into_datum(),
@@ -122,6 +126,13 @@ impl Job {
                     oneshot: table
                         .get_by_name::<bool, &'static str>("oneshot")
                         .unwrap()
+                        .unwrap(),
+                    preload: table
+                        .get_by_name::<bool, &'static str>("preload")
+                        .unwrap()
+                        .unwrap(),
+                    cron: table
+                        .get_by_name::<String, &'static str>("cron")
                         .unwrap(),
                     options: serde_json::from_value(options.0).unwrap_or(None),
                     ws: None,

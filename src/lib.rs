@@ -19,7 +19,10 @@ mod chainsync {
 
     use pgrx::prelude::*;
 
+    use std::str::FromStr;
     use std::time::{Duration, Instant};
+
+    use cron::Schedule;
 
     #[pg_extern]
     fn restart() {
@@ -72,6 +75,8 @@ mod chainsync {
             provider_url,
             callback,
             false,
+            false,
+            None,
             pgrx::JsonB(serde_json::Value::Null),
         );
 
@@ -83,32 +88,6 @@ mod chainsync {
         }
 
         id
-    }
-
-    #[pg_extern]
-    fn add_blocks_task(
-        chain_id: i64,
-        provider_url: &str,
-        callback: &str,
-    ) -> i64 {
-        let task = Job::register(
-            JobKind::Blocks,
-            chain_id,
-            provider_url,
-            callback,
-            true,
-            pgrx::JsonB(serde_json::Value::Null),
-        );
-
-        if task <= 0 {
-            return task;
-        }
-
-        if let Err(_) = TASKS.exclusive().push(task) {
-            panic!("failed to enqueue the task")
-        }
-
-        task
     }
 
     #[pg_extern]
@@ -128,6 +107,8 @@ mod chainsync {
             provider_url,
             callback,
             false,
+            false,
+            None,
             options,
         );
 
@@ -158,6 +139,71 @@ mod chainsync {
             provider_url,
             callback,
             true,
+            false,
+            None,
+            options,
+        );
+
+        if let Err(_) = TASKS.exclusive().push(task) {
+            panic!("failed to enqueue the task")
+        }
+
+        task
+    }
+
+    #[pg_extern]
+    fn preload_events_task(
+        chain_id: i64,
+        provider_url: &str,
+        callback: &str,
+        options: pgrx::JsonB,
+    ) -> i64 {
+        if options.0.is_null() || !options.0.is_object() {
+            panic!("provided options are not an object")
+        }
+
+        let task = Job::register(
+            JobKind::Events,
+            chain_id,
+            provider_url,
+            callback,
+            true,
+            true,
+            None,
+            options,
+        );
+
+        if let Err(_) = TASKS.exclusive().push(task) {
+            panic!("failed to enqueue the task")
+        }
+
+        task
+    }
+
+    #[pg_extern]
+    fn add_events_cron(
+        chain_id: i64,
+        provider_url: &str,
+        cron: &str,
+        callback: &str,
+        options: pgrx::JsonB,
+    ) -> i64 {
+        if options.0.is_null() || !options.0.is_object() {
+            panic!("provided options are not an object")
+        }
+
+        if Schedule::from_str(&cron).is_err() {
+            panic!("incorrect cron expression")
+        }
+
+        let task = Job::register(
+            JobKind::Events,
+            chain_id,
+            provider_url,
+            callback,
+            true,
+            false,
+            Some(cron),
             options,
         );
 

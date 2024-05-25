@@ -76,9 +76,70 @@ SELECT chainsync.add_events_job(
 SELECT chainsync.restart();
 ```
 
-#### Handle blocks before events
+### Tasks
 
-> Experimental
+Task is a type of job that is designed to run only once or periodically.
+
+> Hint: Most providers limit the number of events/range of blocks returned from getLogs method so it will just fail, in this case you can use blocktick option that splits fetching into multiple calls, blocktick means range of blocks per call. This does not apply to watching events because they start from latest block.
+
+Running this query will add a task that will fetch all transfer events for specific contract at address starting from block 12345 and fetching 10000 blocks per call once.
+
+```sql
+SELECT chainsync.add_events_task(
+    1,
+    'wss://provider-url',
+    'transfer_handler',
+    '{ 
+        "address": "0x....",
+        "event": "Transfer(address,address,uint256)",
+        "from_block": 12345,
+        "blocktick": 10000
+    }'
+);
+```
+
+
+#### Cron tasks
+
+Cron jobs aresupported, you can use `add_events_cron` function to run a cron task.
+
+> Hint: cron expression value should be 6 characters because it supports seconds resolution e.g `0 * * * * *` - will run every minute
+
+```sql
+SELECT chainsync.add_events_task(
+    1,
+    'wss://provider-url',
+    '0 * * * * *', -- Run every minute
+    'transfer_handler',
+    '{ 
+        "address": "0x....",
+        "event": "Transfer(address,address,uint256)",
+        "from_block": 12345,
+        "blocktick": 10000,
+    }'
+);
+```
+
+
+#### Preloaded tasks 
+
+Some tasks need to be run when the database starts, for that you can use `preload_events_task`, the created task will run when the extension or the database re/starts.
+
+```sql
+SELECT chainsync.preload_events_task(
+    1,
+    'wss://provider-url',
+    'transfer_handler',
+    '{ 
+        "address": "0x....",
+        "event": "Transfer(address,address,uint256)",
+        "from_block": 12345,
+        "blocktick": 10000
+    }'
+);
+```
+
+#### Handle blocks before events
 
 `await_block` is a feature that allows you to fetch and handle event's block before handling the event. This is helpful when you want to e.g join block inside your event handler, this ensures there is always block available for your specific event when you call your event handler.
 
@@ -111,36 +172,6 @@ SELECT chainsync.add_events_job(
 
 ```
 
-### Tasks
-
-> Experimental
-
-Task is a type of job that is designed to run only once when called and will not restart alongside with the database, you can use the same api like for registering jobs to register tasks.
-
-Use `chainsync.add_events_task` and `chainsync.add_blocks_task` with the same arguments as in registering jobs and it should run once on-demand.
-
-You can add key `preload` to options, that will make the task get started when the extension gets preloaded e.g when database re/starts.
-
-Cron jobs are also supported, you can add key `cron` with cron expression value e.g `0 * * * * *` - run every minute (6 characters (!) beacuse it supports seconds resolution!).
-
-> Hint: Most providers limit the number of events/range of blocks returned from getLogs method so it will just fail, in this case you can use blocktick option that splits fetching into multiple calls, blocktick means range of blocks per call. This does not apply to watching events because they start from latest block.
-
-```sql
-SELECT chainsync.add_events_task(
-    1,
-    'wss://provider-url',
-    'transfer_handler',
-    '{ 
-        "address": "0x....",
-        "event": "Transfer(address,address,uint256)",
-        "from_block": 12345,
-        "blocktick": 10000,
-        "preload": false
-    }'
-);
-```
-
-
 ## Installation
 
 > ***IMPORTANT***: currently the database that the worker uses is hard-coded to `postgres` if you are using different database please modify the `DATABASE` constant inside `src/sync.rs` before building.
@@ -159,8 +190,8 @@ cargo pgrx package
 cd target/release
 cp pg_chainsync-pg15/.../pg_chainsync.so /usr/lib/postgresql/
 # Replace V.V.V with version
-cp pg_chainsync-pg15/.../pg_chainsync--V.V.V.sql /usr/share/postgresql/extension/
-cp pg_chainsync-pg15/.../pg_chainsync.control /usr/share/postgresql/extension/  
+cp pg_chainsync-pgV/.../pg_chainsync--V.V.V.sql /usr/share/postgresql/extension/
+cp pg_chainsync-pgV/.../pg_chainsync.control /usr/share/postgresql/extension/  
 ```
 
 This should be enough to be able to use `CREATE EXTENSION pg_chainsync` but we also need to preload our library because this extension uses background worker so it needs to be run along with the database.
@@ -174,6 +205,10 @@ shared_preload_libraries = 'pg_chainsync.so' # (change requires restart)
 After altering the config restart your database and you can check postgres logs to check if it worked!
 
 > Please refer to pgrx documentation for full details on how to install background worker extension if it does not work for you
+
+## Demo
+
+You can check out how the extension work in action by running the development docker-compose file with `docker compose` or `podman compose`, it will build the extension and run the database, run the extension and listen for some events that get sent by erc20 container.
 
 ## License
 

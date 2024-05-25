@@ -7,6 +7,8 @@ CREATE TABLE chainsync.jobs (
 	status TEXT NOT NULL DEFAULT 'STOPPED',
 	provider_url TEXT NOT NULL,
 	oneshot BOOLEAN NOT NULL,
+  preload BOOLEAN NOT NULL DEFAULT FALSE,
+  cron TEXT,
 	options JSONB
 );
 

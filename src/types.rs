@@ -58,6 +58,8 @@ pub struct Job {
     pub status: String,
     pub callback: String,
     pub oneshot: bool,
+    pub preload: bool,
+    pub cron: Option<String>,
     pub options: Option<JobOptions>,
 
     pub ws: Option<Provider<Ws>>,

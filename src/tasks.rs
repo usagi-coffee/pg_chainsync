@@ -34,34 +34,32 @@ pub async fn setup(scheduler: &mut Scheduler) {
             continue;
         }
 
-        if let Some(options) = task.options {
-            // Preload
-            if !preloaded {
-                if options.preload.unwrap_or(false) {
-                    if TASKS.exclusive().push(task.id).is_err() {
-                        warning!("sync: tasks: failed to enqueue {}", task.id);
-                    }
+        // Preload
+        if !preloaded {
+            if task.preload {
+                if TASKS.exclusive().push(task.id).is_err() {
+                    warning!("sync: tasks: failed to enqueue {}", task.id);
                 }
             }
+        }
 
-            // Cron
-            if let Some(cron) = options.cron {
-                if Schedule::from_str(&cron).is_err() {
-                    warning!(
-                        "sync: tasks: task {} has incorrect cron expression {}",
-                        task.id,
-                        cron
-                    );
+        // Cron
+        if let Some(cron) = task.cron {
+            if Schedule::from_str(&cron).is_err() {
+                warning!(
+                    "sync: tasks: task {} has incorrect cron expression {}",
+                    task.id,
+                    cron
+                );
 
-                    continue;
-                }
-
-                scheduler.add(CronJob::new_sync(cron, move || {
-                    if TASKS.exclusive().push(task.id).is_err() {
-                        warning!("sync: tasks: failed to enqueue {}", task.id);
-                    }
-                }));
+                continue;
             }
+
+            scheduler.add(CronJob::new_sync(cron, move || {
+                if TASKS.exclusive().push(task.id).is_err() {
+                    warning!("sync: tasks: failed to enqueue {}", task.id);
+                }
+            }));
         }
     }
 
