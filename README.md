@@ -186,12 +186,10 @@ cargo build --release
 # Packaging process should create pg_chainsync-pg15 under target/release
 cargo pgrx package
 
-# Copy files to your postgres installation (paths may be different on your system)
-cd target/release
-cp pg_chainsync-pg15/.../pg_chainsync.so /usr/lib/postgresql/
-# Replace V.V.V with version
-cp pg_chainsync-pgV/.../pg_chainsync--V.V.V.sql /usr/share/postgresql/extension/
-cp pg_chainsync-pgV/.../pg_chainsync.control /usr/share/postgresql/extension/  
+# NOTICE: your built extension and database paths may be different due to how pg_config works on the machine that builds the extension
+cp target/release/pg_chainsync-.../.../pg_chainsync.so /usr/lib/postgresql/
+cp target/release/pg_chainsync-.../.../pg_chainsync--....sql /usr/share/postgresql/extension/
+cp target/release/pg_chainsync-.../.../pg_chainsync.control /usr/share/postgresql/extension/  
 ```
 
 This should be enough to be able to use `CREATE EXTENSION pg_chainsync` but we also need to preload our library because this extension uses background worker so it needs to be run along with the database.
