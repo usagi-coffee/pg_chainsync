@@ -20,8 +20,17 @@ services:
     build:
       context: .
       dockerfile: ./dev/Dockerfile.foundry
+    volumes:
+      - ./dev/state.anvil:/root/foundry/state.anvil:z
     ports:
       - 8545:8545
+    networks:
+      - net-chainsync
+  erc20:
+    container_name: pg-chainsync-erc20
+    build:
+      context: ./dev/erc20
+      dockerfile: Dockerfile
     networks:
       - net-chainsync
 networks:
