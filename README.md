@@ -213,7 +213,7 @@ You can check out how the extension work in action by running the development do
 ```LICENSE
 MIT License
 
-Copyright (c) 2023 Kamil Jakubus and contributors
+Copyright (c) Kamil Jakubus and contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
