@@ -52,6 +52,15 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
     })
     .unwrap_or(Vec::new());
 
+    for job in &jobs {
+        let id = job.id.clone();
+        BackgroundWorker::transaction(|| {
+            let _ = PgTryBuilder::new(|| Job::update(id, JobStatus::Stopped))
+                .catch_others(|_| Err(pgrx::spi::Error::NoTupleTable))
+                .execute();
+        });
+    }
+
     log!("sync: {} jobs found", jobs.len());
 
     *WORKER_STATUS.exclusive() = WorkerStatus::RUNNING;
@@ -89,6 +98,15 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
              },
         }
     });
+
+    for job in &jobs {
+        let id = job.id.clone();
+        BackgroundWorker::transaction(|| {
+            let _ = PgTryBuilder::new(|| Job::update(id, JobStatus::Stopped))
+                .catch_others(|_| Err(pgrx::spi::Error::NoTupleTable))
+                .execute();
+        });
+    }
 
     *WORKER_STATUS.exclusive() = WorkerStatus::STOPPED;
     log!("sync: worker has exited");
@@ -130,6 +148,40 @@ async fn handle_message(stream: &mut MessageStream) {
                 if oneshot.send(jobs).is_err() {
                     warning!("sync: jobs: failed to send on channel");
                 }
+            }
+            Message::UpdateJob(id, status) => {
+                // TODO: query_one
+                let jobs = BackgroundWorker::transaction(|| {
+                    PgTryBuilder::new(Job::query_all)
+                        .catch_others(|_| Err(pgrx::spi::Error::NoTupleTable))
+                        .execute()
+                })
+                .unwrap_or(Vec::new());
+
+                match jobs.into_iter().find(|job| job.id == id) {
+                    Some(job) => {
+                        if let Err(error) =
+                            BackgroundWorker::transaction(|| {
+                                PgTryBuilder::new(|| {
+                                    Job::update(job.id, status)
+                                })
+                                .catch_others(|_| {
+                                    Err(pgrx::spi::Error::NoTupleTable)
+                                })
+                                .execute()
+                            })
+                        {
+                            warning!(
+                                "sync: job: {}, failed to update status {}",
+                                id,
+                                error
+                            );
+                        }
+                    }
+                    None => {
+                        warning!("sync: job: {}, could not update status", id);
+                    }
+                };
             }
             Message::Block(..) => blocks::handle_message(&message),
             Message::Event(..) => events::handle_message(&message),

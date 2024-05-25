@@ -23,9 +23,17 @@ pub enum Signal {
     RestartEvents = 2,
 }
 
+#[derive(Clone, PartialEq)]
+#[repr(u8)]
+pub enum JobStatus {
+    Stopped = 0,
+    Running = 1,
+}
+
 pub enum Message {
     Job(i64, oneshot::Sender<Option<Job>>),
     Jobs(oneshot::Sender<Vec<Job>>),
+    UpdateJob(i64, JobStatus),
 
     // Job messages
     Block(Chain, Block, Callback, Option<i64>),
@@ -107,6 +115,7 @@ pub struct AwaitBlock {
     pub block_handler: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ParseJobError(&'static str);
 
@@ -138,5 +147,14 @@ impl From<u8> for Signal {
             2 => return Signal::RestartEvents,
             _ => return Signal::Unknown,
         };
+    }
+}
+
+impl Into<String> for JobStatus {
+    fn into(self) -> String {
+        match self {
+            JobStatus::Stopped => "STOPPED".to_string(),
+            JobStatus::Running => "RUNNING".to_string(),
+        }
     }
 }

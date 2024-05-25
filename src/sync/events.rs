@@ -53,6 +53,11 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                 match build_stream(&job).await {
                     Ok(stream) => {
                         map.insert(i, StreamNotifyClose::new(stream));
+                        channel.send(Message::UpdateJob(
+                            job.id,
+                            JobStatus::Running,
+                        ));
+
                         log!("sync: events: {}: started listening", job.id);
                     }
                     Err(err) => {

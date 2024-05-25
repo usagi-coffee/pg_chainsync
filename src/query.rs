@@ -59,19 +59,21 @@ impl Job {
         }
     }
 
-    pub fn update(&mut self, status: &String) -> bool {
-        if let Ok(_) = Spi::run_with_args(
-            "UPDATE chainsync.jobs SET status = $1 WHERE job_id = $2",
-            Some(vec![
-                (PgOid::BuiltIn(PgBuiltInOids::TEXTOID), status.into_datum()),
-                (PgOid::BuiltIn(PgBuiltInOids::INT8OID), self.id.into_datum()),
-            ]),
-        ) {
-            self.status = status.to_owned();
-            return true;
-        }
+    pub fn update(id: i64, status: JobStatus) -> Result<(), pgrx::spi::Error> {
+        let status_text: String = status.into();
 
-        return false;
+        Spi::run_with_args(
+            include_str!("../sql/update_job.sql"),
+            Some(vec![
+                (
+                    PgOid::BuiltIn(PgBuiltInOids::TEXTOID),
+                    status_text.clone().into_datum(),
+                ),
+                (PgOid::BuiltIn(PgBuiltInOids::INT8OID), id.into_datum()),
+            ]),
+        )?;
+
+        Ok(())
     }
 
     pub fn query_all() -> Result<Vec<Job>, pgrx::spi::Error> {
