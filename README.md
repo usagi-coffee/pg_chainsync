@@ -206,7 +206,17 @@ After altering the config restart your database and you can check postgres logs 
 
 ## Demo
 
-You can check out how the extension work in action by running the development docker-compose file with `docker compose` or `podman compose`, it will build the extension, run the database, run the extension and listen for some events that get sent by erc20 container.
+You can check out how the extension work in action by running the development docker-compose file with `docker compose` or `podman compose`.
+
+First build the extension with `cargo pgrx package` then run the docker compose command, it will run the database, run the extension and listen for some events that get sent by erc20 container.
+
+Volumes to adjust in `docker-compose.yml` if compiled paths are different, your pg_config should point to Postgresql 16.
+
+```
+- ./target/release/pg_chainsync-pg16/usr/lib64/pgsql/pg_chainsync.so:/usr/lib/postgresql/16/lib/pg_chainsync.so:z
+- ./target/release/pg_chainsync-pg16/usr/share/pgsql/extension/pg_chainsync.control:/usr/share/postgresql/16/extension/pg_chainsync.control:z
+- ./target/release/pg_chainsync-pg16/usr/share/pgsql/extension/pg_chainsync--0.0.0.sql:/usr/share/postgresql/16/extension/pg_chainsync--0.0.0.sql:z
+```
 
 ## License
 
