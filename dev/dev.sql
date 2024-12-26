@@ -3,7 +3,7 @@ CREATE EXTENSION IF NOT EXISTS pg_chainsync;
 CREATE FUNCTION custom_block_handler(block chainsync.Block, job_id bigint) RETURNS VOID
 AS $$
 BEGIN
-  RAISE LOG 'Got block % from job %', block.number, job_id;
+  RAISE LOG 'Got block % from job %', block, job_id;
 END;
 $$
 LANGUAGE plpgsql;

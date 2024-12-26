@@ -1,9 +1,9 @@
 use pgrx::prelude::*;
 use pgrx::{IntoDatum, PgOid};
 
-use ethers::abi::AbiEncode;
-use ethers::prelude::{Chain, Log};
-use ethers::utils::hex;
+use alloy::core::hex;
+use alloy::rpc::types::Log;
+use alloy_chains::Chain;
 
 use crate::types::*;
 
@@ -154,55 +154,52 @@ impl PgHandler for Block {
         let mut data =
             PgHeapTuple::new_composite_type(BLOCK_COMPOSITE_TYPE).unwrap();
 
-        data.set_by_name("chain", *chain as i64)?;
-        data.set_by_name("hash", self.hash.unwrap_or_default().encode_hex())?;
-        data.set_by_name(
-            "number",
-            pgrx::AnyNumeric::try_from(self.number.unwrap().as_u64()),
-        )?;
-        data.set_by_name(
-            "author",
-            self.author.unwrap_or_default().encode_hex(),
-        )?;
-        data.set_by_name("state_root", self.state_root.encode_hex())?;
-        data.set_by_name("parent_hash", self.parent_hash.encode_hex())?;
-        data.set_by_name("uncles_hash", self.uncles_hash.encode_hex())?;
-        data.set_by_name(
-            "transactions_root",
-            self.transactions_root.encode_hex(),
-        )?;
-
-        data.set_by_name("receipts_root", self.receipts_root.encode_hex())?;
-        data.set_by_name(
-            "gas_used",
-            pgrx::AnyNumeric::try_from(self.gas_used.as_u128()),
-        )?;
-        data.set_by_name(
-            "gas_limit",
-            pgrx::AnyNumeric::try_from(self.gas_limit.as_u128()),
-        )?;
-        data.set_by_name(
-            "timestamp",
-            pgrx::AnyNumeric::try_from(self.timestamp.as_u128()),
-        )?;
+        data.set_by_name("chain", chain.id() as i64)?;
+        data.set_by_name("number", pgrx::AnyNumeric::try_from(self.number))?;
+        data.set_by_name("hash", hex::encode(self.hash))?;
+        data.set_by_name("author", hex::encode(self.beneficiary))?;
         data.set_by_name(
             "difficulty",
-            pgrx::AnyNumeric::try_from(self.difficulty.as_u128()),
+            pgrx::AnyNumeric::try_from(self.difficulty.to_string().as_str()),
         )?;
 
         if let Some(total_difficulty) = self.total_difficulty {
             data.set_by_name(
                 "total_difficulty",
-                pgrx::AnyNumeric::try_from(total_difficulty.as_u128()),
+                pgrx::AnyNumeric::try_from(
+                    total_difficulty.to_string().as_str(),
+                ),
             )?;
         }
+
+        data.set_by_name("state_root", hex::encode(self.state_root))?;
+        data.set_by_name("parent_hash", hex::encode(self.parent_hash))?;
+        data.set_by_name("omners_hash", hex::encode(self.ommers_hash))?;
+        data.set_by_name(
+            "transactions_root",
+            hex::encode(self.transactions_root),
+        )?;
+        data.set_by_name("receipts_root", hex::encode(self.receipts_root))?;
+        data.set_by_name(
+            "gas_used",
+            pgrx::AnyNumeric::try_from(self.gas_used),
+        )?;
+        data.set_by_name(
+            "gas_limit",
+            pgrx::AnyNumeric::try_from(self.gas_limit),
+        )?;
 
         if let Some(size) = self.size {
             data.set_by_name(
                 "size",
-                pgrx::AnyNumeric::try_from(size.as_u128()),
+                pgrx::AnyNumeric::try_from(size.to_string().as_str()),
             )?;
         }
+
+        data.set_by_name(
+            "timestamp",
+            pgrx::AnyNumeric::try_from(self.timestamp),
+        )?;
 
         Spi::run_with_args(
             format!("SELECT {}($1, $2)", callback).as_str(),
@@ -227,38 +224,32 @@ impl PgHandler for Log {
         let mut data =
             PgHeapTuple::new_composite_type(LOG_COMPOSITE_TYPE).unwrap();
 
-        data.set_by_name("chain", *chain as i64)?;
-        data.set_by_name("removed", self.removed.unwrap())?;
-        data.set_by_name("log_index", self.log_index.unwrap().as_u64() as i64)?;
+        data.set_by_name("chain", chain.id() as i64)?;
+        data.set_by_name(
+            "block_number",
+            pgrx::AnyNumeric::try_from(
+                self.block_number.unwrap().to_string().as_str(),
+            ),
+        )?;
+        data.set_by_name("block_hash", hex::encode(self.block_hash.unwrap()))?;
         data.set_by_name(
             "transaction_hash",
-            self.transaction_hash.unwrap().encode_hex(),
+            hex::encode(self.transaction_hash.unwrap()),
         )?;
         data.set_by_name(
             "transaction_index",
-            self.transaction_index.unwrap().as_u64() as i64,
+            self.transaction_index.unwrap() as i64,
         )?;
-        data.set_by_name(
-            "transaction_log_index",
-            self.transaction_log_index.unwrap_or_default().as_u64() as i64,
-        )?;
-        data.set_by_name("block_hash", self.block_hash.unwrap().encode_hex())?;
-        data.set_by_name(
-            "block_number",
-            pgrx::AnyNumeric::try_from(self.block_number.unwrap().as_u64()),
-        )?;
-        data.set_by_name("address", format!("{:#x}", self.address))?;
-        data.set_by_name(
-            "data",
-            format!("{}", hex::encode(self.data.to_owned().encode())),
-        )?;
+        data.set_by_name("log_index", self.log_index.unwrap() as i64)?;
+        data.set_by_name("address", hex::encode(self.address()))?;
         data.set_by_name(
             "topics",
-            self.topics
+            self.topics()
                 .iter()
-                .map(|&topic| topic.encode_hex())
+                .map(|&topic| hex::encode(topic))
                 .collect::<Vec<String>>(),
         )?;
+        data.set_by_name("data", format!("{}", self.inner.data.data))?;
 
         Spi::run_with_args(
             format!("SELECT {}($1, $2)", callback).as_str(),

@@ -6,14 +6,16 @@ use serde::Deserialize;
 
 use anyhow::Result;
 
-use ethers::prelude::*;
-use ethers::types::{Chain, H256};
+use alloy::providers::{ProviderBuilder, RootProvider, WsConnect};
+use alloy::pubsub::PubSubFrontend;
+use alloy::transports::TransportError;
+use alloy_chains::Chain;
 
 use tokio::sync::oneshot;
 
 pub type Callback = String;
-pub type Block = ethers::types::Block<H256>;
-pub type Log = ethers::types::Log;
+pub type Block = alloy::rpc::types::Header;
+pub type Log = alloy::rpc::types::Log;
 
 #[derive(Clone, PartialEq)]
 #[repr(u8)]
@@ -62,18 +64,14 @@ pub struct Job {
     pub cron: Option<String>,
     pub options: Option<JobOptions>,
 
-    pub ws: Option<Provider<Ws>>,
+    pub ws: Option<RootProvider<PubSubFrontend>>,
 }
 
-const RECONNECT_COUNT: usize = usize::MAX;
 impl Job {
-    pub async fn connect(&mut self) -> Result<(), ProviderError> {
-        match Provider::<Ws>::connect_with_reconnects(
-            &self.provider_url,
-            RECONNECT_COUNT,
-        )
-        .await
-        {
+    pub async fn connect(&mut self) -> Result<(), TransportError> {
+        let ws = WsConnect::new(&self.provider_url);
+
+        match ProviderBuilder::new().on_ws(ws).await {
             Ok(provider) => {
                 self.ws = Some(provider);
                 Ok(())

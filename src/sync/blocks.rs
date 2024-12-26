@@ -1,19 +1,19 @@
-use ethers::providers::SubscriptionStream;
 use pgrx::prelude::*;
 use pgrx::{log, warning};
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tokio::time::{sleep_until, timeout, Duration, Instant};
 use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
 
-use ethers::providers::Middleware;
-
 use bus::BusReader;
 
-use ethers::types::{Chain, H256, U64};
+use alloy::providers::Provider;
+use alloy::pubsub::SubscriptionStream;
+use alloy::rpc::types::Header;
+use alloy_chains::Chain;
 
 use crate::types::Job;
 
@@ -126,12 +126,12 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 
 pub async fn handle_block(
     job: &Job,
-    block: ethers::types::Block<H256>,
+    block: alloy::rpc::types::Header,
     channel: &Channel,
 ) {
     let chain = &job.chain;
 
-    let number = block.number.unwrap_or(U64::from(0));
+    let number = block.number;
     log!("sync: blocks: {}: found {}", chain, number);
 
     channel.send(Message::Block(
@@ -150,7 +150,7 @@ pub fn handle_message(message: &Message) {
         return;
     };
 
-    let number = block.number.unwrap_or_default();
+    let number = block.number;
     log!("sync: blocks: {}: adding {}", chain, number);
 
     BackgroundWorker::transaction(|| {
@@ -179,7 +179,7 @@ pub fn check_one(chain: &Chain, number: &u64, callback: &String) -> bool {
                 vec![
                     (
                         PgOid::BuiltIn(PgBuiltInOids::INT8OID),
-                        (*chain as i64).into_datum(),
+                        (chain.id() as i64).into_datum(),
                     ),
                     (
                         PgOid::BuiltIn(PgBuiltInOids::INT8OID),
@@ -207,9 +207,8 @@ pub fn check_one(chain: &Chain, number: &u64, callback: &String) -> bool {
 
 pub async fn build_stream(
     job: &Job,
-) -> Result<
-    SubscriptionStream<'_, ethers::providers::Ws, ethers::types::Block<H256>>,
-> {
+) -> anyhow::Result<SubscriptionStream<Header>> {
     let provider = job.ws.as_ref().context("Invalid provider")?;
-    Ok(provider.subscribe_blocks().await?)
+    let sub = provider.subscribe_blocks().await?;
+    Ok(sub.into_stream())
 }

@@ -12,7 +12,7 @@ pub mod types;
 ::pgrx::pg_module_magic!();
 
 #[pg_schema]
-pub mod chainsync {
+mod chainsync {
     use crate::types::{Job, JobKind};
     use crate::worker;
     use crate::worker::*;

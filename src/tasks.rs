@@ -1,10 +1,10 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
+use alloy::providers::Provider;
+
 use pgrx::bgworkers::BackgroundWorker;
 use pgrx::{log, warning};
-
-use ethers::providers::Middleware;
 
 use tokio::sync::oneshot;
 use tokio::time::{sleep_until, Duration, Instant};
@@ -112,16 +112,21 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                 JobKind::Blocks => {
                     let mut to = options.to_block.unwrap_or(0);
                     if options.to_block.is_none() {
-                        to = ws.get_block_number().await.unwrap().as_u64()
-                            as i64;
+                        to = ws.get_block_number().await.unwrap() as i64;
                     }
 
                     for i in options.from_block.unwrap()..to {
-                        if let Ok(block) = ws.get_block(i as u64).await {
+                        if let Ok(block) = ws
+                            .get_block(
+                                (i as u64).into(),
+                                alloy::rpc::types::BlockTransactionsKind::Hashes,
+                            )
+                            .await
+                        {
                             if let Some(block) = block {
                                 channel.send(Message::Block(
                                     *chain,
-                                    block,
+                                    block.header,
                                     job.callback.clone(),
                                     Some(job.id),
                                 ));
@@ -135,8 +140,7 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                     let from_block = options.from_block.unwrap_or(0);
                     let mut to_block = options.to_block.unwrap_or(0);
                     if options.to_block.is_none() {
-                        to_block = ws.get_block_number().await.unwrap().as_u64()
-                            as i64;
+                        to_block = ws.get_block_number().await.unwrap() as i64;
                     }
 
                     if let Some(blocktick) = options.blocktick {
@@ -176,7 +180,9 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                                 splits
                             );
 
-                            filter = filter.from_block(from).to_block(to);
+                            filter = filter
+                                .from_block(from as u64)
+                                .to_block(to as u64);
 
                             match ws.get_logs(&filter).await {
                                 Ok(mut logs) => {

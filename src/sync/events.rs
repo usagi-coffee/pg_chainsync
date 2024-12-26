@@ -1,13 +1,14 @@
-use ethers::providers::SubscriptionStream;
 use pgrx::prelude::*;
 use pgrx::{log, warning};
 
+use anyhow::Context;
+
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
-
-use ethers::providers::Middleware;
-use ethers::types::{Address, BlockNumber, Filter, H256};
+use alloy::core::primitives::{Address, B256};
+use alloy::providers::Provider;
+use alloy::pubsub::SubscriptionStream;
+use alloy::rpc::types::{BlockNumberOrTag, Filter};
 
 use tokio::sync::oneshot;
 use tokio::time::{sleep, sleep_until, timeout, Duration, Instant};
@@ -116,7 +117,11 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
     }
 }
 
-pub async fn handle_log(job: &Job, log: ethers::types::Log, channel: &Channel) {
+pub async fn handle_log(
+    job: &Job,
+    log: alloy::rpc::types::Log,
+    channel: &Channel,
+) {
     let chain = &job.chain;
 
     let block = log.block_number.unwrap();
@@ -149,7 +154,7 @@ pub async fn handle_log(job: &Job, log: ethers::types::Log, channel: &Channel) {
 
             if channel.send(Message::CheckBlock(
                 *chain,
-                block.as_u64(),
+                block,
                 check_handler.as_ref().unwrap().clone(),
                 tx,
             )) {
@@ -162,12 +167,19 @@ pub async fn handle_log(job: &Job, log: ethers::types::Log, channel: &Channel) {
                             panic!("sync: events: too many retries to get the block...");
                         }
 
-                        if let Ok(Some(block)) =
-                            job.ws.as_ref().unwrap().get_block(block).await
+                        if let Ok(Some(block)) = job
+                            .ws
+                            .as_ref()
+                            .unwrap()
+                            .get_block(
+                                block.into(),
+                                alloy::rpc::types::BlockTransactionsKind::Hashes
+                            )
+                            .await
                         {
                             channel.send(Message::Block(
                                 *chain,
-                                block,
+                                block.header,
                                 block_handler.as_ref().unwrap().clone(),
                                 Some(job.id),
                             ));
@@ -240,7 +252,7 @@ pub fn handle_message(message: &Message) {
 }
 
 pub fn build_filter(options: &JobOptions) -> Filter {
-    let mut filter = Filter::new().from_block(BlockNumber::Latest);
+    let mut filter = Filter::new().from_block(BlockNumberOrTag::Latest);
 
     if let Some(address) = &options.address {
         filter = filter.address(address.parse::<Address>().unwrap());
@@ -251,27 +263,27 @@ pub fn build_filter(options: &JobOptions) -> Filter {
     }
 
     if let Some(topic0) = &options.topic0 {
-        filter = filter.topic0(topic0.parse::<H256>().unwrap());
+        filter = filter.event_signature(topic0.parse::<B256>().unwrap());
     }
 
     if let Some(topic1) = &options.topic1 {
-        filter = filter.topic1(topic1.parse::<H256>().unwrap());
+        filter = filter.topic1(topic1.parse::<B256>().unwrap());
     }
 
     if let Some(topic2) = &options.topic2 {
-        filter = filter.topic2(topic2.parse::<H256>().unwrap());
+        filter = filter.topic2(topic2.parse::<B256>().unwrap());
     }
 
     if let Some(topic3) = &options.topic3 {
-        filter = filter.topic3(topic3.parse::<H256>().unwrap());
+        filter = filter.topic3(topic3.parse::<B256>().unwrap());
     }
 
     if let Some(from_block) = &options.from_block {
-        filter = filter.from_block(from_block.clone());
+        filter = filter.from_block::<u64>((*from_block as u64).into());
     }
 
     if let Some(to_block) = &options.to_block {
-        filter = filter.to_block(to_block.clone());
+        filter = filter.to_block::<u64>((*to_block as u64).into());
     }
 
     filter
@@ -279,10 +291,11 @@ pub fn build_filter(options: &JobOptions) -> Filter {
 
 pub async fn build_stream(
     job: &Job,
-) -> Result<SubscriptionStream<'_, ethers::providers::Ws, ethers::types::Log>> {
-    let options = job.options.as_ref().context("Options not found")?;
+) -> anyhow::Result<SubscriptionStream<Log>> {
+    let options = job.options.as_ref().context("Invalid options")?;
     let filter = build_filter(&options);
 
     let provider = job.ws.as_ref().context("Invalid provider")?;
-    Ok(provider.subscribe_logs(&filter).await?)
+    let sub = provider.subscribe_logs(&filter).await?;
+    Ok(sub.into_stream())
 }
