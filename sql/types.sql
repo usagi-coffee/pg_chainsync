@@ -1,3 +1,5 @@
+CREATE SCHEMA IF NOT EXISTS chainsync;
+
 --
 CREATE TABLE chainsync.jobs (
 	id SERIAL NOT NULL,

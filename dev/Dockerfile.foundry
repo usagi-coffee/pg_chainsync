@@ -7,4 +7,3 @@ WORKDIR /root/foundry
 RUN cargo install --path ./crates/anvil --profile local --force --locked
 
 ENTRYPOINT ["anvil", "--host", "0.0.0.0", "--load-state", "state.anvil"]
-

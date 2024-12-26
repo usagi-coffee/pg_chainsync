@@ -1,8 +1,12 @@
 #!/bin/bash
 
-cargo pgrx package
-podman compose build
-(podman compose down || true)
-sleep 0.3
-podman compose up
+cleanup () {
+  (podman-compose down -t 0 || true)
+}
 
+trap "cleanup" INT
+
+cargo pgrx package
+podman-compose build
+sleep 1
+podman-compose up

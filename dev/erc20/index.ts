@@ -8,10 +8,10 @@ const CONTRACT = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
 
 const [ACCOUNT_1, ACCOUNT_2] = [
   privateKeyToAccount(
-    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
   ),
   privateKeyToAccount(
-    "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+    "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
   ),
 ];
 
@@ -21,6 +21,9 @@ const client = createWalletClient({
 });
 
 console.log("Transferring tokens every second!");
+
+// Make sure anvil is up
+await new Promise((resolve) => setTimeout(resolve, 100));
 
 // Transfer tokens every second
 setInterval(async () => {

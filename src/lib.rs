@@ -9,10 +9,10 @@ pub mod channel;
 pub mod query;
 pub mod types;
 
-pgrx::pg_module_magic!();
+::pgrx::pg_module_magic!();
 
 #[pg_schema]
-mod chainsync {
+pub mod chainsync {
     use crate::types::{Job, JobKind};
     use crate::worker;
     use crate::worker::*;
@@ -29,7 +29,7 @@ mod chainsync {
         *RESTART_COUNT.exclusive() = 0;
 
         if *WORKER_STATUS.exclusive() == WorkerStatus::STOPPED {
-            worker::spawn().load_dynamic();
+            worker::spawn().load_dynamic().unwrap();
             return;
         }
 
@@ -38,7 +38,7 @@ mod chainsync {
         let start = Instant::now();
         loop {
             if *WORKER_STATUS.share() == WorkerStatus::STOPPED {
-                worker::spawn().load_dynamic();
+                worker::spawn().load_dynamic().unwrap();
                 return;
             }
 

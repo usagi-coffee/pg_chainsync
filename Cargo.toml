@@ -4,30 +4,32 @@ version = "0.0.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "lib"]
+
+[[bin]]
+name = "pgrx_embed_pg_chainsync"
+path = "./src/bin/pgrx_embed.rs"
 
 [features]
-default = ["pg16"]
-pg15 = ["pgrx/pg15", "pgrx-tests/pg15"]
-pg16 = ["pgrx/pg16", "pgrx-tests/pg16"]
+default = ["pg17"]
+pg17 = ["pgrx/pg17", "pgrx-tests/pg17"]
 pg_test = []
 
 [dependencies]
-pgrx = "0.11.3"
-eyre = { version = "0.6" }
+pgrx = "0.12.9"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
-ethers = { version = "2.0", features = ["ws", "rustls"]}
+ethers = { version = "2.0", features = ["ws", "rustls"] }
 serde_json = { version = "1.0" }
-heapless = "0.7.16"
-serde = "1.0.162"
-tokio-cron = "0.1.2"
-cron = "0.12.0"
-anyhow = "1.0.75"
-bus = "2.4.1"
+heapless = "0.8"
+serde = "1"
+tokio-cron = "0.1"
+cron = "0.14"
+anyhow = "1"
+bus = "2.4"
 
 [dev-dependencies]
-pgrx-tests = "=0.11.3"
+pgrx-tests = "=0.12.9"
 
 [profile.dev]
 panic = "unwind"
