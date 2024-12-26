@@ -249,7 +249,7 @@ impl PgHandler for Log {
                 .map(|&topic| hex::encode(topic))
                 .collect::<Vec<String>>(),
         )?;
-        data.set_by_name("data", format!("{}", self.inner.data.data))?;
+        data.set_by_name("data", hex::encode(&self.inner.data.data))?;
 
         Spi::run_with_args(
             format!("SELECT {}($1, $2)", callback).as_str(),
