@@ -183,8 +183,8 @@ async fn handle_message(stream: &mut MessageStream) {
                     }
                 };
             }
-            Message::Block(..) => blocks::handle_message(&message),
-            Message::Event(..) => events::handle_message(&message),
+            Message::Block(..) => blocks::handle_message(message),
+            Message::Event(..) => events::handle_message(message),
             Message::CheckBlock(chain, number, callback, oneshot) => {
                 if oneshot
                     .send(blocks::check_one(&chain, &number, &callback))

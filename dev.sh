@@ -6,7 +6,7 @@ cleanup () {
 
 trap "cleanup" INT
 
-cargo pgrx package
+cargo pgrx package -d
 podman-compose build
 sleep 1
 podman-compose up

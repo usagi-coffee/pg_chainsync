@@ -1,17 +1,17 @@
-use std::fmt;
-use std::hash::Hash;
 use std::str;
+use std::sync::Arc;
 
-use serde::Deserialize;
-
-use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
 use alloy::providers::{ProviderBuilder, RootProvider, WsConnect};
 use alloy::pubsub::PubSubFrontend;
-use alloy::transports::TransportError;
+use alloy::transports::{RpcError, TransportErrorKind};
 use alloy_chains::Chain;
 
 use tokio::sync::oneshot;
+use tokio::sync::OnceCell;
+
+pub const JOB_COMPOSITE_TYPE: &str = "chainsync.Job";
 
 pub type Callback = String;
 pub type Block = alloy::rpc::types::Header;
@@ -38,67 +38,79 @@ pub enum Message {
     UpdateJob(i64, JobStatus),
 
     // Job messages
-    Block(Chain, Block, Callback, Option<i64>),
-    Event(Chain, Log, Callback, Option<i64>),
+    Block(Chain, Block, Arc<Job>),
+    Event(Chain, Log, Arc<Job>),
 
     // Utility messages
     CheckBlock(Chain, u64, Callback, oneshot::Sender<bool>),
 }
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub enum JobKind {
-    Blocks,
-    Events,
-}
-
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Job {
     pub id: i64,
-    pub kind: JobKind,
-    pub chain: Chain,
-    pub provider_url: String,
+    pub name: String,
     pub status: String,
-    pub callback: String,
-    pub oneshot: bool,
-    pub preload: bool,
-    pub cron: Option<String>,
-    pub options: Option<JobOptions>,
+    pub options: JobOptions,
 
-    pub ws: Option<RootProvider<PubSubFrontend>>,
+    #[serde(skip_serializing, skip_deserializing)]
+    pub ws: OnceCell<RootProvider<PubSubFrontend>>,
+    #[serde(skip_serializing, skip_deserializing)]
+    pub json: std::cell::OnceCell<String>,
 }
 
 impl Job {
-    pub async fn connect(&mut self) -> Result<(), TransportError> {
-        let ws = WsConnect::new(&self.provider_url);
-
-        match ProviderBuilder::new().on_ws(ws).await {
-            Ok(provider) => {
-                self.ws = Some(provider);
-                Ok(())
-            }
-            Err(err) => {
-                self.ws = None;
-                Err(err)
-            }
-        }
+    pub async fn connect(
+        &self,
+    ) -> anyhow::Result<
+        &RootProvider<PubSubFrontend>,
+        RpcError<TransportErrorKind>,
+    > {
+        let url = &self.options.provider_url;
+        self.ws
+            .get_or_try_init(|| async {
+                let ws = WsConnect::new(url);
+                ProviderBuilder::new().on_ws(ws).await
+            })
+            .await
     }
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct JobOptions {
-    /// Generic
+    /// Version of the job definition
+    pub version: u8,
+    /// Kind of job, either `blocks` job or `events` job
+    pub kind: String,
+    /// Chain id
+    pub chain: Chain,
+    /// Provider url to use for this job
+    pub provider_url: String,
+    /// If defined it will start during immediately after database startup
     pub preload: Option<bool>,
-    pub cron: Option<String>,
+    /// If defined it will split the rpc calls by the value, use when rpc limits number of blocks per call
     pub blocktick: Option<i64>,
+
+    // Range
     pub from_block: Option<i64>,
     pub to_block: Option<i64>,
 
-    /// Block job
-    // Nothing
+    // Tasks
+    /// This modifies the job to not restart
+    pub oneshot: Option<bool>,
+    /// If defined will start the job on the given cron expression
+    pub cron: Option<String>,
 
-    /// Event job
-    // If defined it awaits for block before calling the handler
-    pub await_block: Option<AwaitBlock>,
+    /// Block job
+    pub block_handler: Option<String>,
+    // TODO: hashes vs full blocks?
+
+    // Event job
+    /// Function to call when handling events
+    pub event_handler: Option<String>,
+    /// If defined it awaits for block before calling the handler
+    pub await_block: Option<bool>,
+    /// If defined it awaits for block before calling the handler
+    pub block_check_handler: Option<String>,
 
     // Filter options
     pub address: Option<String>,
@@ -109,36 +121,9 @@ pub struct JobOptions {
     pub topic3: Option<String>,
 }
 
-#[derive(Clone, Deserialize)]
-pub struct AwaitBlock {
-    pub check_handler: Option<String>,
-    pub block_handler: Option<String>,
-}
-
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ParseJobError(&'static str);
-
-impl std::str::FromStr for JobKind {
-    type Err = ParseJobError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "Blocks" => JobKind::Blocks,
-            "Events" => JobKind::Events,
-            _ => return Err(ParseJobError("Failed to parse job type")),
-        })
-    }
-}
-
-impl fmt::Display for JobKind {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            JobKind::Blocks => write!(f, "Blocks"),
-            JobKind::Events => write!(f, "Events"),
-        }
-    }
-}
 
 impl From<u8> for Signal {
     fn from(orig: u8) -> Self {
@@ -156,5 +141,52 @@ impl Into<String> for JobStatus {
             JobStatus::Stopped => "STOPPED".to_string(),
             JobStatus::Running => "RUNNING".to_string(),
         }
+    }
+}
+
+pub trait JobsUtils {
+    fn block_jobs(&self) -> Vec<Job>;
+    fn event_jobs(&self) -> Vec<Job>;
+    fn preload_jobs(&self) -> Vec<Job>;
+    fn tasks(&self) -> Vec<Job>;
+}
+
+impl JobsUtils for Vec<Job> {
+    fn block_jobs(&self) -> Vec<Job> {
+        self.iter()
+            .filter(|job| {
+                job.options.kind == "blocks"
+                    && matches!(job.options.oneshot, None | Some(false))
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn event_jobs(&self) -> Vec<Job> {
+        self.iter()
+            .filter(|job| {
+                job.options.kind == "events"
+                    && matches!(job.options.oneshot, None | Some(false))
+                    && matches!(job.options.cron, None)
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn preload_jobs(&self) -> Vec<Job> {
+        self.iter()
+            .filter(|job| matches!(job.options.preload, Some(true)))
+            .cloned()
+            .collect()
+    }
+
+    fn tasks(&self) -> Vec<Job> {
+        self.iter()
+            .filter(|job| {
+                matches!(job.options.oneshot, Some(true))
+                    || job.options.cron.is_some()
+            })
+            .cloned()
+            .collect()
     }
 }

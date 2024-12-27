@@ -23,11 +23,12 @@ SELECT chainsync.stop();
 ```
 
 ### Watching new blocks
+
 > This scenario assumes there exists blocks table with number and hash column
 
 ```sql
 -- This is your custom handler that inserts new blocks to your table
-CREATE FUNCTION custom_block_handler(block chainsync.Block, job_id bigint) RETURNS blocks
+CREATE FUNCTION custom_block_handler(block chainsync.Block, job JSONB) RETURNS blocks
 AS $$
 INSERT INTO blocks (number, hash) -- Inserting into your custom table
 VALUES (block.number, block.hash)
@@ -35,8 +36,16 @@ RETURNING *
 $$
 LANGUAGE SQL;
 
--- The arguments are chain id, websocket url and name of the handler function
-SELECT chainsync.add_blocks_job(10, 'wss://provider-url', 'custom_block_handler');
+-- Register a new job that will watch new blocks
+SELECT chainsync.register(
+  'simple-blocks',
+  '{
+    "version": 1,
+    "chain": 1,
+    "kind": "blocks",
+    "provider_url": "wss://provider-url",
+    "block_handler": "custom_block_handler"
+  }'::JSONB);
 
 -- Optional: Restart worker (or entire database)
 SELECT chainsync.restart();
@@ -55,7 +64,7 @@ The usage examples were run on PotsgreSQL 15.
 ```sql
 
 -- This is your custom handler that inserts events to your table
-CREATE FUNCTION custom_event_handler(log chainsync.Log, job_id bigint) RETURNS events
+CREATE FUNCTION custom_event_handler(log chainsync.Log, job JSONB) RETURNS events
 AS $$
 INSERT INTO events (address, data) -- Inserting into your custom table
 VALUES (log.address, log.data)
@@ -63,79 +72,91 @@ RETURNING *
 $$
 LANGUAGE SQL;
 
--- The arguments are chain id, websocket url, name of the handler function and options
-SELECT chainsync.add_events_job(
-	1,
-	'wss://provider-url',
-	'custom_event_handler',
-	-- Watch every transfer event for specific contract at address
-	'{ "address": "0x....", "event": "Transfer(address,address,uint256)" }'
+SELECT chainsync.register(
+  'custom-events',
+  '{
+    "version": 1,
+    "chain": 1,
+    "kind": "events",
+    "provider_url": "ws://provider-url",
+    "event_handler": "custom_event_handler",
+    "address": "0x....",
+    "event": "Transfer(address,address,uint256)"
+  }'::JSONB
 );
 
 -- Optional: Restart worker (or entire database)
 SELECT chainsync.restart();
 ```
 
-### Tasks
+### Oneshot tasks
 
-Task is a type of job that is designed to run only once or periodically.
-
-> Hint: Most providers limit the number of events/range of blocks returned from getLogs method so it will just fail, in this case you can use blocktick option that splits fetching into multiple calls, blocktick means range of blocks per call. This does not apply to watching events because they start from latest block.
+Oneshot Task is a type of job that is designed to run only once or manually triggered.
 
 Running this query will add a task that will fetch all transfer events for specific contract at address starting from block 12345 and fetching 10000 blocks per call once.
 
-```sql
-SELECT chainsync.add_events_task(
-    1,
-    'wss://provider-url',
-    'transfer_handler',
-    '{ 
-        "address": "0x....",
-        "event": "Transfer(address,address,uint256)",
-        "from_block": 12345,
-        "blocktick": 10000
-    }'
-);
-```
+> Hint: Most providers limit the number of events/range of blocks returned from getLogs method so it will just fail, in this case you can use blocktick option that splits fetching into multiple calls, blocktick means range of blocks per call. This does not apply to watching events because they start from latest block.
 
+```sql
+SELECT chainsync.register(
+  'oneshot-task',
+  '{
+    "version": 1,
+    "chain": 1,
+    "kind": "events",
+    "provider_url": "ws://provider-url",
+    "event_handler": "custom_event_handler",
+    "address": "0x....",
+    "event": "Transfer(address,address,uint256)",
+    "oneshot": true,
+    "from_block": 12345,
+    "blocktick": 10000
+  }'::JSONB
+);
+
+```
 
 #### Cron tasks
 
-Cron jobs are supported, you can use `add_events_cron` function to run a cron task.
+Cron tasks are supported, simply add `cron` key to your configuration json.
 
 > Hint: cron expression value should be 6 characters because it supports seconds resolution e.g `0 * * * * *` - will run every minute
 
 ```sql
-SELECT chainsync.add_events_cron(
-    1,
-    'wss://provider-url',
-    '0 * * * * *', -- Run every minute
-    'transfer_handler',
-    '{ 
-        "address": "0x....",
-        "event": "Transfer(address,address,uint256)",
-        "from_block": 12345,
-        "blocktick": 10000,
-    }'
+SELECT chainsync.register(
+  'transfers-every-minute',
+  '{
+    "version": 1,
+    "chain": 31337,
+    "kind": "events",
+    "provider_url": "wss://provider-url",
+    "event_handler": "transfer_handler",
+    "address": "0x....",
+    "event": "Transfer(address,address,uint256)",
+    "cron": "0 * * * * *",
+    "from_block": 0
+  }'::JSONB
 );
 ```
 
-
-#### Preloaded tasks 
+#### Preloaded tasks
 
 Some tasks need to be run when the database starts, for that you can use `preload_events_task`, the created task will run when the extension or the database re/starts.
 
 ```sql
-SELECT chainsync.preload_events_task(
-    1,
-    'wss://provider-url',
-    'transfer_handler',
-    '{ 
-        "address": "0x....",
-        "event": "Transfer(address,address,uint256)",
-        "from_block": 12345,
-        "blocktick": 10000
-    }'
+SELECT chainsync.register(
+  'transfers-on-restart',
+  '{
+    "version": 1,
+    "chain": 31337,
+    "kind": "events",
+    "provider_url": "wss://provider-url",
+    "event_handler": "transfer_handler",
+    "address": "0x....",
+    "event": "Transfer(address,address,uint256)",
+    "preload": true,
+    "from_block": 0
+  }'::JSONB
 );
 ```
 
@@ -143,38 +164,38 @@ SELECT chainsync.preload_events_task(
 
 `await_block` is a feature that allows you to fetch and handle event's block before handling the event. This is helpful when you want to e.g join block inside your event handler, this ensures there is always block available for your specific event when you call your event handler.
 
-You can optionally skip block fetching and handling if you specify `check_handler` property which is the name of the function that takes `(chain bigint, block bigint)` and returns any value - if it returns any value then it will skip handling this block.
-
+You can optionally skip block fetching and handling if you specify `check_block_handler` property which is the name of the function that takes `(block BIGINT, job JSONB)` and returns any value - if it returns any value then it will skip handling this block.
 
 ```sql
 -- Look for block in your schemas and return e.g block number
-CREATE FUNCTION find_block(chain BIGINT, block BIGINT) RETURNS BIGINT
+CREATE FUNCTION find_block(block BIGINT, job JSONB) RETURNS BIGINT
 AS $$
 SELECT block_column FROM your_blocks
-WHERE chain_column = chain AND block_column = block
+WHERE chain_column = job->>'options'->>'chain' AND block_column = block
 LIMIT 1
 $$ LANGUAGE SQL;
 
-SELECT chainsync.add_events_job(
-	1,
-	'wss://provider-url',
-	'custom_event_handler',
-	'{ 
-	    "address": "0x....",
-	    "event": "Transfer(address,address,uint256)",
-
-	    "await_block": {
-	        "check_handler": "find_block",
-	        "block_handler": "insert_block"
-	    }
-	}'
+SELECT chainsync.register(
+  'transfers-every-minute',
+  '{
+    "version": 1,
+    "chain": 31337,
+    "kind": "events",
+    "provider_url": "wss://provider-url",
+    "event_handler": "transfer_handler",
+    "address": "0x....",
+    "event": "Transfer(address,address,uint256)",
+    "await_block": true,
+    "block_handler": "insert_block",
+    "check_block_handler": "find_block",
+  }'::JSONB
 );
 
 ```
 
 ## Installation
 
-> ***IMPORTANT***: currently the database that the worker uses is hard-coded to `postgres` if you are using different database please modify the `DATABASE` constant inside `src/sync.rs` before building.
+> **_IMPORTANT_**: currently the database that the worker uses is hard-coded to `postgres` if you are using different database please modify the `DATABASE` constant inside `src/sync.rs` before building.
 
 ```bash
 # Install pgrx
@@ -189,7 +210,7 @@ cargo pgrx package
 # NOTICE: your built extension and database paths may be different due to how pg_config works on the machine that builds the extension
 cp target/release/pg_chainsync-.../.../pg_chainsync.so /usr/lib/postgresql/
 cp target/release/pg_chainsync-.../.../pg_chainsync--....sql /usr/share/postgresql/extension/
-cp target/release/pg_chainsync-.../.../pg_chainsync.control /usr/share/postgresql/extension/  
+cp target/release/pg_chainsync-.../.../pg_chainsync.control /usr/share/postgresql/extension/
 ```
 
 This should be enough to be able to use `CREATE EXTENSION pg_chainsync` but we also need to preload our library because this extension uses background worker so it needs to be run along with the database.
@@ -213,9 +234,9 @@ First build the extension with `cargo pgrx package` then run the docker compose 
 Volumes to adjust in `docker-compose.yml` if compiled paths are different, your pg_config should point to Postgresql 16.
 
 ```
-- ./target/release/pg_chainsync-pg16/usr/lib64/pgsql/pg_chainsync.so:/usr/lib/postgresql/16/lib/pg_chainsync.so:z
-- ./target/release/pg_chainsync-pg16/usr/share/pgsql/extension/pg_chainsync.control:/usr/share/postgresql/16/extension/pg_chainsync.control:z
-- ./target/release/pg_chainsync-pg16/usr/share/pgsql/extension/pg_chainsync--0.0.0.sql:/usr/share/postgresql/16/extension/pg_chainsync--0.0.0.sql:z
+- ./target/release/pg_chainsync-pg17/usr/lib64/pgsql/pg_chainsync.so:/usr/lib/postgresql/16/lib/pg_chainsync.so:z
+- ./target/release/pg_chainsync-pg17/usr/share/pgsql/extension/pg_chainsync.control:/usr/share/postgresql/16/extension/pg_chainsync.control:z
+- ./target/release/pg_chainsync-pg17/usr/share/pgsql/extension/pg_chainsync--0.0.0.sql:/usr/share/postgresql/16/extension/pg_chainsync--0.0.0.sql:z
 ```
 
 ## License

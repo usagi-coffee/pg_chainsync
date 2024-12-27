@@ -14,7 +14,7 @@ use tokio_cron::{Job as CronJob, Scheduler};
 
 use crate::channel::Channel;
 use crate::sync::events;
-use crate::types::{Job, JobKind, Message};
+use crate::types::*;
 
 use crate::worker::{TASKS, TASKS_PRELOADED};
 
@@ -27,16 +27,21 @@ pub async fn setup(scheduler: &mut Scheduler) {
         return;
     }
 
-    let tasks = tasks.unwrap();
+    // turn tasks to arc
+    // SAFETY: we checked error before, avoiding indent..
+    let tasks = tasks
+        .unwrap()
+        .tasks()
+        .into_iter()
+        .map(Arc::new)
+        .collect::<Vec<_>>();
 
     for task in tasks {
-        if !task.oneshot {
-            continue;
-        }
+        let id = task.id;
 
-        // Preload
+        // Enqueue preloaded tasks
         if !preloaded {
-            if task.preload {
+            if task.options.preload.is_some() {
                 if TASKS.exclusive().push(task.id).is_err() {
                     warning!("sync: tasks: failed to enqueue {}", task.id);
                 }
@@ -44,7 +49,8 @@ pub async fn setup(scheduler: &mut Scheduler) {
         }
 
         // Cron
-        if let Some(cron) = task.cron {
+        if let Some(cron) = &task.options.cron {
+            log!("sync: tasks: {} ", id);
             if Schedule::from_str(&cron).is_err() {
                 warning!(
                     "sync: tasks: task {} has incorrect cron expression {}",
@@ -55,9 +61,10 @@ pub async fn setup(scheduler: &mut Scheduler) {
                 continue;
             }
 
+            log!("sync: tasks: {}: scheduling {}", id, cron);
             scheduler.add(CronJob::new_sync(cron, move || {
-                if TASKS.exclusive().push(task.id).is_err() {
-                    warning!("sync: tasks: failed to enqueue {}", task.id);
+                if TASKS.exclusive().push(id).is_err() {
+                    warning!("sync: tasks: failed to enqueue {}", id);
                 }
             }));
         }
@@ -93,8 +100,7 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                 continue;
             }
 
-            let mut job = job.unwrap();
-
+            let job = job.unwrap();
             if let Err(err) = job.connect().await {
                 warning!(
                     "sync: tasks: failed to create provider for {}, {}",
@@ -104,160 +110,177 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                 continue;
             };
 
-            let chain = &job.chain;
-            let options = &job.options.as_ref().unwrap();
-            let ws = job.ws.as_ref().unwrap();
+            let job = Arc::new(job);
 
-            match job.kind {
-                JobKind::Blocks => {
-                    let mut to = options.to_block.unwrap_or(0);
-                    if options.to_block.is_none() {
-                        to = ws.get_block_number().await.unwrap() as i64;
-                    }
-
-                    for i in options.from_block.unwrap()..to {
-                        if let Ok(block) = ws
-                            .get_block(
-                                (i as u64).into(),
-                                alloy::rpc::types::BlockTransactionsKind::Hashes,
-                            )
-                            .await
-                        {
-                            if let Some(block) = block {
-                                channel.send(Message::Block(
-                                    *chain,
-                                    block.header,
-                                    job.callback.clone(),
-                                    Some(job.id),
-                                ));
-                            }
-                        }
-                    }
-                }
-                JobKind::Events => {
-                    let mut filter = events::build_filter(options);
-
-                    let from_block = options.from_block.unwrap_or(0);
-                    let mut to_block = options.to_block.unwrap_or(0);
-                    if options.to_block.is_none() {
-                        to_block = ws.get_block_number().await.unwrap() as i64;
-                    }
-
-                    if let Some(blocktick) = options.blocktick {
-                        let recalculate_splits =
-                            |from: i64, to: i64, blocktick: i64| {
-                                ((to - from) as f64 / blocktick as f64).ceil()
-                                    as i64
-                            };
-
-                        let mut current_blocktick = blocktick;
-                        let mut current_from = from_block;
-                        let mut splits =
-                            recalculate_splits(from_block, to_block, blocktick);
-
-                        log!("sync: tasks: {}: found {} splits", task, splits);
-
-                        let mut retries = 0;
-                        let mut i = 1;
-                        while i <= splits {
-                            let mut from =
-                                current_from + (i - 1) * current_blocktick;
-                            let to = std::cmp::min(
-                                to_block,
-                                from + current_blocktick,
-                            );
-
-                            if i > 1 {
-                                from = from + 1;
-                            }
-
-                            log!(
-                                "sync: tasks: {}: fetching blocks {} to {} ({} / {})",
-                                task,
-                                from,
-                                to,
-                                i,
-                                splits
-                            );
-
-                            filter = filter
-                                .from_block(from as u64)
-                                .to_block(to as u64);
-
-                            match ws.get_logs(&filter).await {
-                                Ok(mut logs) => {
-                                    retries = 0;
-                                    for log in logs.drain(0..) {
-                                        events::handle_log(&job, log, &channel)
-                                            .await;
-                                    }
-                                }
-                                Err(e) => {
-                                    println!("{}", e);
-                                    if current_blocktick <= 1 || retries >= 20 {
-                                        warning!(
-                                            "sync: tasks: {}: failed to fetch with reduced blocktick, aborting...",
-                                            task,
-                                        );
-
-                                        break;
-                                    }
-
-                                    log!(
-                                        "sync: tasks: {}: reducing blocktick from {} to {}",
-                                        task,
-                                        current_blocktick,
-                                        (current_blocktick as f64 / 2 as f64).floor(),
-                                    );
-
-                                    sleep_until(
-                                        Instant::now()
-                                            + Duration::from_millis(200),
-                                    )
-                                    .await;
-
-                                    current_blocktick =
-                                        (current_blocktick as f64 / 2 as f64)
-                                            .floor()
-                                            as i64;
-                                    current_from = from;
-                                    splits = recalculate_splits(
-                                        current_from,
-                                        std::cmp::min(
-                                            to_block,
-                                            current_from + current_blocktick,
-                                        ),
-                                        current_blocktick,
-                                    );
-                                    retries = 0;
-                                    i = 1;
-                                    continue;
-                                }
-                            }
-
-                            i = i + 1;
-                        }
-                    } else {
-                        match ws.get_logs(&filter).await {
-                            Ok(mut logs) => {
-                                for log in logs.drain(0..) {
-                                    events::handle_log(&job, log, &channel)
-                                        .await;
-                                }
-                            }
-                            Err(e) => {
-                                log!("{}", e);
-                                warning!(
-                                    "sync: tasks: failed to get logs for {}, aborting...",
-                                    task
-                                );
-                            }
-                        }
-                    }
+            match job.options.kind.as_str() {
+                "blocks" => handle_blocks_task(job, &channel).await,
+                "events" => handle_events_task(job, &channel).await,
+                _ => {
+                    warning!(
+                        "sync: tasks: unknown kind {} for task {}",
+                        job.options.kind,
+                        task
+                    );
                 }
             }
         }
 
         sleep_until(Instant::now() + Duration::from_millis(250)).await;
+    }
+}
+
+async fn handle_blocks_task(job: Arc<Job>, channel: &Arc<Channel>) {
+    let options = &job.options;
+
+    let mut to = options.to_block.unwrap_or(0);
+    if options.to_block.is_none() {
+        to = job
+            .connect()
+            .await
+            .unwrap()
+            .get_block_number()
+            .await
+            .unwrap() as i64;
+    }
+
+    for i in options.from_block.unwrap()..to {
+        if let Ok(block) = job
+            .connect()
+            .await
+            .unwrap()
+            .get_block(
+                (i as u64).into(),
+                alloy::rpc::types::BlockTransactionsKind::Hashes,
+            )
+            .await
+        {
+            if let Some(block) = block {
+                channel.send(Message::Block(
+                    options.chain,
+                    block.header,
+                    Arc::clone(&job),
+                ));
+            }
+        }
+    }
+}
+
+async fn handle_events_task(job: Arc<Job>, channel: &Arc<Channel>) {
+    let options = &job.options;
+
+    let mut filter = events::build_filter(options);
+
+    let from_block = options.from_block.unwrap_or(0);
+    let mut to_block = options.to_block.unwrap_or(0);
+    if options.to_block.is_none() {
+        // SAFETY: before we connected so we are safe to do all these crazy things
+        to_block = job
+            .connect()
+            .await
+            .unwrap()
+            .get_block_number()
+            .await
+            .unwrap() as i64;
+    }
+
+    // Split logs by blocktick if needed
+    if let Some(blocktick) = options.blocktick {
+        let recalculate_splits = |from: i64, to: i64, blocktick: i64| {
+            ((to - from) as f64 / blocktick as f64).ceil() as i64
+        };
+
+        let mut current_blocktick = blocktick;
+        let mut current_from = from_block;
+        let mut splits = recalculate_splits(from_block, to_block, blocktick);
+
+        log!("sync: tasks: {}: found {} splits", job.id, splits);
+
+        let mut retries = 0;
+        let mut i = 1;
+        while i <= splits {
+            let mut from = current_from + (i - 1) * current_blocktick;
+            let to = std::cmp::min(to_block, from + current_blocktick);
+
+            if i > 1 {
+                from = from + 1;
+            }
+
+            log!(
+                "sync: tasks: {}: fetching blocks {} to {} ({} / {})",
+                job.id,
+                from,
+                to,
+                i,
+                splits
+            );
+
+            filter = filter.from_block(from as u64).to_block(to as u64);
+
+            let logs = job.connect().await.unwrap().get_logs(&filter).await;
+
+            match logs {
+                Ok(mut logs) => {
+                    retries = 0;
+                    for log in logs.drain(0..) {
+                        events::handle_log(&job, log, &channel).await;
+                    }
+                }
+                Err(e) => {
+                    println!("{}", e);
+                    if current_blocktick <= 1 || retries >= 20 {
+                        warning!(
+                          "sync: tasks: {}: failed to fetch with reduced blocktick, aborting...",
+                          job.id,
+                      );
+
+                        break;
+                    }
+
+                    log!(
+                        "sync: tasks: {}: reducing blocktick from {} to {}",
+                        job.id,
+                        current_blocktick,
+                        (current_blocktick as f64 / 2 as f64).floor(),
+                    );
+
+                    sleep_until(Instant::now() + Duration::from_millis(200))
+                        .await;
+
+                    current_blocktick =
+                        (current_blocktick as f64 / 2 as f64).floor() as i64;
+                    current_from = from;
+                    splits = recalculate_splits(
+                        current_from,
+                        std::cmp::min(
+                            to_block,
+                            current_from + current_blocktick,
+                        ),
+                        current_blocktick,
+                    );
+                    retries = 0;
+                    i = 1;
+                    continue;
+                }
+            }
+
+            i = i + 1;
+        }
+    }
+    // Or just get all logs at once
+    else {
+        match job.connect().await.unwrap().get_logs(&filter).await {
+            Ok(mut logs) => {
+                for log in logs.drain(0..) {
+                    events::handle_log(&job, log, &channel).await;
+                }
+            }
+            Err(e) => {
+                log!("{}", e);
+                warning!(
+                    "sync: tasks: failed to get logs for {}, aborting...",
+                    job.id
+                );
+            }
+        }
     }
 }

@@ -19,9 +19,9 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - ./dev/dev.sql:/docker-entrypoint-initdb.d/99_dev.sql:z
-      - ./target/release/pg_chainsync-pg17/opt/postgres/pgrx-install/lib/postgresql/pg_chainsync.so:/usr/lib/postgresql/17/lib/pg_chainsync.so:z
-      - ./target/release/pg_chainsync-pg17/opt/postgres/pgrx-install/share/postgresql/extension/pg_chainsync.control:/usr/share/postgresql/17/extension/pg_chainsync.control:z
-      - ./target/release/pg_chainsync-pg17/opt/postgres/pgrx-install/share/postgresql/extension/pg_chainsync--0.0.0.sql:/usr/share/postgresql/17/extension/pg_chainsync--0.0.0.sql:z
+      - ./target/debug/pg_chainsync-pg17/opt/postgres/pgrx-install/lib/postgresql/pg_chainsync.so:/usr/lib/postgresql/17/lib/pg_chainsync.so:z
+      - ./target/debug/pg_chainsync-pg17/opt/postgres/pgrx-install/share/postgresql/extension/pg_chainsync.control:/usr/share/postgresql/17/extension/pg_chainsync.control:z
+      - ./target/debug/pg_chainsync-pg17/opt/postgres/pgrx-install/share/postgresql/extension/pg_chainsync--0.0.0.sql:/usr/share/postgresql/17/extension/pg_chainsync--0.0.0.sql:z
     ports:
       - 5432:5432
     networks:

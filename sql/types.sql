@@ -2,20 +2,13 @@ CREATE SCHEMA IF NOT EXISTS chainsync;
 
 --
 CREATE TABLE chainsync.jobs (
-	id SERIAL NOT NULL,
-	kind TEXT NOT NULL, -- Blocks, Events
-	chain_id BIGINT NOT NULL,
-	callback TEXT NOT NULL,
-	status TEXT NOT NULL DEFAULT 'STOPPED',
-	provider_url TEXT NOT NULL,
-	oneshot BOOLEAN NOT NULL,
-  preload BOOLEAN NOT NULL DEFAULT FALSE,
-  cron TEXT,
-	options JSONB
+	id SERIAL,
+	name TEXT NOT NULL,
+	options JSONB NOT NULL,
+	status TEXT DEFAULT 'STOPPED'
 );
 
 CREATE TYPE chainsync.Block AS (
-  chain BIGINT,
   number NUMERIC,
 	hash TEXT,
 	author TEXT,
@@ -33,7 +26,6 @@ CREATE TYPE chainsync.Block AS (
 );
 
 CREATE TYPE chainsync.Log AS (
-  chain BIGINT,
   block_number NUMERIC,
   block_hash TEXT,
   transaction_hash TEXT,

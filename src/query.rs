@@ -1,57 +1,25 @@
 use pgrx::prelude::*;
 use pgrx::{IntoDatum, PgOid};
 
+use tokio::sync::OnceCell;
+
 use alloy::core::hex;
 use alloy::rpc::types::Log;
-use alloy_chains::Chain;
 
 use crate::types::*;
 
 pub const BLOCK_COMPOSITE_TYPE: &str = "chainsync.Block";
 pub const LOG_COMPOSITE_TYPE: &str = "chainsync.Log";
 
-pub trait PgHandler {
-    fn call_handler(
-        &self,
-        chain: &Chain,
-        callback: &String,
-        job_id: &i64,
-    ) -> Result<(), pgrx::spi::Error>;
-}
-
 impl Job {
-    pub fn register(
-        job_type: JobKind,
-        chain_id: i64,
-        provider_url: &str,
-        callback: &str,
-        oneshot: bool,
-        preload: bool,
-        cron: Option<&str>,
-        options: pgrx::JsonB,
-    ) -> i64 {
+    pub fn register(name: String, options: pgrx::JsonB) -> i64 {
         match Spi::get_one_with_args(
-            include_str!("../sql/insert_job.sql"),
+            "INSERT INTO chainsync.jobs (name, options) VALUES ($1, $2) RETURNING id",
             vec![
                 (
                     PgOid::BuiltIn(PgBuiltInOids::TEXTOID),
-                    job_type.to_string().into_datum(),
+                    name.into_datum(),
                 ),
-                (
-                    PgOid::BuiltIn(PgBuiltInOids::INT8OID),
-                    chain_id.into_datum(),
-                ),
-                (
-                    PgOid::BuiltIn(PgBuiltInOids::TEXTOID),
-                    provider_url.into_datum(),
-                ),
-                (
-                    PgOid::BuiltIn(PgBuiltInOids::TEXTOID),
-                    callback.into_datum(),
-                ),
-                (PgOid::BuiltIn(PgBuiltInOids::BOOLOID), oneshot.into_datum()),
-                (PgOid::BuiltIn(PgBuiltInOids::BOOLOID), preload.into_datum()),
-                (PgOid::BuiltIn(PgBuiltInOids::TEXTOID), cron.into_datum()),
                 (
                     PgOid::BuiltIn(PgBuiltInOids::JSONBOID),
                     options.into_datum(),
@@ -67,7 +35,7 @@ impl Job {
         let status_text: String = status.into();
 
         Spi::run_with_args(
-            include_str!("../sql/update_job.sql"),
+            "UPDATE chainsync.jobs SET status = $1 WHERE id = $2",
             Some(vec![
                 (
                     PgOid::BuiltIn(PgBuiltInOids::TEXTOID),
@@ -87,12 +55,6 @@ impl Job {
 
             let mut jobs: Vec<Job> = Vec::new();
             while table.next().is_some() {
-                let kind = table.get_by_name::<String, &'static str>("kind");
-
-                if kind.is_err() {
-                    continue;
-                }
-
                 let options = table
                     .get_by_name::<pgrx::JsonB, &'static str>("options")
                     .unwrap()
@@ -103,39 +65,18 @@ impl Job {
                         .get_by_name::<i64, &'static str>("id")
                         .unwrap()
                         .unwrap(),
-                    kind: kind.unwrap().unwrap().parse().unwrap(),
-                    chain: Chain::try_from(
-                        table
-                            .get_by_name::<i64, &'static str>("chain_id")
-                            .unwrap()
-                            .unwrap() as u64,
-                    )
-                    .unwrap(),
-                    provider_url: table
-                        .get_by_name::<String, &'static str>("provider_url")
+                    name: table
+                        .get_by_name::<String, &'static str>("name")
                         .unwrap()
                         .unwrap(),
-                    callback: table
-                        .get_by_name::<String, &'static str>("callback")
-                        .unwrap()
-                        .unwrap(),
+                    options: serde_json::from_value(options.0)
+                        .expect("Invalid options"),
                     status: table
                         .get_by_name::<String, &'static str>("status")
                         .unwrap()
                         .unwrap(),
-                    oneshot: table
-                        .get_by_name::<bool, &'static str>("oneshot")
-                        .unwrap()
-                        .unwrap(),
-                    preload: table
-                        .get_by_name::<bool, &'static str>("preload")
-                        .unwrap()
-                        .unwrap(),
-                    cron: table
-                        .get_by_name::<String, &'static str>("cron")
-                        .unwrap(),
-                    options: serde_json::from_value(options.0).unwrap_or(None),
-                    ws: None,
+                    ws: OnceCell::const_new(),
+                    json: std::cell::OnceCell::new(),
                 });
             }
 
@@ -144,17 +85,23 @@ impl Job {
     }
 }
 
+pub trait PgHandler {
+    fn call_handler(
+        &self,
+        handler: &String,
+        job: pgrx::JsonB,
+    ) -> Result<(), pgrx::spi::Error>;
+}
+
 impl PgHandler for Block {
     fn call_handler(
         &self,
-        chain: &Chain,
-        callback: &String,
-        job_id: &i64,
+        handler: &String,
+        job: pgrx::JsonB,
     ) -> Result<(), pgrx::spi::Error> {
         let mut data =
             PgHeapTuple::new_composite_type(BLOCK_COMPOSITE_TYPE).unwrap();
 
-        data.set_by_name("chain", chain.id() as i64)?;
         data.set_by_name("number", pgrx::AnyNumeric::try_from(self.number))?;
         data.set_by_name("hash", hex::encode(self.hash))?;
         data.set_by_name("author", hex::encode(self.beneficiary))?;
@@ -202,13 +149,13 @@ impl PgHandler for Block {
         )?;
 
         Spi::run_with_args(
-            format!("SELECT {}($1, $2)", callback).as_str(),
+            format!("SELECT {}($1, $2)", handler).as_str(),
             Some(vec![
                 (
                     PgOid::Custom(data.composite_type_oid().unwrap()),
                     data.into_datum(),
                 ),
-                (PgOid::BuiltIn(PgBuiltInOids::INT8OID), job_id.into_datum()),
+                (PgOid::BuiltIn(PgBuiltInOids::JSONBOID), job.into_datum()),
             ]),
         )
     }
@@ -217,14 +164,12 @@ impl PgHandler for Block {
 impl PgHandler for Log {
     fn call_handler(
         &self,
-        chain: &Chain,
-        callback: &String,
-        job_id: &i64,
+        handler: &String,
+        job: pgrx::JsonB,
     ) -> Result<(), pgrx::spi::Error> {
         let mut data =
             PgHeapTuple::new_composite_type(LOG_COMPOSITE_TYPE).unwrap();
 
-        data.set_by_name("chain", chain.id() as i64)?;
         data.set_by_name(
             "block_number",
             pgrx::AnyNumeric::try_from(
@@ -252,13 +197,13 @@ impl PgHandler for Log {
         data.set_by_name("data", hex::encode(&self.inner.data.data))?;
 
         Spi::run_with_args(
-            format!("SELECT {}($1, $2)", callback).as_str(),
+            format!("SELECT {}($1, $2)", handler).as_str(),
             Some(vec![
                 (
                     PgOid::Custom(data.composite_type_oid().unwrap()),
                     data.into_datum(),
                 ),
-                (PgOid::BuiltIn(PgBuiltInOids::INT8OID), job_id.into_datum()),
+                (PgOid::BuiltIn(PgBuiltInOids::JSONBOID), job.into_datum()),
             ]),
         )
     }

@@ -1,8 +1,6 @@
 use pgrx::prelude::*;
 use pgrx::{log, warning};
 
-use anyhow::Context;
-
 use std::sync::Arc;
 
 use alloy::core::primitives::{Address, B256};
@@ -26,14 +24,16 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
             break;
         }
 
-        if let Ok(mut jobs) = rx.await {
+        if let Ok(jobs) = rx.await {
+            let mut jobs = jobs
+                .event_jobs()
+                .into_iter()
+                .map(Arc::new)
+                .collect::<Vec<_>>();
+
             let mut map = StreamMap::new();
 
             for job in jobs.iter_mut() {
-                if job.kind != JobKind::Events || job.oneshot {
-                    continue;
-                }
-
                 if let Err(err) = job.connect().await {
                     warning!("sync: events: {}: ws: {}", job.id, err);
                     continue 'sync;
@@ -42,14 +42,6 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 
             for i in 0..jobs.len() {
                 let job = &jobs[i];
-
-                if job.kind != JobKind::Events || job.oneshot {
-                    continue;
-                }
-
-                if job.ws.is_none() {
-                    continue 'sync;
-                }
 
                 match build_stream(&job).await {
                     Ok(stream) => {
@@ -102,7 +94,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         }
 
                         // SAFETY: unwrap is safe because we checked for None
-                        handle_log(job, log.unwrap(), &channel).await;
+                        handle_log(&job, log.unwrap(), &channel).await;
                     }
                     // If it took more than 1 second the stream is probably drained so we can "almost"
                     // safely restart the providers
@@ -118,12 +110,10 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 }
 
 pub async fn handle_log(
-    job: &Job,
+    job: &Arc<Job>,
     log: alloy::rpc::types::Log,
     channel: &Channel,
 ) {
-    let chain = &job.chain;
-
     let block = log.block_number.unwrap();
 
     if log.log_index.is_none() {
@@ -136,77 +126,64 @@ pub async fn handle_log(
 
     log!(
         "sync: events: {}: found {}<{}> at {}",
-        chain,
+        job.options.chain,
         transaction,
         index,
         block
     );
 
-    if let Some(options) = &job.options {
-        // Await for block logic
-        if let Some(options) = &options.await_block {
-            let AwaitBlock {
-                check_handler,
-                block_handler,
-            } = &options;
+    // Await for block logic
+    if matches!(job.options.await_block, Some(true)) {
+        let (tx, rx) = oneshot::channel::<bool>();
 
-            let (tx, rx) = oneshot::channel::<bool>();
-
-            if channel.send(Message::CheckBlock(
-                *chain,
-                block,
-                check_handler.as_ref().unwrap().clone(),
-                tx,
-            )) {
-                let found = rx.await;
-                if found.is_ok() && found.unwrap() == false {
-                    // Retry finding block until available
-                    let mut retries = 0;
-                    loop {
-                        if retries > 20 {
-                            panic!("sync: events: too many retries to get the block...");
-                        }
-
-                        if let Ok(Some(block)) = job
-                            .ws
-                            .as_ref()
-                            .unwrap()
-                            .get_block(
-                                block.into(),
-                                alloy::rpc::types::BlockTransactionsKind::Hashes
-                            )
-                            .await
-                        {
-                            channel.send(Message::Block(
-                                *chain,
-                                block.header,
-                                block_handler.as_ref().unwrap().clone(),
-                                Some(job.id),
-                            ));
-                            break;
-                        }
-
-                        log!(
-                            "sync: events: could not find block {}, retrying",
-                            block
-                        );
-                        sleep(Duration::from_millis(1000)).await;
-                        retries = retries + 1;
+        if channel.send(Message::CheckBlock(
+            job.options.chain,
+            block,
+            job.options.block_check_handler.to_owned().unwrap(),
+            tx,
+        )) {
+            let found = rx.await;
+            if found.is_ok() && found.unwrap() == false {
+                // Retry finding block until available
+                let mut retries = 0;
+                loop {
+                    if retries > 20 {
+                        panic!("sync: events: too many retries to get the block...");
                     }
+
+                    if let Ok(Some(block)) = job
+                        .connect()
+                        .await
+                        .unwrap()
+                        .get_block(
+                            block.into(),
+                            alloy::rpc::types::BlockTransactionsKind::Hashes,
+                        )
+                        .await
+                    {
+                        channel.send(Message::Block(
+                            job.options.chain,
+                            block.header,
+                            Arc::clone(job),
+                        ));
+                        break;
+                    }
+
+                    log!(
+                        "sync: events: could not find block {}, retrying",
+                        block
+                    );
+                    sleep(Duration::from_millis(1000)).await;
+                    retries = retries + 1;
                 }
             }
         }
     }
 
-    if !channel.send(Message::Event(
-        *chain,
-        log,
-        job.callback.clone(),
-        Some(job.id),
-    )) {
+    if !channel.send(Message::Event(job.options.chain, log, Arc::clone(job))) {
         warning!(
             "sync: events: {}: failed to send {}<{}>",
-            job.chain,
+            job.options.chain,
             transaction,
             index
         )
@@ -216,8 +193,8 @@ pub async fn handle_log(
 use crate::query::PgHandler;
 use pgrx::bgworkers::BackgroundWorker;
 
-pub fn handle_message(message: &Message) {
-    let Message::Event(chain, log, callback, job) = message else {
+pub fn handle_message(message: Message) {
+    let Message::Event(chain, log, job) = message else {
         return;
     };
 
@@ -226,9 +203,19 @@ pub fn handle_message(message: &Message) {
 
     log!("sync: events: {}: adding {}<{}>", chain, transaction, index);
 
+    let handler = job
+        .options
+        .event_handler
+        .as_ref()
+        .expect("sync: events: missing handler");
+    let json = pgrx::JsonB(
+        serde_json::to_value(&job)
+            .expect("sync: events: failed to serialize job"),
+    );
+
     BackgroundWorker::transaction(|| {
         PgTryBuilder::new(|| {
-            log.call_handler(&chain, &callback, &job.unwrap_or(-1))
+            log.call_handler(&handler, json)
                 .expect("sync: events: failed to call the handler")
         })
         .catch_rust_panic(|e| {
@@ -292,10 +279,7 @@ pub fn build_filter(options: &JobOptions) -> Filter {
 pub async fn build_stream(
     job: &Job,
 ) -> anyhow::Result<SubscriptionStream<Log>> {
-    let options = job.options.as_ref().context("Invalid options")?;
-    let filter = build_filter(&options);
-
-    let provider = job.ws.as_ref().context("Invalid provider")?;
-    let sub = provider.subscribe_logs(&filter).await?;
+    let filter = build_filter(&job.options);
+    let sub = job.connect().await.unwrap().subscribe_logs(&filter).await?;
     Ok(sub.into_stream())
 }

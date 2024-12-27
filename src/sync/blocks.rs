@@ -27,14 +27,16 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
             break;
         }
 
-        if let Ok(mut jobs) = rx.await {
+        if let Ok(jobs) = rx.await {
+            let mut jobs = jobs
+                .block_jobs()
+                .into_iter()
+                .map(Arc::new)
+                .collect::<Vec<_>>();
+
             let mut map = StreamMap::new();
 
             for job in jobs.iter_mut() {
-                if job.kind != JobKind::Blocks || job.oneshot {
-                    continue;
-                }
-
                 match job.connect().await {
                     Ok(_) => {}
                     Err(err) => {
@@ -46,14 +48,6 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 
             for i in 0..jobs.len() {
                 let job = &jobs[i];
-
-                if job.kind != JobKind::Blocks || job.oneshot {
-                    continue;
-                }
-
-                if job.ws.is_none() {
-                    continue 'sync;
-                }
 
                 match build_stream(&job).await {
                     Ok(stream) => {
@@ -125,38 +119,42 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 }
 
 pub async fn handle_block(
-    job: &Job,
+    job: &Arc<Job>,
     block: alloy::rpc::types::Header,
     channel: &Channel,
 ) {
-    let chain = &job.chain;
-
     let number = block.number;
-    log!("sync: blocks: {}: found {}", chain, number);
+    log!("sync: blocks: {}: found {}", job.options.chain, number);
 
-    channel.send(Message::Block(
-        *chain,
-        block,
-        job.callback.clone(),
-        Some(job.id),
-    ));
+    channel.send(Message::Block(job.options.chain, block, Arc::clone(job)));
 }
 
 use crate::query::PgHandler;
 use pgrx::bgworkers::BackgroundWorker;
 
-pub fn handle_message(message: &Message) {
-    let Message::Block(chain, block, callback, job_id) = message else {
+pub fn handle_message(message: Message) {
+    let Message::Block(chain, block, job) = message else {
         return;
     };
 
     let number = block.number;
     log!("sync: blocks: {}: adding {}", chain, number);
 
+    let handler = job
+        .options
+        .block_handler
+        .as_ref()
+        .expect("sync: blocks: missing handler");
+
+    let json = pgrx::JsonB(
+        serde_json::to_value(&job)
+            .expect("sync: blocks: failed to serialize job"),
+    );
+
     BackgroundWorker::transaction(|| {
         PgTryBuilder::new(|| {
             block
-                .call_handler(&chain, callback, &job_id.unwrap_or(-1))
+                .call_handler(&handler, json)
                 .expect("sync: blocks: failed to call the handler {}")
         })
         .catch_rust_panic(|e| {
@@ -208,7 +206,7 @@ pub fn check_one(chain: &Chain, number: &u64, callback: &String) -> bool {
 pub async fn build_stream(
     job: &Job,
 ) -> anyhow::Result<SubscriptionStream<Header>> {
-    let provider = job.ws.as_ref().context("Invalid provider")?;
+    let provider = job.connect().await.context("Invalid provider")?;
     let sub = provider.subscribe_blocks().await?;
     Ok(sub.into_stream())
 }
