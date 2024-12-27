@@ -113,8 +113,12 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
             let job = Arc::new(job);
 
             match job.options.kind.as_str() {
-                "blocks" => handle_blocks_task(job, &channel).await,
-                "events" => handle_events_task(job, &channel).await,
+                "blocks" => {
+                    handle_blocks_task(Arc::clone(&job), &channel).await
+                }
+                "events" => {
+                    handle_events_task(Arc::clone(&job), &channel).await
+                }
                 _ => {
                     warning!(
                         "sync: tasks: unknown kind {} for task {}",
@@ -123,6 +127,8 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                     );
                 }
             }
+
+            channel.send(Message::TaskSuccess(Arc::clone(&job)));
         }
 
         sleep_until(Instant::now() + Duration::from_millis(250)).await;
@@ -280,6 +286,7 @@ async fn handle_events_task(job: Arc<Job>, channel: &Arc<Channel>) {
                     "sync: tasks: failed to get logs for {}, aborting...",
                     job.id
                 );
+                channel.send(Message::TaskFailure(Arc::clone(&job)));
             }
         }
     }

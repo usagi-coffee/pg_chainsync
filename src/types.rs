@@ -35,11 +35,14 @@ pub enum JobStatus {
 pub enum Message {
     Job(i64, oneshot::Sender<Option<Job>>),
     Jobs(oneshot::Sender<Vec<Job>>),
-    UpdateJob(i64, JobStatus),
+    UpdateJob(JobStatus, Arc<Job>),
 
-    // Job messages
     Block(Chain, Block, Arc<Job>),
     Event(Chain, Log, Arc<Job>),
+
+    // Tasks
+    TaskSuccess(Arc<Job>),
+    TaskFailure(Arc<Job>),
 
     // Utility messages
     CheckBlock(Chain, u64, Callback, oneshot::Sender<bool>),
@@ -99,6 +102,10 @@ pub struct JobOptions {
     pub oneshot: Option<bool>,
     /// If defined will start the job on the given cron expression
     pub cron: Option<String>,
+
+    // Handlers
+    pub success_handler: Option<String>,
+    pub failure_handler: Option<String>,
 
     /// Block job
     pub block_handler: Option<String>,

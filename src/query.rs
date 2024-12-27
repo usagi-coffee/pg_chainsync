@@ -83,6 +83,19 @@ impl Job {
             Ok(jobs)
         })
     }
+
+    pub fn handler(
+        handler: &String,
+        json: pgrx::JsonB,
+    ) -> Result<(), pgrx::spi::Error> {
+        Spi::run_with_args(
+            format!("SELECT {}($1)", handler).as_str(),
+            Some(vec![(
+                PgOid::BuiltIn(PgBuiltInOids::JSONBOID),
+                json.into_datum(),
+            )]),
+        )
+    }
 }
 
 pub trait PgHandler {

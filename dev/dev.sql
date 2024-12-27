@@ -19,6 +19,13 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+CREATE FUNCTION success_handler(job JSONB) RETURNS VOID
+AS $$
+BEGIN
+  RAISE LOG 'Task succesfully executed %', job;
+END;
+$$ LANGUAGE plpgsql;
+
 SELECT chainsync.register(
   'simple-blocks',
   '{
@@ -43,7 +50,7 @@ SELECT chainsync.register(
 );
 
 SELECT chainsync.register(
-  'erc20-transfer',
+  'erc20-task',
   '{
     "version": 1,
     "chain": 31337,
@@ -51,6 +58,7 @@ SELECT chainsync.register(
     "provider_url": "ws://pg-chainsync-foundry:8545",
     "event_handler": "transfer_handler",
     "address": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+    "success_handler": "success_handler",
     "event": "Transfer(address,address,uint256)",
     "from_block": 0,
     "cron": "0 * * * * *"

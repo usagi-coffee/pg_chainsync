@@ -149,42 +149,51 @@ async fn handle_message(stream: &mut MessageStream) {
                     warning!("sync: jobs: failed to send on channel");
                 }
             }
-            Message::UpdateJob(id, status) => {
-                // TODO: query_one
-                let jobs = BackgroundWorker::transaction(|| {
-                    PgTryBuilder::new(Job::query_all)
+            Message::UpdateJob(status, job) => {
+                let id = job.id;
+                BackgroundWorker::transaction(|| {
+                    PgTryBuilder::new(|| Job::update(id, status))
                         .catch_others(|_| Err(pgrx::spi::Error::NoTupleTable))
                         .execute()
                 })
-                .unwrap_or(Vec::new());
-
-                match jobs.into_iter().find(|job| job.id == id) {
-                    Some(job) => {
-                        if let Err(error) =
-                            BackgroundWorker::transaction(|| {
-                                PgTryBuilder::new(|| {
-                                    Job::update(job.id, status)
-                                })
-                                .catch_others(|_| {
-                                    Err(pgrx::spi::Error::NoTupleTable)
-                                })
-                                .execute()
-                            })
-                        {
-                            warning!(
-                                "sync: job: {}, failed to update status {}",
-                                id,
-                                error
-                            );
-                        }
-                    }
-                    None => {
-                        warning!("sync: job: {}, could not update status", id);
-                    }
-                };
+                .expect("sync: jobs: failed to update job status");
             }
             Message::Block(..) => blocks::handle_message(message),
             Message::Event(..) => events::handle_message(message),
+            Message::TaskSuccess(job) => {
+                if let Some(handler) = job.options.success_handler.as_ref() {
+                    let json = pgrx::JsonB(
+                        serde_json::to_value(&job)
+                            .expect("sync: tasks: failed to serialize job"),
+                    );
+
+                    BackgroundWorker::transaction(|| {
+                        PgTryBuilder::new(|| Job::handler(&handler, json))
+                            .catch_others(|_| {
+                                Err(pgrx::spi::Error::NoTupleTable)
+                            })
+                            .execute()
+                    })
+                    .expect("sync: tasks: failed to execute success handler");
+                }
+            }
+            Message::TaskFailure(job) => {
+                if let Some(handler) = job.options.failure_handler.as_ref() {
+                    let json = pgrx::JsonB(
+                        serde_json::to_value(&job)
+                            .expect("sync: tasks: failed to serialize job"),
+                    );
+
+                    BackgroundWorker::transaction(|| {
+                        PgTryBuilder::new(|| Job::handler(&handler, json))
+                            .catch_others(|_| {
+                                Err(pgrx::spi::Error::NoTupleTable)
+                            })
+                            .execute()
+                    })
+                    .expect("sync: tasks: failed to execute failure handler");
+                }
+            }
             Message::CheckBlock(chain, number, callback, oneshot) => {
                 if oneshot
                     .send(blocks::check_one(&chain, &number, &callback))
