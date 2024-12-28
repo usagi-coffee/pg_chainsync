@@ -69,14 +69,14 @@ impl Job {
                         .get_by_name::<String, &'static str>("name")
                         .unwrap()
                         .unwrap(),
-                    options: serde_json::from_value(options.0)
+                    options: serde_json::from_value(options.0.clone())
                         .expect("Invalid options"),
                     status: table
                         .get_by_name::<String, &'static str>("status")
                         .unwrap()
                         .unwrap(),
                     ws: OnceCell::const_new(),
-                    json: std::cell::OnceCell::new(),
+                    json: options.0,
                 });
             }
 
@@ -86,14 +86,15 @@ impl Job {
 
     pub fn handler(
         handler: &String,
+        id: i64,
         json: pgrx::JsonB,
     ) -> Result<(), pgrx::spi::Error> {
         Spi::run_with_args(
-            format!("SELECT {}($1)", handler).as_str(),
-            Some(vec![(
-                PgOid::BuiltIn(PgBuiltInOids::JSONBOID),
-                json.into_datum(),
-            )]),
+            format!("SELECT {}($1, $2)", handler).as_str(),
+            Some(vec![
+                (PgOid::BuiltIn(PgBuiltInOids::INT8OID), id.into_datum()),
+                (PgOid::BuiltIn(PgBuiltInOids::JSONBOID), json.into_datum()),
+            ]),
         )
     }
 }

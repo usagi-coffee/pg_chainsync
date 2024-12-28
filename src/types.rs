@@ -45,7 +45,7 @@ pub enum Message {
     TaskFailure(Arc<Job>),
 
     // Utility messages
-    CheckBlock(Chain, u64, Callback, oneshot::Sender<bool>),
+    CheckBlock(u64, oneshot::Sender<bool>, Arc<Job>),
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -58,7 +58,7 @@ pub struct Job {
     #[serde(skip_serializing, skip_deserializing)]
     pub ws: OnceCell<RootProvider<PubSubFrontend>>,
     #[serde(skip_serializing, skip_deserializing)]
-    pub json: std::cell::OnceCell<String>,
+    pub json: serde_json::Value,
 }
 
 impl Job {
@@ -80,10 +80,6 @@ impl Job {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct JobOptions {
-    /// Version of the job definition
-    pub version: u8,
-    /// Kind of job, either `blocks` job or `events` job
-    pub kind: String,
     /// Chain id
     pub chain: Chain,
     /// Provider url to use for this job
@@ -128,6 +124,17 @@ pub struct JobOptions {
     pub topic3: Option<String>,
 }
 
+impl JobOptions {
+    pub fn is_block_job(&self) -> bool {
+        matches!(self.event_handler, None)
+            && matches!(self.block_handler, Some(_))
+    }
+
+    pub fn is_event_job(&self) -> bool {
+        matches!(self.event_handler, Some(_))
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ParseJobError(&'static str);
@@ -162,8 +169,10 @@ impl JobsUtils for Vec<Job> {
     fn block_jobs(&self) -> Vec<Job> {
         self.iter()
             .filter(|job| {
-                job.options.kind == "blocks"
+                job.options.is_block_job()
                     && matches!(job.options.oneshot, None | Some(false))
+                    && matches!(job.options.cron, None)
+                    && matches!(job.options.preload, None | Some(false))
             })
             .cloned()
             .collect()
@@ -172,9 +181,10 @@ impl JobsUtils for Vec<Job> {
     fn event_jobs(&self) -> Vec<Job> {
         self.iter()
             .filter(|job| {
-                job.options.kind == "events"
+                job.options.is_event_job()
                     && matches!(job.options.oneshot, None | Some(false))
                     && matches!(job.options.cron, None)
+                    && matches!(job.options.preload, None | Some(false))
             })
             .cloned()
             .collect()

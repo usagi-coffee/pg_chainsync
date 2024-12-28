@@ -13,7 +13,6 @@ use bus::BusReader;
 use alloy::providers::Provider;
 use alloy::pubsub::SubscriptionStream;
 use alloy::rpc::types::Header;
-use alloy_chains::Chain;
 
 use crate::types::Job;
 
@@ -146,10 +145,7 @@ pub fn handle_message(message: Message) {
         .as_ref()
         .expect("sync: blocks: missing handler");
 
-    let json = pgrx::JsonB(
-        serde_json::to_value(&job)
-            .expect("sync: blocks: failed to serialize job"),
-    );
+    let json = pgrx::JsonB(job.json.clone());
 
     BackgroundWorker::transaction(|| {
         PgTryBuilder::new(|| {
@@ -169,20 +165,17 @@ pub fn handle_message(message: Message) {
     });
 }
 
-pub fn check_one(chain: &Chain, number: &u64, callback: &String) -> bool {
+pub fn check_one(number: &u64, handler: &String, job: pgrx::JsonB) -> bool {
     BackgroundWorker::transaction(|| {
         PgTryBuilder::new(|| {
             let found = Spi::get_one_with_args::<i64>(
-                format!("SELECT {}($1, $2)", callback).as_str(),
+                format!("SELECT {}($1, $2)", handler).as_str(),
                 vec![
-                    (
-                        PgOid::BuiltIn(PgBuiltInOids::INT8OID),
-                        (chain.id() as i64).into_datum(),
-                    ),
                     (
                         PgOid::BuiltIn(PgBuiltInOids::INT8OID),
                         (*number as i64).into_datum(),
                     ),
+                    (PgOid::BuiltIn(PgBuiltInOids::JSONBOID), job.into_datum()),
                 ],
             );
 

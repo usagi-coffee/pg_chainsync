@@ -40,9 +40,7 @@ LANGUAGE SQL;
 SELECT chainsync.register(
   'simple-blocks',
   '{
-    "version": 1,
     "chain": 1,
-    "kind": "blocks",
     "provider_url": "wss://provider-url",
     "block_handler": "custom_block_handler"
   }'::JSONB);
@@ -75,9 +73,7 @@ LANGUAGE SQL;
 SELECT chainsync.register(
   'custom-events',
   '{
-    "version": 1,
     "chain": 1,
-    "kind": "events",
     "provider_url": "ws://provider-url",
     "event_handler": "custom_event_handler",
     "address": "0x....",
@@ -101,9 +97,7 @@ Running this query will add a task that will fetch all transfer events for speci
 SELECT chainsync.register(
   'oneshot-task',
   '{
-    "version": 1,
     "chain": 1,
-    "kind": "events",
     "provider_url": "ws://provider-url",
     "event_handler": "custom_event_handler",
     "address": "0x....",
@@ -126,9 +120,7 @@ Cron tasks are supported, simply add `cron` key to your configuration json.
 SELECT chainsync.register(
   'transfers-every-minute',
   '{
-    "version": 1,
     "chain": 31337,
-    "kind": "events",
     "provider_url": "wss://provider-url",
     "event_handler": "transfer_handler",
     "address": "0x....",
@@ -147,9 +139,7 @@ Some tasks need to be run when the database starts, for that you can use `preloa
 SELECT chainsync.register(
   'transfers-on-restart',
   '{
-    "version": 1,
     "chain": 31337,
-    "kind": "events",
     "provider_url": "wss://provider-url",
     "event_handler": "transfer_handler",
     "address": "0x....",
@@ -164,7 +154,7 @@ SELECT chainsync.register(
 
 `await_block` is a feature that allows you to fetch and handle event's block before handling the event. This is helpful when you want to e.g join block inside your event handler, this ensures there is always block available for your specific event when you call your event handler.
 
-You can optionally skip block fetching and handling if you specify `check_block_handler` property which is the name of the function that takes `(block BIGINT, job JSONB)` and returns any value - if it returns any value then it will skip handling this block.
+You can optionally skip block fetching and handling if you specify `block_check_handler` property which is the name of the function that takes `(block BIGINT, job JSONB)` and returns any value - if it returns any value then it will skip handling this block.
 
 ```sql
 -- Look for block in your schemas and return e.g block number
@@ -178,16 +168,14 @@ $$ LANGUAGE SQL;
 SELECT chainsync.register(
   'transfers-every-minute',
   '{
-    "version": 1,
     "chain": 31337,
-    "kind": "events",
     "provider_url": "wss://provider-url",
     "event_handler": "transfer_handler",
     "address": "0x....",
     "event": "Transfer(address,address,uint256)",
     "await_block": true,
     "block_handler": "insert_block",
-    "check_block_handler": "find_block",
+    "block_check_handler": "find_block",
   }'::JSONB
 );
 
@@ -227,14 +215,14 @@ After altering the config restart your database and you can check postgres logs 
 
 ## Demo
 
-You can check out how the extension work in action by running the development docker-compose file with `docker compose` or `podman compose`.
+You can check out how the extension work in action by running the development docker-compose file with `docker compose` or `podman compose`, you can find the example in `dev/dev.sql` file.
 
 First build the extension with `cargo pgrx package` then run the docker compose command, it will run the database, run the extension and listen for some events that get sent by erc20 container.
 
-Volumes to adjust in `docker-compose.yml` if compiled paths are different, your pg_config should point to Postgresql 16.
+Volumes to adjust in `docker-compose.yml` if compiled paths are different, your `pg_config` should point to your Postgres 17, keep in mind these paths will vary depending on your `pg_config`
 
 ```
-- ./target/release/pg_chainsync-pg17/usr/lib64/pgsql/pg_chainsync.so:/usr/lib/postgresql/16/lib/pg_chainsync.so:z
+- ./target/release/pg_chainsync-pg17/usr/lib64/pgsql/pg_chainsync.so:/usr/lib/postgresql/17/lib/pg_chainsync.so:z
 - ./target/release/pg_chainsync-pg17/usr/share/pgsql/extension/pg_chainsync.control:/usr/share/postgresql/16/extension/pg_chainsync.control:z
 - ./target/release/pg_chainsync-pg17/usr/share/pgsql/extension/pg_chainsync--0.0.0.sql:/usr/share/postgresql/16/extension/pg_chainsync--0.0.0.sql:z
 ```

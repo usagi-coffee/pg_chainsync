@@ -162,13 +162,11 @@ async fn handle_message(stream: &mut MessageStream) {
             Message::Event(..) => events::handle_message(message),
             Message::TaskSuccess(job) => {
                 if let Some(handler) = job.options.success_handler.as_ref() {
-                    let json = pgrx::JsonB(
-                        serde_json::to_value(&job)
-                            .expect("sync: tasks: failed to serialize job"),
-                    );
+                    let id = job.id;
+                    let json = pgrx::JsonB(job.json.clone());
 
                     BackgroundWorker::transaction(|| {
-                        PgTryBuilder::new(|| Job::handler(&handler, json))
+                        PgTryBuilder::new(|| Job::handler(&handler, id, json))
                             .catch_others(|_| {
                                 Err(pgrx::spi::Error::NoTupleTable)
                             })
@@ -179,13 +177,11 @@ async fn handle_message(stream: &mut MessageStream) {
             }
             Message::TaskFailure(job) => {
                 if let Some(handler) = job.options.failure_handler.as_ref() {
-                    let json = pgrx::JsonB(
-                        serde_json::to_value(&job)
-                            .expect("sync: tasks: failed to serialize job"),
-                    );
+                    let id = job.id;
+                    let json = pgrx::JsonB(job.json.clone());
 
                     BackgroundWorker::transaction(|| {
-                        PgTryBuilder::new(|| Job::handler(&handler, json))
+                        PgTryBuilder::new(|| Job::handler(&handler, id, json))
                             .catch_others(|_| {
                                 Err(pgrx::spi::Error::NoTupleTable)
                             })
@@ -194,12 +190,17 @@ async fn handle_message(stream: &mut MessageStream) {
                     .expect("sync: tasks: failed to execute failure handler");
                 }
             }
-            Message::CheckBlock(chain, number, callback, oneshot) => {
-                if oneshot
-                    .send(blocks::check_one(&chain, &number, &callback))
-                    .is_err()
+            Message::CheckBlock(number, oneshot, job) => {
+                if let Some(handler) = job.options.block_check_handler.as_ref()
                 {
-                    warning!("sync: check_block: failed to send on channel, event job stalled");
+                    let json = pgrx::JsonB(job.json.clone());
+
+                    if oneshot
+                        .send(blocks::check_one(&number, handler, json))
+                        .is_err()
+                    {
+                        warning!("sync: check_block: failed to send on channel, event job stalled");
+                    }
                 }
             }
         }

@@ -75,7 +75,7 @@ mod chainsync {
             .expect("Invalid options provided");
 
         // Validate cron expression
-        if let Some(cron) = configuration.cron {
+        if let Some(cron) = &configuration.cron {
             if Schedule::from_str(&cron).is_err() {
                 panic!("incorrect cron expression")
             }
@@ -84,14 +84,14 @@ mod chainsync {
         let id = Job::register(name.into(), options);
 
         // Send signal to the worker to restart the loop
-        if configuration.kind == "blocks" {
+        if configuration.is_block_job() {
             if let Err(_) = SIGNALS
                 .exclusive()
                 .push(crate::types::Signal::RestartBlocks as u8)
             {
                 panic!("failed to send restart signal");
             }
-        } else if configuration.kind == "events" {
+        } else if configuration.is_event_job() {
             if let Err(_) = SIGNALS
                 .exclusive()
                 .push(crate::types::Signal::RestartEvents as u8)

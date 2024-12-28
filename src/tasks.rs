@@ -112,20 +112,12 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
 
             let job = Arc::new(job);
 
-            match job.options.kind.as_str() {
-                "blocks" => {
-                    handle_blocks_task(Arc::clone(&job), &channel).await
-                }
-                "events" => {
-                    handle_events_task(Arc::clone(&job), &channel).await
-                }
-                _ => {
-                    warning!(
-                        "sync: tasks: unknown kind {} for task {}",
-                        job.options.kind,
-                        task
-                    );
-                }
+            if job.options.is_block_job() {
+                handle_blocks_task(Arc::clone(&job), &channel).await
+            } else if job.options.is_event_job() {
+                handle_events_task(Arc::clone(&job), &channel).await
+            } else {
+                warning!("sync: tasks: unknown  task {}", task);
             }
 
             channel.send(Message::TaskSuccess(Arc::clone(&job)));
@@ -174,19 +166,21 @@ async fn handle_blocks_task(job: Arc<Job>, channel: &Arc<Channel>) {
 async fn handle_events_task(job: Arc<Job>, channel: &Arc<Channel>) {
     let options = &job.options;
 
-    let mut filter = events::build_filter(options);
+    // SAFETY: before we connected so we are safe to do all these crazy things
+    let block = job
+        .connect()
+        .await
+        .unwrap()
+        .get_block_number()
+        .await
+        .unwrap() as u64;
+
+    let mut filter = events::build_filter(options, block);
 
     let from_block = options.from_block.unwrap_or(0);
     let mut to_block = options.to_block.unwrap_or(0);
     if options.to_block.is_none() {
-        // SAFETY: before we connected so we are safe to do all these crazy things
-        to_block = job
-            .connect()
-            .await
-            .unwrap()
-            .get_block_number()
-            .await
-            .unwrap() as i64;
+        to_block = block as i64;
     }
 
     // Split logs by blocktick if needed

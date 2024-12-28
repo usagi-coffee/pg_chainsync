@@ -136,14 +136,10 @@ pub async fn handle_log(
     if matches!(job.options.await_block, Some(true)) {
         let (tx, rx) = oneshot::channel::<bool>();
 
-        if channel.send(Message::CheckBlock(
-            job.options.chain,
-            block,
-            job.options.block_check_handler.to_owned().unwrap(),
-            tx,
-        )) {
+        if channel.send(Message::CheckBlock(block, tx, Arc::clone(job))) {
             let found = rx.await;
-            if found.is_ok() && found.unwrap() == false {
+
+            if found.unwrap() == false {
                 // Retry finding block until available
                 let mut retries = 0;
                 loop {
@@ -208,10 +204,7 @@ pub fn handle_message(message: Message) {
         .event_handler
         .as_ref()
         .expect("sync: events: missing handler");
-    let json = pgrx::JsonB(
-        serde_json::to_value(&job)
-            .expect("sync: events: failed to serialize job"),
-    );
+    let json = pgrx::JsonB(job.json.clone());
 
     BackgroundWorker::transaction(|| {
         PgTryBuilder::new(|| {
@@ -238,8 +231,9 @@ pub fn handle_message(message: Message) {
     });
 }
 
-pub fn build_filter(options: &JobOptions) -> Filter {
-    let mut filter = Filter::new().from_block(BlockNumberOrTag::Latest);
+pub fn build_filter(options: &JobOptions, block: u64) -> Filter {
+    let mut filter = Filter::new();
+    filter = filter.from_block(BlockNumberOrTag::Latest);
 
     if let Some(address) = &options.address {
         filter = filter.address(address.parse::<Address>().unwrap());
@@ -270,7 +264,17 @@ pub fn build_filter(options: &JobOptions) -> Filter {
     }
 
     if let Some(to_block) = &options.to_block {
-        filter = filter.to_block::<u64>((*to_block as u64).into());
+        if *to_block == 0 {
+            filter = filter.to_block(BlockNumberOrTag::Safe);
+        } else if *to_block < 0 {
+            let target: i64 = block as i64 + *to_block;
+            if target > 0 {
+                println!("using safe block {} from {}", target, block);
+                filter = filter.to_block::<u64>((target as u64).into());
+            }
+        } else if *to_block > 0 {
+            filter = filter.to_block::<u64>((*to_block as u64).into());
+        }
     }
 
     filter
@@ -279,7 +283,13 @@ pub fn build_filter(options: &JobOptions) -> Filter {
 pub async fn build_stream(
     job: &Job,
 ) -> anyhow::Result<SubscriptionStream<Log>> {
-    let filter = build_filter(&job.options);
+    let ws = job.connect().await.unwrap();
+    let block = ws
+        .get_block_number()
+        .await
+        .expect("failed to retrieve latest block") as u64;
+
+    let filter = build_filter(&job.options, block);
     let sub = job.connect().await.unwrap().subscribe_logs(&filter).await?;
     Ok(sub.into_stream())
 }
