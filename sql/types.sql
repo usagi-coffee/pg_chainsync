@@ -2,7 +2,7 @@ CREATE SCHEMA IF NOT EXISTS chainsync;
 
 --
 CREATE TABLE chainsync.jobs (
-	id SERIAL,
+	id SERIAL PRIMARY KEY,
 	name TEXT NOT NULL,
 	options JSONB NOT NULL,
 	status TEXT DEFAULT 'STOPPED'

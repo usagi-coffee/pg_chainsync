@@ -204,11 +204,11 @@ pub fn handle_message(message: Message) {
         .event_handler
         .as_ref()
         .expect("sync: events: missing handler");
-    let json = pgrx::JsonB(job.json.clone());
+    let id = job.id;
 
     BackgroundWorker::transaction(|| {
         PgTryBuilder::new(|| {
-            log.call_handler(&handler, json)
+            log.call_handler(&handler, id)
                 .expect("sync: events: failed to call the handler")
         })
         .catch_rust_panic(|e| {

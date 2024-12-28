@@ -163,10 +163,9 @@ async fn handle_message(stream: &mut MessageStream) {
             Message::TaskSuccess(job) => {
                 if let Some(handler) = job.options.success_handler.as_ref() {
                     let id = job.id;
-                    let json = pgrx::JsonB(job.json.clone());
 
                     BackgroundWorker::transaction(|| {
-                        PgTryBuilder::new(|| Job::handler(&handler, id, json))
+                        PgTryBuilder::new(|| Job::handler(&handler, id))
                             .catch_others(|_| {
                                 Err(pgrx::spi::Error::NoTupleTable)
                             })
@@ -178,10 +177,9 @@ async fn handle_message(stream: &mut MessageStream) {
             Message::TaskFailure(job) => {
                 if let Some(handler) = job.options.failure_handler.as_ref() {
                     let id = job.id;
-                    let json = pgrx::JsonB(job.json.clone());
 
                     BackgroundWorker::transaction(|| {
-                        PgTryBuilder::new(|| Job::handler(&handler, id, json))
+                        PgTryBuilder::new(|| Job::handler(&handler, id))
                             .catch_others(|_| {
                                 Err(pgrx::spi::Error::NoTupleTable)
                             })
@@ -193,10 +191,10 @@ async fn handle_message(stream: &mut MessageStream) {
             Message::CheckBlock(number, oneshot, job) => {
                 if let Some(handler) = job.options.block_check_handler.as_ref()
                 {
-                    let json = pgrx::JsonB(job.json.clone());
+                    let id = job.id;
 
                     if oneshot
-                        .send(blocks::check_one(&number, handler, json))
+                        .send(blocks::check_one(&number, handler, id))
                         .is_err()
                     {
                         warning!("sync: check_block: failed to send on channel, event job stalled");

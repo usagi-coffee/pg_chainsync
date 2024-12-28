@@ -60,7 +60,7 @@ AS $$
 $$ LANGUAGE SQL;
 
 -- Events added have source unverified, this function updates the source to verified once restore task executes
-CREATE FUNCTION verify_sweep_handler(job_id BIGINT, job JSONB) RETURNS VOID
+CREATE FUNCTION verify_sweep_handler(job_id INTEGER, job JSONB) RETURNS VOID
 AS $$
 DECLARE
   cutoff_block BIGINT;
@@ -86,12 +86,16 @@ SELECT chainsync.register(
   '{
     "chain": 31337,
     "provider_url": "ws://pg-chainsync-foundry:8545",
+
     "event_handler": "transfer_handler",
+
     "address": "5FbDB2315678afecb367f032d93F642f64180aa3",
     "event": "Transfer(address,address,uint256)",
+
     "await_block": true,
     "block_handler": "custom_block_handler",
     "block_check_handler": "find_block",
+
     "source": "unverified"
   }'::JSONB
 );
@@ -103,16 +107,21 @@ SELECT chainsync.register(
   '{
     "chain": 31337,
     "provider_url": "ws://pg-chainsync-foundry:8545",
-    "event_handler": "transfer_handler",
-    "address": "5FbDB2315678afecb367f032d93F642f64180aa3",
-    "success_handler": "verify_sweep_handler",
-    "event": "Transfer(address,address,uint256)",
+
+    "cron": "0 * * * * *",
     "from_block": 0,
     "to_block": -15,
-    "cron": "0 * * * * *",
+
+    "event_handler": "transfer_handler",
+    "success_handler": "verify_sweep_handler",
+
+    "address": "5FbDB2315678afecb367f032d93F642f64180aa3",
+    "event": "Transfer(address,address,uint256)",
+
     "await_block": true,
     "block_handler": "custom_block_handler",
     "block_check_handler": "find_block",
+
     "source": "verified"
   }'::JSONB
 );

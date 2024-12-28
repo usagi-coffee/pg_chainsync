@@ -145,12 +145,12 @@ pub fn handle_message(message: Message) {
         .as_ref()
         .expect("sync: blocks: missing handler");
 
-    let json = pgrx::JsonB(job.json.clone());
+    let id = job.id;
 
     BackgroundWorker::transaction(|| {
         PgTryBuilder::new(|| {
             block
-                .call_handler(&handler, json)
+                .call_handler(&handler, id)
                 .expect("sync: blocks: failed to call the handler {}")
         })
         .catch_rust_panic(|e| {
@@ -165,17 +165,17 @@ pub fn handle_message(message: Message) {
     });
 }
 
-pub fn check_one(number: &u64, handler: &String, job: pgrx::JsonB) -> bool {
+pub fn check_one(number: &u64, handler: &String, job: i64) -> bool {
     BackgroundWorker::transaction(|| {
         PgTryBuilder::new(|| {
             let found = Spi::get_one_with_args::<i64>(
-                format!("SELECT {}($1, $2)", handler).as_str(),
+                format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
                 vec![
                     (
                         PgOid::BuiltIn(PgBuiltInOids::INT8OID),
                         (*number as i64).into_datum(),
                     ),
-                    (PgOid::BuiltIn(PgBuiltInOids::JSONBOID), job.into_datum()),
+                    (PgOid::BuiltIn(PgBuiltInOids::INT4OID), job.into_datum()),
                 ],
             );
 

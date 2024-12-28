@@ -76,7 +76,6 @@ impl Job {
                         .unwrap()
                         .unwrap(),
                     ws: OnceCell::const_new(),
-                    json: options.0,
                 });
             }
 
@@ -84,16 +83,11 @@ impl Job {
         })
     }
 
-    pub fn handler(
-        handler: &String,
-        id: i64,
-        json: pgrx::JsonB,
-    ) -> Result<(), pgrx::spi::Error> {
+    pub fn handler(handler: &String, job: i64) -> Result<(), pgrx::spi::Error> {
         Spi::run_with_args(
-            format!("SELECT {}($1, $2)", handler).as_str(),
+            format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $1))", handler).as_str(),
             Some(vec![
-                (PgOid::BuiltIn(PgBuiltInOids::INT8OID), id.into_datum()),
-                (PgOid::BuiltIn(PgBuiltInOids::JSONBOID), json.into_datum()),
+                (PgOid::BuiltIn(PgBuiltInOids::INT4OID), job.into_datum()),
             ]),
         )
     }
@@ -103,7 +97,7 @@ pub trait PgHandler {
     fn call_handler(
         &self,
         handler: &String,
-        job: pgrx::JsonB,
+        job: i64,
     ) -> Result<(), pgrx::spi::Error>;
 }
 
@@ -111,7 +105,7 @@ impl PgHandler for Block {
     fn call_handler(
         &self,
         handler: &String,
-        job: pgrx::JsonB,
+        job: i64,
     ) -> Result<(), pgrx::spi::Error> {
         let mut data =
             PgHeapTuple::new_composite_type(BLOCK_COMPOSITE_TYPE).unwrap();
@@ -163,13 +157,13 @@ impl PgHandler for Block {
         )?;
 
         Spi::run_with_args(
-            format!("SELECT {}($1, $2)", handler).as_str(),
+            format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
             Some(vec![
                 (
                     PgOid::Custom(data.composite_type_oid().unwrap()),
                     data.into_datum(),
                 ),
-                (PgOid::BuiltIn(PgBuiltInOids::JSONBOID), job.into_datum()),
+                (PgOid::BuiltIn(PgBuiltInOids::INT4OID), job.into_datum()),
             ]),
         )
     }
@@ -179,7 +173,7 @@ impl PgHandler for Log {
     fn call_handler(
         &self,
         handler: &String,
-        job: pgrx::JsonB,
+        job: i64,
     ) -> Result<(), pgrx::spi::Error> {
         let mut data =
             PgHeapTuple::new_composite_type(LOG_COMPOSITE_TYPE).unwrap();
@@ -211,13 +205,13 @@ impl PgHandler for Log {
         data.set_by_name("data", hex::encode(&self.inner.data.data))?;
 
         Spi::run_with_args(
-            format!("SELECT {}($1, $2)", handler).as_str(),
+            format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
             Some(vec![
                 (
                     PgOid::Custom(data.composite_type_oid().unwrap()),
                     data.into_datum(),
                 ),
-                (PgOid::BuiltIn(PgBuiltInOids::JSONBOID), job.into_datum()),
+                (PgOid::BuiltIn(PgBuiltInOids::INT4OID), job.into_datum()),
             ]),
         )
     }

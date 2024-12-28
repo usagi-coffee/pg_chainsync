@@ -57,8 +57,6 @@ pub struct Job {
 
     #[serde(skip_serializing, skip_deserializing)]
     pub ws: OnceCell<RootProvider<PubSubFrontend>>,
-    #[serde(skip_serializing, skip_deserializing)]
-    pub json: serde_json::Value,
 }
 
 impl Job {
