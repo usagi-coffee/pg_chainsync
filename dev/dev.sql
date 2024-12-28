@@ -84,9 +84,7 @@ $$ LANGUAGE plpgsql;
 SELECT chainsync.register(
   'erc20-transfer',
   '{
-    "version": 1,
     "chain": 31337,
-    "kind": "events",
     "provider_url": "ws://pg-chainsync-foundry:8545",
     "event_handler": "transfer_handler",
     "address": "5FbDB2315678afecb367f032d93F642f64180aa3",
@@ -94,7 +92,6 @@ SELECT chainsync.register(
     "await_block": true,
     "block_handler": "custom_block_handler",
     "block_check_handler": "find_block",
-    "success_handler": "success_handler",
     "source": "unverified"
   }'::JSONB
 );
@@ -102,11 +99,9 @@ SELECT chainsync.register(
 -- Task that runs every 1 minute to verify the transfers in case of orphaned blocks
 -- Here the safe limit is set up as 15 block confirmations from latest block (-15 value)
 SELECT chainsync.register(
-  'erc20-verify',
+  'erc20-transfer-verify',
   '{
-    "version": 1,
     "chain": 31337,
-    "kind": "events",
     "provider_url": "ws://pg-chainsync-foundry:8545",
     "event_handler": "transfer_handler",
     "address": "5FbDB2315678afecb367f032d93F642f64180aa3",
@@ -115,6 +110,9 @@ SELECT chainsync.register(
     "from_block": 0,
     "to_block": -15,
     "cron": "0 * * * * *",
+    "await_block": true,
+    "block_handler": "custom_block_handler",
+    "block_check_handler": "find_block",
     "source": "verified"
   }'::JSONB
 );
