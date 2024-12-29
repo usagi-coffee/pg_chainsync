@@ -154,8 +154,7 @@ async fn handle_blocks_task(job: Arc<Job>, channel: &Arc<Channel>) {
         {
             if let Some(block) = block {
                 channel.send(Message::Block(
-                    options.chain,
-                    block.header,
+                    Block::EvmBlock(block.header),
                     Arc::clone(&job),
                 ));
             }
@@ -222,7 +221,7 @@ async fn handle_events_task(job: Arc<Job>, channel: &Arc<Channel>) {
                 Ok(mut logs) => {
                     retries = 0;
                     for log in logs.drain(0..) {
-                        events::handle_log(&job, log, &channel).await;
+                        events::handle_evm_log(&job, log, &channel).await;
                     }
                 }
                 Err(e) => {
@@ -271,7 +270,7 @@ async fn handle_events_task(job: Arc<Job>, channel: &Arc<Channel>) {
         match job.connect().await.unwrap().get_logs(&filter).await {
             Ok(mut logs) => {
                 for log in logs.drain(0..) {
-                    events::handle_log(&job, log, &channel).await;
+                    events::handle_evm_log(&job, log, &channel).await;
                 }
             }
             Err(e) => {

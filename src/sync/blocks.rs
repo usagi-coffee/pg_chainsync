@@ -125,17 +125,24 @@ pub async fn handle_block(
     let number = block.number;
     log!("sync: blocks: {}: found {}", job.options.chain, number);
 
-    channel.send(Message::Block(job.options.chain, block, Arc::clone(job)));
+    channel.send(Message::Block(Block::EvmBlock(block), Arc::clone(job)));
 }
 
 use crate::query::PgHandler;
 use pgrx::bgworkers::BackgroundWorker;
 
 pub fn handle_message(message: Message) {
-    let Message::Block(chain, block, job) = message else {
+    let Message::Block(block, job) = message else {
         return;
     };
 
+    match block {
+        Block::EvmBlock(block) => handle_evm_message(block, job),
+    }
+}
+
+pub fn handle_evm_message(block: alloy::rpc::types::Header, job: Arc<Job>) {
+    let chain = job.options.chain;
     let number = block.number;
     log!("sync: blocks: {}: adding {}", chain, number);
 

@@ -14,8 +14,14 @@ use tokio::sync::OnceCell;
 pub const JOB_COMPOSITE_TYPE: &str = "chainsync.Job";
 
 pub type Callback = String;
-pub type Block = alloy::rpc::types::Header;
-pub type Log = alloy::rpc::types::Log;
+
+pub enum Block {
+    EvmBlock(alloy::rpc::types::Header),
+}
+
+pub enum Log {
+    EvmLog(alloy::rpc::types::Log),
+}
 
 #[derive(Clone, PartialEq)]
 #[repr(u8)]
@@ -37,8 +43,8 @@ pub enum Message {
     Jobs(oneshot::Sender<Vec<Job>>),
     UpdateJob(JobStatus, Arc<Job>),
 
-    Block(Chain, Block, Arc<Job>),
-    Event(Chain, Log, Arc<Job>),
+    Block(Block, Arc<Job>),
+    Event(Log, Arc<Job>),
 
     // Tasks
     TaskSuccess(Arc<Job>),
@@ -56,7 +62,7 @@ pub struct Job {
     pub options: JobOptions,
 
     #[serde(skip_serializing, skip_deserializing)]
-    pub ws: OnceCell<RootProvider<PubSubFrontend>>,
+    pub evm: OnceCell<RootProvider<PubSubFrontend>>,
 }
 
 impl Job {
@@ -67,7 +73,7 @@ impl Job {
         RpcError<TransportErrorKind>,
     > {
         let url = &self.options.provider_url;
-        self.ws
+        self.evm
             .get_or_try_init(|| async {
                 let ws = WsConnect::new(url);
                 ProviderBuilder::new().on_ws(ws).await

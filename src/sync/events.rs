@@ -94,7 +94,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         }
 
                         // SAFETY: unwrap is safe because we checked for None
-                        handle_log(&job, log.unwrap(), &channel).await;
+                        handle_evm_log(&job, log.unwrap(), &channel).await;
                     }
                     // If it took more than 1 second the stream is probably drained so we can "almost"
                     // safely restart the providers
@@ -109,7 +109,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
     }
 }
 
-pub async fn handle_log(
+pub async fn handle_evm_log(
     job: &Arc<Job>,
     log: alloy::rpc::types::Log,
     channel: &Channel,
@@ -158,8 +158,7 @@ pub async fn handle_log(
                         .await
                     {
                         channel.send(Message::Block(
-                            job.options.chain,
-                            block.header,
+                            Block::EvmBlock(block.header),
                             Arc::clone(job),
                         ));
                         break;
@@ -176,7 +175,7 @@ pub async fn handle_log(
         }
     }
 
-    if !channel.send(Message::Event(job.options.chain, log, Arc::clone(job))) {
+    if !channel.send(Message::Event(Log::EvmLog(log), Arc::clone(job))) {
         warning!(
             "sync: events: {}: failed to send {}<{}>",
             job.options.chain,
@@ -190,10 +189,17 @@ use crate::query::PgHandler;
 use pgrx::bgworkers::BackgroundWorker;
 
 pub fn handle_message(message: Message) {
-    let Message::Event(chain, log, job) = message else {
+    let Message::Event(log, job) = message else {
         return;
     };
 
+    match log {
+        Log::EvmLog(log) => handle_evm_message(log, job),
+    }
+}
+
+pub fn handle_evm_message(log: alloy::rpc::types::Log, job: Arc<Job>) {
+    let chain = job.options.chain;
     let transaction = log.transaction_hash.unwrap();
     let index = log.log_index.unwrap();
 
@@ -282,7 +288,7 @@ pub fn build_filter(options: &JobOptions, block: u64) -> Filter {
 
 pub async fn build_stream(
     job: &Job,
-) -> anyhow::Result<SubscriptionStream<Log>> {
+) -> anyhow::Result<SubscriptionStream<alloy::rpc::types::Log>> {
     let ws = job.connect().await.unwrap();
     let block = ws
         .get_block_number()

@@ -4,7 +4,6 @@ use pgrx::{IntoDatum, PgOid};
 use tokio::sync::OnceCell;
 
 use alloy::core::hex;
-use alloy::rpc::types::Log;
 
 use crate::types::*;
 
@@ -75,7 +74,7 @@ impl Job {
                         .get_by_name::<String, &'static str>("status")
                         .unwrap()
                         .unwrap(),
-                    ws: OnceCell::const_new(),
+                    evm: OnceCell::const_new(),
                 });
             }
 
@@ -101,7 +100,7 @@ pub trait PgHandler {
     ) -> Result<(), pgrx::spi::Error>;
 }
 
-impl PgHandler for Block {
+impl PgHandler for alloy::rpc::types::Header {
     fn call_handler(
         &self,
         handler: &String,
@@ -169,7 +168,7 @@ impl PgHandler for Block {
     }
 }
 
-impl PgHandler for Log {
+impl PgHandler for alloy::rpc::types::Log {
     fn call_handler(
         &self,
         handler: &String,
