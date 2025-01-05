@@ -125,14 +125,14 @@ pub async fn handle_block(
     let number = block.number;
     log!("sync: blocks: {}: found {}", job.options.chain, number);
 
-    channel.send(Message::Block(Block::EvmBlock(block), Arc::clone(job)));
+    channel.send(Message::EvmBlock(Block::EvmBlock(block), Arc::clone(job)));
 }
 
 use crate::query::PgHandler;
 use pgrx::bgworkers::BackgroundWorker;
 
 pub fn handle_message(message: Message) {
-    let Message::Block(block, job) = message else {
+    let Message::EvmBlock(block, job) = message else {
         return;
     };
 

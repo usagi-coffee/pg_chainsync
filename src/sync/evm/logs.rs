@@ -26,7 +26,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 
         if let Ok(jobs) = rx.await {
             let mut jobs = jobs
-                .event_jobs()
+                .log_jobs()
                 .into_iter()
                 .map(Arc::new)
                 .collect::<Vec<_>>();
@@ -35,7 +35,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 
             for job in jobs.iter_mut() {
                 if let Err(err) = job.connect_evm().await {
-                    warning!("sync: events: {}: ws: {}", job.id, err);
+                    warning!("sync: logs: {}: ws: {}", job.id, err);
                     continue 'sync;
                 }
             }
@@ -51,22 +51,22 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                             Arc::clone(job),
                         ));
 
-                        log!("sync: events: {}: started listening", job.id);
+                        log!("sync: log: {}: started listening", job.id);
                     }
                     Err(err) => {
-                        warning!("sync: events: {}: {}", job.id, err);
+                        warning!("sync: log: {}: {}", job.id, err);
                         continue 'sync;
                     }
                 }
             }
 
-            log!("sync: events: started listening");
+            log!("sync: log: started listening");
 
             let mut drain = false;
             loop {
                 match signals.try_recv() {
                     Ok(signal) => {
-                        if signal == Signal::RestartEvents {
+                        if signal == Signal::RestartLogs {
                             drain = true;
                         }
                     }
@@ -89,7 +89,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         let job = &jobs[i];
 
                         if log.is_none() {
-                            warning!("sync: events: stream {} has ended, restarting providers", job.id);
+                            warning!("sync: log: stream {} has ended, restarting providers", job.id);
                             continue 'sync;
                         }
 
@@ -117,7 +117,7 @@ pub async fn handle_evm_log(
     let block = log.block_number.unwrap();
 
     if log.log_index.is_none() {
-        log!("sync: events: found pending {}", block);
+        log!("sync: logs: found pending {}", block);
         return;
     }
 
@@ -125,7 +125,7 @@ pub async fn handle_evm_log(
     let index = log.log_index.unwrap();
 
     log!(
-        "sync: events: {}: found {}<{}> at {}",
+        "sync: logs: {}: found {}<{}> at {}",
         job.options.chain,
         transaction,
         index,
@@ -144,7 +144,9 @@ pub async fn handle_evm_log(
                 let mut retries = 0;
                 loop {
                     if retries > 20 {
-                        panic!("sync: events: too many retries to get the block...");
+                        panic!(
+                            "sync: logs: too many retries to get the block..."
+                        );
                     }
 
                     if let Ok(Some(block)) = job
@@ -157,7 +159,7 @@ pub async fn handle_evm_log(
                         )
                         .await
                     {
-                        channel.send(Message::Block(
+                        channel.send(Message::EvmBlock(
                             Block::EvmBlock(block.header),
                             Arc::clone(job),
                         ));
@@ -165,7 +167,7 @@ pub async fn handle_evm_log(
                     }
 
                     log!(
-                        "sync: events: could not find block {}, retrying",
+                        "sync: logs: could not find block {}, retrying",
                         block
                     );
                     sleep(Duration::from_millis(1000)).await;
@@ -175,9 +177,9 @@ pub async fn handle_evm_log(
         }
     }
 
-    if !channel.send(Message::Event(Log::EvmLog(log), Arc::clone(job))) {
+    if !channel.send(Message::EvmLog(Log::EvmLog(log), Arc::clone(job))) {
         warning!(
-            "sync: events: {}: failed to send {}<{}>",
+            "sync: logs: {}: failed to send {}<{}>",
             job.options.chain,
             transaction,
             index
@@ -189,7 +191,7 @@ use crate::query::PgHandler;
 use pgrx::bgworkers::BackgroundWorker;
 
 pub fn handle_message(message: Message) {
-    let Message::Event(log, job) = message else {
+    let Message::EvmLog(log, job) = message else {
         return;
     };
 
@@ -203,24 +205,24 @@ pub fn handle_evm_message(log: alloy::rpc::types::Log, job: Arc<Job>) {
     let transaction = log.transaction_hash.unwrap();
     let index = log.log_index.unwrap();
 
-    log!("sync: events: {}: adding {}<{}>", chain, transaction, index);
+    log!("sync: logs: {}: adding {}<{}>", chain, transaction, index);
 
     let handler = job
         .options
-        .event_handler
+        .log_handler
         .as_ref()
-        .expect("sync: events: missing handler");
+        .expect("sync: logs: missing handler");
     let id = job.id;
 
     BackgroundWorker::transaction(|| {
         PgTryBuilder::new(|| {
             log.call_handler(&handler, id)
-                .expect("sync: events: failed to call the handler")
+                .expect("sync: logs: failed to call the handler")
         })
         .catch_rust_panic(|e| {
             log!("{:?}", e);
             warning!(
-                "sync: events: failed to call handler for {}<{}>",
+                "sync: logs: failed to call handler for {}<{}>",
                 transaction,
                 index
             );
@@ -228,7 +230,7 @@ pub fn handle_evm_message(log: alloy::rpc::types::Log, job: Arc<Job>) {
         .catch_others(|e| {
             log!("{:?}", e);
             warning!(
-                "sync: events: handler failed to put {}<{}>",
+                "sync: logs: handler failed to put {}<{}>",
                 transaction,
                 index
             );

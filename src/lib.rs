@@ -93,7 +93,7 @@ mod chainsync {
         } else if configuration.is_event_job() {
             if let Err(_) = SIGNALS
                 .exclusive()
-                .push(crate::types::Signal::RestartEvents as u8)
+                .push(crate::types::Signal::RestartLogs as u8)
             {
                 panic!("failed to send restart signal");
             }

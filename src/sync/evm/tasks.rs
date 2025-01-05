@@ -13,7 +13,7 @@ use cron::Schedule;
 use tokio_cron::{Job as CronJob, Scheduler};
 
 use crate::channel::Channel;
-use crate::sync::evm::events;
+use crate::sync::evm::logs;
 use crate::types::*;
 
 use crate::worker::{TASKS, TASKS_PRELOADED};
@@ -115,7 +115,7 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
             if job.options.is_block_job() {
                 handle_blocks_task(Arc::clone(&job), &channel).await
             } else if job.options.is_event_job() {
-                handle_events_task(Arc::clone(&job), &channel).await
+                handle_log_task(Arc::clone(&job), &channel).await
             } else {
                 warning!("sync: tasks: unknown  task {}", task);
             }
@@ -153,7 +153,7 @@ async fn handle_blocks_task(job: Arc<Job>, channel: &Arc<Channel>) {
             .await
         {
             if let Some(block) = block {
-                channel.send(Message::Block(
+                channel.send(Message::EvmBlock(
                     Block::EvmBlock(block.header),
                     Arc::clone(&job),
                 ));
@@ -162,7 +162,7 @@ async fn handle_blocks_task(job: Arc<Job>, channel: &Arc<Channel>) {
     }
 }
 
-async fn handle_events_task(job: Arc<Job>, channel: &Arc<Channel>) {
+async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
     let options = &job.options;
 
     // SAFETY: before we connected so we are safe to do all these crazy things
@@ -174,7 +174,7 @@ async fn handle_events_task(job: Arc<Job>, channel: &Arc<Channel>) {
         .await
         .unwrap() as u64;
 
-    let mut filter = events::build_filter(options, block);
+    let mut filter = logs::build_filter(options, block);
 
     let from_block = options.from_block.unwrap_or(0);
     let mut to_block = options.to_block.unwrap_or(0);
@@ -221,7 +221,7 @@ async fn handle_events_task(job: Arc<Job>, channel: &Arc<Channel>) {
                 Ok(mut logs) => {
                     retries = 0;
                     for log in logs.drain(0..) {
-                        events::handle_evm_log(&job, log, &channel).await;
+                        logs::handle_evm_log(&job, log, &channel).await;
                     }
                 }
                 Err(e) => {
@@ -270,7 +270,7 @@ async fn handle_events_task(job: Arc<Job>, channel: &Arc<Channel>) {
         match job.connect_evm().await.unwrap().get_logs(&filter).await {
             Ok(mut logs) => {
                 for log in logs.drain(0..) {
-                    events::handle_evm_log(&job, log, &channel).await;
+                    logs::handle_evm_log(&job, log, &channel).await;
                 }
             }
             Err(e) => {

@@ -63,9 +63,9 @@ The usage examples were run on PotsgreSQL 15.
 ```sql
 
 -- This is your custom handler that inserts events to your table
-CREATE FUNCTION custom_event_handler(log chainsync.Log, job JSONB) RETURNS events
+CREATE FUNCTION custom_log_handler(log chainsync.Log, job JSONB) RETURNS logs
 AS $$
-INSERT INTO events (address, data) -- Inserting into your custom table
+INSERT INTO logs (address, data) -- Inserting into your custom table
 VALUES (log.address, log.data)
 RETURNING *
 $$
@@ -77,7 +77,7 @@ SELECT chainsync.register(
     "type": "evm",
     "chain": 1,
     "ws": "ws://provider-url",
-    "event_handler": "custom_event_handler",
+    "log_handler": "custom_log_handler",
     "address": "0x....",
     "event": "Transfer(address,address,uint256)"
   }'::JSONB
@@ -102,7 +102,7 @@ SELECT chainsync.register(
     "type": "evm",
     "chain": 1,
     "ws": "ws://provider-url",
-    "event_handler": "custom_event_handler",
+    "log_handler": "custom_log_handler",
     "address": "0x....",
     "event": "Transfer(address,address,uint256)",
     "oneshot": true,
@@ -126,7 +126,7 @@ SELECT chainsync.register(
     "type": "evm",
     "chain": 31337,
     "ws": "wss://provider-url",
-    "event_handler": "transfer_handler",
+    "log_handler": "transfer_handler",
     "address": "0x....",
     "event": "Transfer(address,address,uint256)",
     "cron": "0 * * * * *",
@@ -146,7 +146,7 @@ SELECT chainsync.register(
     "type": "evm",
     "chain": 31337,
     "ws": "wss://provider-url",
-    "event_handler": "transfer_handler",
+    "log_handler": "transfer_handler",
     "address": "0x....",
     "event": "Transfer(address,address,uint256)",
     "preload": true,
@@ -176,7 +176,7 @@ SELECT chainsync.register(
     "type": "evm",
     "chain": 31337,
     "ws": "wss://provider-url",
-    "event_handler": "transfer_handler",
+    "log_handler": "transfer_handler",
     "address": "0x....",
     "event": "Transfer(address,address,uint256)",
     "await_block": true,

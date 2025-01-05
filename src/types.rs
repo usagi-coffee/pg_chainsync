@@ -33,7 +33,7 @@ pub enum Log {
 pub enum Signal {
     Unknown = 0,
     RestartBlocks = 1,
-    RestartEvents = 2,
+    RestartLogs = 2,
 }
 
 #[derive(Clone, PartialEq)]
@@ -48,8 +48,8 @@ pub enum Message {
     Jobs(oneshot::Sender<Vec<Job>>),
     UpdateJob(JobStatus, Arc<Job>),
 
-    Block(Block, Arc<Job>),
-    Event(Log, Arc<Job>),
+    EvmBlock(Block, Arc<Job>),
+    EvmLog(Log, Arc<Job>),
 
     // Tasks
     TaskSuccess(Arc<Job>),
@@ -128,9 +128,9 @@ pub struct JobOptions {
     pub block_handler: Option<String>,
     // TODO: hashes vs full blocks?
 
-    // Event job
+    // Log job
     /// Function to call when handling events
-    pub event_handler: Option<String>,
+    pub log_handler: Option<String>,
     /// If defined it awaits for block before calling the handler
     pub await_block: Option<bool>,
     /// If defined it awaits for block before calling the handler
@@ -147,12 +147,12 @@ pub struct JobOptions {
 
 impl JobOptions {
     pub fn is_block_job(&self) -> bool {
-        matches!(self.event_handler, None)
+        matches!(self.log_handler, None)
             && matches!(self.block_handler, Some(_))
     }
 
     pub fn is_event_job(&self) -> bool {
-        matches!(self.event_handler, Some(_))
+        matches!(self.log_handler, Some(_))
     }
 }
 
@@ -164,7 +164,7 @@ impl From<u8> for Signal {
     fn from(orig: u8) -> Self {
         match orig {
             1 => return Signal::RestartBlocks,
-            2 => return Signal::RestartEvents,
+            2 => return Signal::RestartLogs,
             _ => return Signal::Unknown,
         };
     }
@@ -181,7 +181,7 @@ impl Into<String> for JobStatus {
 
 pub trait JobsUtils {
     fn block_jobs(&self) -> Vec<Job>;
-    fn event_jobs(&self) -> Vec<Job>;
+    fn log_jobs(&self) -> Vec<Job>;
     fn preload_jobs(&self) -> Vec<Job>;
     fn tasks(&self) -> Vec<Job>;
 }
@@ -199,7 +199,7 @@ impl JobsUtils for Vec<Job> {
             .collect()
     }
 
-    fn event_jobs(&self) -> Vec<Job> {
+    fn log_jobs(&self) -> Vec<Job> {
         self.iter()
             .filter(|job| {
                 job.options.is_event_job()

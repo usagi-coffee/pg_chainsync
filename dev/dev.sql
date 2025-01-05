@@ -89,7 +89,7 @@ SELECT chainsync.register(
     "chain": 31337,
     "ws": "ws://pg-chainsync-foundry:8545",
 
-    "event_handler": "transfer_handler",
+    "log_handler": "transfer_handler",
 
     "address": "5FbDB2315678afecb367f032d93F642f64180aa3",
     "event": "Transfer(address,address,uint256)",
@@ -116,7 +116,7 @@ SELECT chainsync.register(
     "from_block": 0,
     "to_block": -15,
 
-    "event_handler": "transfer_handler",
+    "log_handler": "transfer_handler",
     "success_handler": "verify_sweep_handler",
 
     "address": "5FbDB2315678afecb367f032d93F642f64180aa3",

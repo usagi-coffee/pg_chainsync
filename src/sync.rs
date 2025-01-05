@@ -85,7 +85,7 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
              _ = evm::blocks::listen(Arc::clone(&channel), blocks_rx) => {
                  log!("sync: stopped listening to blocks... exiting");
              },
-             _ = evm::events::listen(Arc::clone(&channel), events_rx) => {
+             _ = evm::logs::listen(Arc::clone(&channel), events_rx) => {
                  log!("sync: stopped listening to events... exiting");
              },
              _ = handle_message(&mut stream) => {
@@ -156,8 +156,8 @@ async fn handle_message(stream: &mut MessageStream) {
                 })
                 .expect("sync: jobs: failed to update job status");
             }
-            Message::Block(..) => evm::blocks::handle_message(message),
-            Message::Event(..) => evm::events::handle_message(message),
+            Message::EvmBlock(..) => evm::blocks::handle_message(message),
+            Message::EvmLog(..) => evm::logs::handle_message(message),
             Message::TaskSuccess(job) => {
                 if let Some(handler) = job.options.success_handler.as_ref() {
                     let id = job.id;
