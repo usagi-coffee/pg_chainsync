@@ -12,13 +12,11 @@ use tokio_stream::StreamExt;
 use bus::Bus;
 
 use crate::channel::*;
-use crate::tasks;
 use crate::types::*;
 use crate::worker;
 use crate::worker::*;
 
-pub mod blocks;
-pub mod events;
+pub mod evm;
 
 const DATABASE: &str = "postgres";
 
@@ -75,7 +73,7 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
 
     runtime.block_on(async {
         let mut scheduler = Scheduler::utc();
-        tasks::setup(&mut scheduler).await;
+        evm::tasks::setup(&mut scheduler).await;
 
         let blocks_rx = signal_bus.add_rx();
         let events_rx = signal_bus.add_rx();
@@ -84,16 +82,16 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
              _ = worker::handle_signals(Arc::clone(&channel), signal_bus) => {
                  log!("sync: received exit signal... exiting");
              },
-             _ = blocks::listen(Arc::clone(&channel), blocks_rx) => {
+             _ = evm::blocks::listen(Arc::clone(&channel), blocks_rx) => {
                  log!("sync: stopped listening to blocks... exiting");
              },
-             _ = events::listen(Arc::clone(&channel), events_rx) => {
+             _ = evm::events::listen(Arc::clone(&channel), events_rx) => {
                  log!("sync: stopped listening to events... exiting");
              },
              _ = handle_message(&mut stream) => {
                  log!("sync: stopped processing messages... exiting");
              }
-             _ = tasks::handle_tasks(Arc::clone(&channel)) => {
+             _ = evm::tasks::handle_tasks(Arc::clone(&channel)) => {
                  log!("sync: tasks: stopped tasks... exiting");
              },
         }
@@ -158,8 +156,8 @@ async fn handle_message(stream: &mut MessageStream) {
                 })
                 .expect("sync: jobs: failed to update job status");
             }
-            Message::Block(..) => blocks::handle_message(message),
-            Message::Event(..) => events::handle_message(message),
+            Message::Block(..) => evm::blocks::handle_message(message),
+            Message::Event(..) => evm::events::handle_message(message),
             Message::TaskSuccess(job) => {
                 if let Some(handler) = job.options.success_handler.as_ref() {
                     let id = job.id;
@@ -194,7 +192,7 @@ async fn handle_message(stream: &mut MessageStream) {
                     let id = job.id;
 
                     if oneshot
-                        .send(blocks::check_one(&number, handler, id))
+                        .send(evm::blocks::check_one(&number, handler, id))
                         .is_err()
                     {
                         warning!("sync: check_block: failed to send on channel, event job stalled");

@@ -40,8 +40,9 @@ LANGUAGE SQL;
 SELECT chainsync.register(
   'simple-blocks',
   '{
+    "type": "evm",
     "chain": 1,
-    "provider_url": "wss://provider-url",
+    "ws": "wss://provider-url",
     "block_handler": "custom_block_handler"
   }'::JSONB);
 
@@ -73,8 +74,9 @@ LANGUAGE SQL;
 SELECT chainsync.register(
   'custom-events',
   '{
+    "type": "evm",
     "chain": 1,
-    "provider_url": "ws://provider-url",
+    "ws": "ws://provider-url",
     "event_handler": "custom_event_handler",
     "address": "0x....",
     "event": "Transfer(address,address,uint256)"
@@ -97,8 +99,9 @@ Running this query will add a task that will fetch all transfer events for speci
 SELECT chainsync.register(
   'oneshot-task',
   '{
+    "type": "evm",
     "chain": 1,
-    "provider_url": "ws://provider-url",
+    "ws": "ws://provider-url",
     "event_handler": "custom_event_handler",
     "address": "0x....",
     "event": "Transfer(address,address,uint256)",
@@ -120,8 +123,9 @@ Cron tasks are supported, simply add `cron` key to your configuration json.
 SELECT chainsync.register(
   'transfers-every-minute',
   '{
+    "type": "evm",
     "chain": 31337,
-    "provider_url": "wss://provider-url",
+    "ws": "wss://provider-url",
     "event_handler": "transfer_handler",
     "address": "0x....",
     "event": "Transfer(address,address,uint256)",
@@ -139,8 +143,9 @@ Some tasks need to be run when the database starts, for that you can use `preloa
 SELECT chainsync.register(
   'transfers-on-restart',
   '{
+    "type": "evm",
     "chain": 31337,
-    "provider_url": "wss://provider-url",
+    "ws": "wss://provider-url",
     "event_handler": "transfer_handler",
     "address": "0x....",
     "event": "Transfer(address,address,uint256)",
@@ -168,8 +173,9 @@ $$ LANGUAGE SQL;
 SELECT chainsync.register(
   'transfers-every-minute',
   '{
+    "type": "evm",
     "chain": 31337,
-    "provider_url": "wss://provider-url",
+    "ws": "wss://provider-url",
     "event_handler": "transfer_handler",
     "address": "0x....",
     "event": "Transfer(address,address,uint256)",

@@ -34,7 +34,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
             let mut map = StreamMap::new();
 
             for job in jobs.iter_mut() {
-                if let Err(err) = job.connect().await {
+                if let Err(err) = job.connect_evm().await {
                     warning!("sync: events: {}: ws: {}", job.id, err);
                     continue 'sync;
                 }
@@ -148,7 +148,7 @@ pub async fn handle_evm_log(
                     }
 
                     if let Ok(Some(block)) = job
-                        .connect()
+                        .connect_evm()
                         .await
                         .unwrap()
                         .get_block(
@@ -289,13 +289,18 @@ pub fn build_filter(options: &JobOptions, block: u64) -> Filter {
 pub async fn build_stream(
     job: &Job,
 ) -> anyhow::Result<SubscriptionStream<alloy::rpc::types::Log>> {
-    let ws = job.connect().await.unwrap();
+    let ws = job.connect_evm().await.unwrap();
     let block = ws
         .get_block_number()
         .await
         .expect("failed to retrieve latest block") as u64;
 
     let filter = build_filter(&job.options, block);
-    let sub = job.connect().await.unwrap().subscribe_logs(&filter).await?;
+    let sub = job
+        .connect_evm()
+        .await
+        .unwrap()
+        .subscribe_logs(&filter)
+        .await?;
     Ok(sub.into_stream())
 }

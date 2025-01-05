@@ -3,13 +3,18 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use alloy::providers::{ProviderBuilder, RootProvider, WsConnect};
-use alloy::pubsub::PubSubFrontend;
-use alloy::transports::{RpcError, TransportErrorKind};
-use alloy_chains::Chain;
-
 use tokio::sync::oneshot;
 use tokio::sync::OnceCell;
+
+use alloy_chains::Chain;
+
+pub type EvmPubSub =
+    alloy::providers::RootProvider<alloy::pubsub::PubSubFrontend>;
+pub type EvmPubSubError =
+    alloy::transports::RpcError<alloy::transports::TransportErrorKind>;
+
+pub type SolanaPubSub = solana_client::nonblocking::pubsub_client::PubsubClient;
+pub type SolanaPubSubError = solana_client::pubsub_client::PubsubClientError;
 
 pub const JOB_COMPOSITE_TYPE: &str = "chainsync.Job";
 
@@ -62,21 +67,33 @@ pub struct Job {
     pub options: JobOptions,
 
     #[serde(skip_serializing, skip_deserializing)]
-    pub evm: OnceCell<RootProvider<PubSubFrontend>>,
+    pub evm: OnceCell<EvmPubSub>,
+
+    #[serde(skip_serializing, skip_deserializing)]
+    pub sol: OnceCell<Arc<SolanaPubSub>>,
 }
 
 impl Job {
-    pub async fn connect(
+    pub async fn connect_evm(
         &self,
-    ) -> anyhow::Result<
-        &RootProvider<PubSubFrontend>,
-        RpcError<TransportErrorKind>,
-    > {
-        let url = &self.options.provider_url;
+    ) -> anyhow::Result<&EvmPubSub, EvmPubSubError> {
+        let url = &self.options.ws;
         self.evm
             .get_or_try_init(|| async {
-                let ws = WsConnect::new(url);
-                ProviderBuilder::new().on_ws(ws).await
+                let ws = alloy::providers::WsConnect::new(url);
+                alloy::providers::ProviderBuilder::new().on_ws(ws).await
+            })
+            .await
+    }
+
+    pub async fn connect_sol(
+        &self,
+    ) -> anyhow::Result<&Arc<SolanaPubSub>, SolanaPubSubError> {
+        let url = &self.options.ws;
+        self.sol
+            .get_or_try_init(|| async {
+                let r = SolanaPubSub::new(&url);
+                r.await.map(Arc::new)
             })
             .await
     }
@@ -86,8 +103,8 @@ impl Job {
 pub struct JobOptions {
     /// Chain id
     pub chain: Chain,
-    /// Provider url to use for this job
-    pub provider_url: String,
+    /// Websocket ws url to use for this job
+    pub ws: String,
     /// If defined it will start during immediately after database startup
     pub preload: Option<bool>,
     /// If defined it will split the rpc calls by the value, use when rpc limits number of blocks per call

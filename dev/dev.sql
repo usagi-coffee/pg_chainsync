@@ -84,8 +84,10 @@ $$ LANGUAGE plpgsql;
 SELECT chainsync.register(
   'erc20-transfer',
   '{
+    "type": "evm",
+
     "chain": 31337,
-    "provider_url": "ws://pg-chainsync-foundry:8545",
+    "ws": "ws://pg-chainsync-foundry:8545",
 
     "event_handler": "transfer_handler",
 
@@ -105,8 +107,10 @@ SELECT chainsync.register(
 SELECT chainsync.register(
   'erc20-transfer-verify',
   '{
+    "type": "evm",
+
     "chain": 31337,
-    "provider_url": "ws://pg-chainsync-foundry:8545",
+    "ws": "ws://pg-chainsync-foundry:8545",
 
     "cron": "0 * * * * *",
     "from_block": 0,

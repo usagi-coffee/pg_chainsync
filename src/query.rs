@@ -75,6 +75,7 @@ impl Job {
                         .unwrap()
                         .unwrap(),
                     evm: OnceCell::const_new(),
+                    sol: OnceCell::const_new(),
                 });
             }
 

@@ -36,7 +36,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
             let mut map = StreamMap::new();
 
             for job in jobs.iter_mut() {
-                match job.connect().await {
+                match job.connect_evm().await {
                     Ok(_) => {}
                     Err(err) => {
                         warning!("sync: blocks: {}: ws: {}", job.id, err);
@@ -206,7 +206,7 @@ pub fn check_one(number: &u64, handler: &String, job: i64) -> bool {
 pub async fn build_stream(
     job: &Job,
 ) -> anyhow::Result<SubscriptionStream<Header>> {
-    let provider = job.connect().await.context("Invalid provider")?;
+    let provider = job.connect_evm().await.context("Invalid provider")?;
     let sub = provider.subscribe_blocks().await?;
     Ok(sub.into_stream())
 }

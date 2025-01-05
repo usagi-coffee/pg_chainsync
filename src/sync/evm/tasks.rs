@@ -13,7 +13,7 @@ use cron::Schedule;
 use tokio_cron::{Job as CronJob, Scheduler};
 
 use crate::channel::Channel;
-use crate::sync::events;
+use crate::sync::evm::events;
 use crate::types::*;
 
 use crate::worker::{TASKS, TASKS_PRELOADED};
@@ -101,7 +101,7 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
             }
 
             let job = job.unwrap();
-            if let Err(err) = job.connect().await {
+            if let Err(err) = job.connect_evm().await {
                 warning!(
                     "sync: tasks: failed to create provider for {}, {}",
                     task,
@@ -133,7 +133,7 @@ async fn handle_blocks_task(job: Arc<Job>, channel: &Arc<Channel>) {
     let mut to = options.to_block.unwrap_or(0);
     if options.to_block.is_none() {
         to = job
-            .connect()
+            .connect_evm()
             .await
             .unwrap()
             .get_block_number()
@@ -143,7 +143,7 @@ async fn handle_blocks_task(job: Arc<Job>, channel: &Arc<Channel>) {
 
     for i in options.from_block.unwrap()..to {
         if let Ok(block) = job
-            .connect()
+            .connect_evm()
             .await
             .unwrap()
             .get_block(
@@ -167,7 +167,7 @@ async fn handle_events_task(job: Arc<Job>, channel: &Arc<Channel>) {
 
     // SAFETY: before we connected so we are safe to do all these crazy things
     let block = job
-        .connect()
+        .connect_evm()
         .await
         .unwrap()
         .get_block_number()
@@ -215,7 +215,7 @@ async fn handle_events_task(job: Arc<Job>, channel: &Arc<Channel>) {
 
             filter = filter.from_block(from as u64).to_block(to as u64);
 
-            let logs = job.connect().await.unwrap().get_logs(&filter).await;
+            let logs = job.connect_evm().await.unwrap().get_logs(&filter).await;
 
             match logs {
                 Ok(mut logs) => {
@@ -267,7 +267,7 @@ async fn handle_events_task(job: Arc<Job>, channel: &Arc<Channel>) {
     }
     // Or just get all logs at once
     else {
-        match job.connect().await.unwrap().get_logs(&filter).await {
+        match job.connect_evm().await.unwrap().get_logs(&filter).await {
             Ok(mut logs) => {
                 for log in logs.drain(0..) {
                     events::handle_evm_log(&job, log, &channel).await;

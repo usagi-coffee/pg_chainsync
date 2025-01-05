@@ -2,7 +2,6 @@ use pgrx::prelude::*;
 use pgrx::{pg_shmem_init, PgSharedMemoryInitialization};
 
 mod sync;
-mod tasks;
 mod worker;
 
 pub mod channel;
