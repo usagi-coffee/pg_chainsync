@@ -151,7 +151,7 @@ impl JobOptions {
             && matches!(self.block_handler, Some(_))
     }
 
-    pub fn is_event_job(&self) -> bool {
+    pub fn is_log_job(&self) -> bool {
         matches!(self.log_handler, Some(_))
     }
 }
@@ -202,7 +202,7 @@ impl JobsUtils for Vec<Job> {
     fn log_jobs(&self) -> Vec<Job> {
         self.iter()
             .filter(|job| {
-                job.options.is_event_job()
+                job.options.is_log_job()
                     && matches!(job.options.oneshot, None | Some(false))
                     && matches!(job.options.cron, None)
                     && matches!(job.options.preload, None | Some(false))

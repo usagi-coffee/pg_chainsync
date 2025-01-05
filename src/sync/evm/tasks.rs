@@ -114,7 +114,7 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
 
             if job.options.is_block_job() {
                 handle_blocks_task(Arc::clone(&job), &channel).await
-            } else if job.options.is_event_job() {
+            } else if job.options.is_log_job() {
                 handle_log_task(Arc::clone(&job), &channel).await
             } else {
                 warning!("sync: tasks: unknown  task {}", task);
