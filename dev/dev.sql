@@ -11,6 +11,9 @@ CREATE TABLE blocks (
   bl_number BIGINT,
   bl_timestamp TIMESTAMPTZ NOT NULL,
 
+  -- for solana
+  bl_slot BIGINT DEFAULT 0,
+
   PRIMARY KEY (bl_chain, bl_number)
 );
 
@@ -37,14 +40,14 @@ CREATE TABLE events (
 CREATE INDEX ev_idx_source ON events (ev_contract, ev_source, ev_block);
 
 -- Function to insert blocks
-CREATE FUNCTION custom_block_handler(block chainsync.Block, job JSONB) RETURNS VOID
+CREATE FUNCTION custom_block_handler(block chainsync.EvmBlock, job JSONB) RETURNS VOID
 AS $$
   INSERT INTO blocks (bl_chain, bl_number, bl_timestamp)
   VALUES (job->>'chain', block.number, TO_TIMESTAMP(block.timestamp) AT TIME ZONE 'UTC');
 $$ LANGUAGE SQL;
 
 -- Function to insert event logs
-CREATE FUNCTION transfer_handler(log chainsync.Log, job JSONB) RETURNS VOID
+CREATE FUNCTION transfer_handler(log chainsync.EvmLog, job JSONB) RETURNS VOID
 AS $$
   INSERT INTO events (ev_chain, ev_block, ev_contract, ev_txhash, ev_index, ev_timestamp, ev_source)
   VALUES (
@@ -81,12 +84,12 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Task that gets all transfers in real-time
+
 SELECT chainsync.register(
   'erc20-transfer',
   '{
-    "type": "evm",
+    "evm": true,
 
-    "chain": 31337,
     "ws": "ws://pg-chainsync-foundry:8545",
 
     "log_handler": "transfer_handler",
@@ -98,7 +101,8 @@ SELECT chainsync.register(
     "block_handler": "custom_block_handler",
     "block_check_handler": "find_block",
 
-    "source": "unverified"
+    "source": "unverified",
+    "chain": 31337
   }'::JSONB
 );
 
@@ -107,9 +111,8 @@ SELECT chainsync.register(
 SELECT chainsync.register(
   'erc20-transfer-verify',
   '{
-    "type": "evm",
+    "evm": true,
 
-    "chain": 31337,
     "ws": "ws://pg-chainsync-foundry:8545",
 
     "cron": "0 * * * * *",
@@ -126,6 +129,63 @@ SELECT chainsync.register(
     "block_handler": "custom_block_handler",
     "block_check_handler": "find_block",
 
-    "source": "verified"
+    "source": "verified",
+    "chain": 31337
   }'::JSONB
 );
+
+---- Solana support
+
+-- Function to insert blocks for Solana
+CREATE FUNCTION custom_svm_block_handler(block chainsync.SvmBlock, job JSONB) RETURNS VOID
+AS $$
+  INSERT INTO blocks (bl_chain, bl_slot, bl_number, bl_timestamp)
+  VALUES (job->>'chain', block.parent_slot, block.block_height, TO_TIMESTAMP(block.block_time) AT TIME ZONE 'UTC');
+$$ LANGUAGE SQL;
+
+-- Log handler for Solana
+CREATE FUNCTION custom_svm_log_handler(log chainsync.SvmLog, job JSONB) RETURNS VOID
+AS $$
+BEGIN
+  RAISE LOG 'Processing log %', log;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Transaction handler for Solana
+CREATE FUNCTION custom_svm_transaction_handler(tx chainsync.SvmTransaction, job JSONB) RETURNS VOID
+AS $$
+BEGIN
+  RAISE LOG 'Processing transaction %', tx.signature;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Instruction handler for Solana
+CREATE FUNCTION custom_svm_instruction_handler(inst chainsync.SvmInstruction, job JSONB) RETURNS VOID
+AS $$
+BEGIN
+  RAISE LOG 'Processing instruction [%] #%.%: data: %', inst.program_id, inst.index, COALESCE(inst.inner_index, 0), inst.data;
+END;
+$$ LANGUAGE plpgsql;
+
+/*
+SELECT chainsync.register(
+  'sol-token-instrutions',
+  '{
+    "svm": true,
+    "oneshot": true,
+    "preload": true,
+
+    "rpc": "...",
+    "ws": "...",
+
+    "transaction_handler": "custom_svm_transaction_handler",
+    "instruction_handler": "custom_svm_instruction_handler",
+
+    "mentions": ["..."],
+    "program": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+
+    "chain": "solana",
+    "source": "unverified"
+  }'::JSONB
+);
+*/

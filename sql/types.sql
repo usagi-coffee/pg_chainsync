@@ -8,7 +8,7 @@ CREATE TABLE chainsync.jobs (
 	status TEXT DEFAULT 'STOPPED'
 );
 
-CREATE TYPE chainsync.Block AS (
+CREATE TYPE chainsync.EvmBlock AS (
   number NUMERIC,
 	hash TEXT,
 	author TEXT,
@@ -25,7 +25,7 @@ CREATE TYPE chainsync.Block AS (
 	timestamp NUMERIC
 );
 
-CREATE TYPE chainsync.Log AS (
+CREATE TYPE chainsync.EvmLog AS (
   block_number NUMERIC,
   block_hash TEXT,
   transaction_hash TEXT,
@@ -34,4 +34,41 @@ CREATE TYPE chainsync.Log AS (
 	address TEXT,
 	topics TEXT[],
 	data TEXT
+);
+
+CREATE TYPE chainsync.SvmInstruction AS (
+  slot NUMERIC,
+  signature TEXT,
+  accounts TEXT[],
+  program_id TEXT,
+  index SMALLINT,
+  inner_index SMALLINT,
+  data TEXT,
+  block_time NUMERIC
+);
+
+CREATE TYPE chainsync.SvmTransaction AS (
+  slot NUMERIC,
+  signature TEXT,
+  accounts TEXT[],
+  instructions chainsync.SvmInstruction[],
+  logs TEXT[],
+  signatures TEXT[],
+  block_time NUMERIC
+);
+
+CREATE TYPE chainsync.SvmBlock AS (
+  parent_slot NUMERIC,
+  block_height NUMERIC,
+  block_hash TEXT,
+  previous_block_hash TEXT,
+  transactions chainsync.SvmTransaction[],
+  signatures TEXT[],
+  block_time NUMERIC
+);
+
+CREATE TYPE chainsync.SvmLog AS (
+  slot_number NUMERIC,
+  signature TEXT,
+  logs TEXT[]
 );

@@ -15,8 +15,8 @@ use bus::Bus;
 pub static WORKER_STATUS: PgLwLock<WorkerStatus> = PgLwLock::new();
 pub static RESTART_COUNT: PgLwLock<i32> = PgLwLock::new();
 pub static SIGNALS: PgLwLock<heapless::Vec<u8, 32>> = PgLwLock::new();
-pub static TASKS_PRELOADED: PgLwLock<bool> = PgLwLock::new();
-pub static TASKS: PgLwLock<heapless::Vec<i64, 32>> = PgLwLock::new();
+pub static EVM_TASKS: PgLwLock<heapless::Vec<i64, 32>> = PgLwLock::new();
+pub static SVM_TASKS: PgLwLock<heapless::Vec<i64, 32>> = PgLwLock::new();
 
 // Should be more than restart count
 pub static STOP_COUNT: i32 = 999;

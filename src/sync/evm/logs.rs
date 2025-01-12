@@ -26,6 +26,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 
         if let Ok(jobs) = rx.await {
             let mut jobs = jobs
+                .evm_jobs()
                 .log_jobs()
                 .into_iter()
                 .map(Arc::new)
@@ -35,7 +36,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 
             for job in jobs.iter_mut() {
                 if let Err(err) = job.connect_evm().await {
-                    warning!("sync: logs: {}: ws: {}", job.id, err);
+                    warning!("sync: evm: logs: {}: ws: {}", job.id, err);
                     continue 'sync;
                 }
             }
@@ -51,16 +52,16 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                             Arc::clone(job),
                         ));
 
-                        log!("sync: log: {}: started listening", job.id);
+                        log!("sync: evm: log: {}: started listening", job.id);
                     }
                     Err(err) => {
-                        warning!("sync: log: {}: {}", job.id, err);
+                        warning!("sync: evm: log: {}: {}", job.id, err);
                         continue 'sync;
                     }
                 }
             }
 
-            log!("sync: log: started listening");
+            log!("sync: evm: log: started listening to {} jobs", jobs.len());
 
             let mut drain = false;
             loop {
@@ -89,7 +90,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         let job = &jobs[i];
 
                         if log.is_none() {
-                            warning!("sync: log: stream {} has ended, restarting providers", job.id);
+                            warning!("sync: evm: log: stream {} has ended, restarting providers", job.id);
                             continue 'sync;
                         }
 
@@ -117,7 +118,7 @@ pub async fn handle_evm_log(
     let block = log.block_number.unwrap();
 
     if log.log_index.is_none() {
-        log!("sync: logs: found pending {}", block);
+        log!("sync: evm: logs: found pending {}", block);
         return;
     }
 
@@ -125,8 +126,8 @@ pub async fn handle_evm_log(
     let index = log.log_index.unwrap();
 
     log!(
-        "sync: logs: {}: found {}<{}> at {}",
-        job.options.chain,
+        "sync: evm: logs: {}: found {}<{}> at {}",
+        &job.name,
         transaction,
         index,
         block
@@ -145,7 +146,7 @@ pub async fn handle_evm_log(
                 loop {
                     if retries > 20 {
                         panic!(
-                            "sync: logs: too many retries to get the block..."
+                            "sync: evm: logs: too many retries to get the block..."
                         );
                     }
 
@@ -160,14 +161,14 @@ pub async fn handle_evm_log(
                         .await
                     {
                         channel.send(Message::EvmBlock(
-                            Block::EvmBlock(block.header),
+                            block.header,
                             Arc::clone(job),
                         ));
                         break;
                     }
 
                     log!(
-                        "sync: logs: could not find block {}, retrying",
+                        "sync: evm: logs: could not find block {}, retrying",
                         block
                     );
                     sleep(Duration::from_millis(1000)).await;
@@ -177,10 +178,10 @@ pub async fn handle_evm_log(
         }
     }
 
-    if !channel.send(Message::EvmLog(Log::EvmLog(log), Arc::clone(job))) {
+    if !channel.send(Message::EvmLog(log, Arc::clone(job))) {
         warning!(
-            "sync: logs: {}: failed to send {}<{}>",
-            job.options.chain,
+            "sync: evm: logs: {}: failed to send {}<{}>",
+            &job.name,
             transaction,
             index
         )
@@ -195,34 +196,36 @@ pub fn handle_message(message: Message) {
         return;
     };
 
-    match log {
-        Log::EvmLog(log) => handle_evm_message(log, job),
-    }
+    handle_evm_message(log, job)
 }
 
 pub fn handle_evm_message(log: alloy::rpc::types::Log, job: Arc<Job>) {
-    let chain = job.options.chain;
     let transaction = log.transaction_hash.unwrap();
     let index = log.log_index.unwrap();
 
-    log!("sync: logs: {}: adding {}<{}>", chain, transaction, index);
+    log!(
+        "sync: evm: logs: {}: adding {}<{}>",
+        &job.name,
+        transaction,
+        index
+    );
 
     let handler = job
         .options
         .log_handler
         .as_ref()
-        .expect("sync: logs: missing handler");
+        .expect("sync: evm: logs: missing handler");
     let id = job.id;
 
     BackgroundWorker::transaction(|| {
         PgTryBuilder::new(|| {
             log.call_handler(&handler, id)
-                .expect("sync: logs: failed to call the handler")
+                .expect("sync: evm: logs: failed to call the handler");
         })
         .catch_rust_panic(|e| {
             log!("{:?}", e);
             warning!(
-                "sync: logs: failed to call handler for {}<{}>",
+                "sync: evm: logs: failed to call handler for {}<{}>",
                 transaction,
                 index
             );
@@ -230,7 +233,7 @@ pub fn handle_evm_message(log: alloy::rpc::types::Log, job: Arc<Job>) {
         .catch_others(|e| {
             log!("{:?}", e);
             warning!(
-                "sync: logs: handler failed to put {}<{}>",
+                "sync: evm: logs: handler failed to put {}<{}>",
                 transaction,
                 index
             );

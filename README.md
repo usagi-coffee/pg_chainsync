@@ -40,10 +40,10 @@ LANGUAGE SQL;
 SELECT chainsync.register(
   'simple-blocks',
   '{
-    "type": "evm",
-    "chain": 1,
+    "evm": true,
     "ws": "wss://provider-url",
-    "block_handler": "custom_block_handler"
+    "block_handler": "custom_block_handler",
+    "chain": 1
   }'::JSONB);
 
 -- Optional: Restart worker (or entire database)
@@ -74,12 +74,12 @@ LANGUAGE SQL;
 SELECT chainsync.register(
   'custom-events',
   '{
-    "type": "evm",
-    "chain": 1,
+    "evm": true,
     "ws": "ws://provider-url",
     "log_handler": "custom_log_handler",
     "address": "0x....",
-    "event": "Transfer(address,address,uint256)"
+    "event": "Transfer(address,address,uint256)",
+    "chain": 1
   }'::JSONB
 );
 
@@ -99,15 +99,15 @@ Running this query will add a task that will fetch all transfer events for speci
 SELECT chainsync.register(
   'oneshot-task',
   '{
-    "type": "evm",
-    "chain": 1,
+    "evm": true,
     "ws": "ws://provider-url",
     "log_handler": "custom_log_handler",
     "address": "0x....",
     "event": "Transfer(address,address,uint256)",
     "oneshot": true,
     "from_block": 12345,
-    "blocktick": 10000
+    "blocktick": 10000,
+    "chain": 1
   }'::JSONB
 );
 
@@ -123,14 +123,14 @@ Cron tasks are supported, simply add `cron` key to your configuration json.
 SELECT chainsync.register(
   'transfers-every-minute',
   '{
-    "type": "evm",
-    "chain": 31337,
+    "evm": true,
     "ws": "wss://provider-url",
     "log_handler": "transfer_handler",
     "address": "0x....",
     "event": "Transfer(address,address,uint256)",
     "cron": "0 * * * * *",
-    "from_block": 0
+    "from_block": 0,
+    "chain": 31337
   }'::JSONB
 );
 ```
@@ -143,14 +143,14 @@ Some tasks need to be run when the database starts, for that you can use `preloa
 SELECT chainsync.register(
   'transfers-on-restart',
   '{
-    "type": "evm",
-    "chain": 31337,
+    "evm": true,
     "ws": "wss://provider-url",
     "log_handler": "transfer_handler",
     "address": "0x....",
     "event": "Transfer(address,address,uint256)",
     "preload": true,
-    "from_block": 0
+    "from_block": 0,
+    "chain": 31337
   }'::JSONB
 );
 ```
@@ -173,8 +173,7 @@ $$ LANGUAGE SQL;
 SELECT chainsync.register(
   'transfers-every-minute',
   '{
-    "type": "evm",
-    "chain": 31337,
+    "evm": true,
     "ws": "wss://provider-url",
     "log_handler": "transfer_handler",
     "address": "0x....",
@@ -182,6 +181,7 @@ SELECT chainsync.register(
     "await_block": true,
     "block_handler": "insert_block",
     "block_check_handler": "find_block",
+    "chain": 31337
   }'::JSONB
 );
 

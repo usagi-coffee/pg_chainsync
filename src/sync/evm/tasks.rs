@@ -16,14 +16,12 @@ use crate::channel::Channel;
 use crate::sync::evm::logs;
 use crate::types::*;
 
-use crate::worker::{TASKS, TASKS_PRELOADED};
+use crate::worker::EVM_TASKS;
 
 pub async fn setup(scheduler: &mut Scheduler) {
-    let preloaded = *TASKS_PRELOADED.share();
-
     let tasks = BackgroundWorker::transaction(|| Job::query_all());
     if tasks.is_err() {
-        warning!("sync: tasks: failed to setup tasks");
+        warning!("sync: evm: tasks: failed to setup tasks");
         return;
     }
 
@@ -31,6 +29,7 @@ pub async fn setup(scheduler: &mut Scheduler) {
     // SAFETY: we checked error before, avoiding indent..
     let tasks = tasks
         .unwrap()
+        .evm_jobs()
         .tasks()
         .into_iter()
         .map(Arc::new)
@@ -40,20 +39,18 @@ pub async fn setup(scheduler: &mut Scheduler) {
         let id = task.id;
 
         // Enqueue preloaded tasks
-        if !preloaded {
-            if task.options.preload.is_some() {
-                if TASKS.exclusive().push(task.id).is_err() {
-                    warning!("sync: tasks: failed to enqueue {}", task.id);
-                }
+        if matches!(task.options.preload, Some(true)) {
+            if EVM_TASKS.exclusive().push(task.id).is_err() {
+                warning!("sync: evm: tasks: failed to enqueue {}", task.id);
             }
         }
 
         // Cron
         if let Some(cron) = &task.options.cron {
-            log!("sync: tasks: {} ", id);
+            log!("sync: evm: tasks: {} ", id);
             if Schedule::from_str(&cron).is_err() {
                 warning!(
-                    "sync: tasks: task {} has incorrect cron expression {}",
+                    "sync: evm: tasks: task {} has incorrect cron expression {}",
                     task.id,
                     cron
                 );
@@ -61,24 +58,22 @@ pub async fn setup(scheduler: &mut Scheduler) {
                 continue;
             }
 
-            log!("sync: tasks: {}: scheduling {}", id, cron);
+            log!("sync: evm: tasks: {}: scheduling {}", id, cron);
             scheduler.add(CronJob::new_sync(cron, move || {
-                if TASKS.exclusive().push(id).is_err() {
-                    warning!("sync: tasks: failed to enqueue {}", id);
+                if EVM_TASKS.exclusive().push(id).is_err() {
+                    warning!("sync: evm: tasks: failed to enqueue {}", id);
                 }
             }));
         }
     }
-
-    *TASKS_PRELOADED.exclusive() = true;
 }
 
 pub async fn handle_tasks(channel: Arc<Channel>) {
     loop {
-        let task: Option<i64> = { TASKS.exclusive().pop() };
+        let task: Option<i64> = { EVM_TASKS.exclusive().pop() };
 
         if let Some(task) = task {
-            log!("sync: tasks: got task {}", task);
+            log!("sync: evm: tasks: got task {}", task);
 
             // FIXME: wait some time for commit when adding tasks
             sleep_until(Instant::now() + Duration::from_millis(100)).await;
@@ -89,21 +84,27 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
             let job = rx.await;
 
             if let Err(_) = job {
-                warning!("sync: tasks: failed to fetch job for task {}", task);
+                warning!(
+                    "sync: evm: tasks: failed to fetch job for task {}",
+                    task
+                );
                 continue;
             }
 
             let job = job.unwrap();
 
             if job.is_none() {
-                warning!("sync: tasks: failed to find job for task {}", task);
+                warning!(
+                    "sync: evm: tasks: failed to find job for task {}",
+                    task
+                );
                 continue;
             }
 
             let job = job.unwrap();
             if let Err(err) = job.connect_evm().await {
                 warning!(
-                    "sync: tasks: failed to create provider for {}, {}",
+                    "sync: evm: tasks: failed to create provider for {}, {}",
                     task,
                     err
                 );
@@ -117,7 +118,7 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
             } else if job.options.is_log_job() {
                 handle_log_task(Arc::clone(&job), &channel).await
             } else {
-                warning!("sync: tasks: unknown  task {}", task);
+                warning!("sync: evm: tasks: unknown  task {}", task);
             }
 
             channel.send(Message::TaskSuccess(Arc::clone(&job)));
@@ -153,10 +154,7 @@ async fn handle_blocks_task(job: Arc<Job>, channel: &Arc<Channel>) {
             .await
         {
             if let Some(block) = block {
-                channel.send(Message::EvmBlock(
-                    Block::EvmBlock(block.header),
-                    Arc::clone(&job),
-                ));
+                channel.send(Message::EvmBlock(block.header, Arc::clone(&job)));
             }
         }
     }
@@ -192,7 +190,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
         let mut current_from = from_block;
         let mut splits = recalculate_splits(from_block, to_block, blocktick);
 
-        log!("sync: tasks: {}: found {} splits", job.id, splits);
+        log!("sync: evm: tasks: {}: found {} splits", job.id, splits);
 
         let mut retries = 0;
         let mut i = 1;
@@ -205,7 +203,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
             }
 
             log!(
-                "sync: tasks: {}: fetching blocks {} to {} ({} / {})",
+                "sync: evm: tasks: {}: fetching blocks {} to {} ({} / {})",
                 job.id,
                 from,
                 to,
@@ -228,7 +226,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
                     println!("{}", e);
                     if current_blocktick <= 1 || retries >= 20 {
                         warning!(
-                          "sync: tasks: {}: failed to fetch with reduced blocktick, aborting...",
+                          "sync: evm: tasks: {}: failed to fetch with reduced blocktick, aborting...",
                           job.id,
                       );
 
@@ -236,7 +234,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
                     }
 
                     log!(
-                        "sync: tasks: {}: reducing blocktick from {} to {}",
+                        "sync: evm: tasks: {}: reducing blocktick from {} to {}",
                         job.id,
                         current_blocktick,
                         (current_blocktick as f64 / 2 as f64).floor(),
@@ -276,7 +274,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
             Err(e) => {
                 log!("{}", e);
                 warning!(
-                    "sync: tasks: failed to get logs for {}, aborting...",
+                    "sync: evm: tasks: failed to get logs for {}, aborting...",
                     job.id
                 );
                 channel.send(Message::TaskFailure(Arc::clone(&job)));

@@ -12,11 +12,13 @@ use tokio_stream::StreamExt;
 use bus::Bus;
 
 use crate::channel::*;
+use crate::query::{PgHandler, PgResult};
 use crate::types::*;
 use crate::worker;
 use crate::worker::*;
 
 pub mod evm;
+pub mod svm;
 
 const DATABASE: &str = "postgres";
 
@@ -60,6 +62,14 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
     }
 
     log!("sync: {} jobs found", jobs.len());
+    log!(
+        "sync: evm: tasks: {} tasks found",
+        jobs.evm_jobs().tasks().len()
+    );
+    log!(
+        "sync: svm: tasks: {} tasks found",
+        jobs.svm_jobs().tasks().len()
+    );
 
     *WORKER_STATUS.exclusive() = WorkerStatus::RUNNING;
 
@@ -74,24 +84,41 @@ pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
     runtime.block_on(async {
         let mut scheduler = Scheduler::utc();
         evm::tasks::setup(&mut scheduler).await;
+        svm::tasks::setup(&mut scheduler).await;
 
-        let blocks_rx = signal_bus.add_rx();
-        let events_rx = signal_bus.add_rx();
+        let evm_blocks_rx = signal_bus.add_rx();
+        let evm_logs_rx = signal_bus.add_rx();
+
+        let svm_blocks_rx = signal_bus.add_rx();
+        let svm_logs_rx = signal_bus.add_rx();
+        let svm_transactions_rx = signal_bus.add_rx();
 
         tokio::select! {
              _ = worker::handle_signals(Arc::clone(&channel), signal_bus) => {
                  log!("sync: received exit signal... exiting");
              },
-             _ = evm::blocks::listen(Arc::clone(&channel), blocks_rx) => {
+             _ = evm::blocks::listen(Arc::clone(&channel), evm_blocks_rx) => {
                  log!("sync: stopped listening to blocks... exiting");
              },
-             _ = evm::logs::listen(Arc::clone(&channel), events_rx) => {
+             _ = evm::logs::listen(Arc::clone(&channel), evm_logs_rx) => {
                  log!("sync: stopped listening to events... exiting");
+             },
+             _ = svm::blocks::listen(Arc::clone(&channel), svm_blocks_rx) => {
+                 log!("sync: stopped listening to blocks... exiting");
+             },
+             _ = svm::logs::listen(Arc::clone(&channel), svm_logs_rx) => {
+                 log!("sync: stopped listening to transactions... exiting");
+             },
+             _ = svm::transactions::listen(Arc::clone(&channel), svm_transactions_rx) => {
+                 log!("sync: stopped listening to transactions... exiting");
              },
              _ = handle_message(&mut stream) => {
                  log!("sync: stopped processing messages... exiting");
              }
              _ = evm::tasks::handle_tasks(Arc::clone(&channel)) => {
+                 log!("sync: tasks: stopped tasks... exiting");
+             },
+             _ = svm::tasks::handle_tasks(Arc::clone(&channel)) => {
                  log!("sync: tasks: stopped tasks... exiting");
              },
         }
@@ -158,6 +185,11 @@ async fn handle_message(stream: &mut MessageStream) {
             }
             Message::EvmBlock(..) => evm::blocks::handle_message(message),
             Message::EvmLog(..) => evm::logs::handle_message(message),
+            Message::SvmBlock(..) => svm::blocks::handle_message(message),
+            Message::SvmLog(..) => svm::logs::handle_message(message),
+            Message::SvmTransaction(..) => {
+                svm::transactions::handle_message(message)
+            }
             Message::TaskSuccess(job) => {
                 if let Some(handler) = job.options.success_handler.as_ref() {
                     let id = job.id;
@@ -190,13 +222,27 @@ async fn handle_message(stream: &mut MessageStream) {
                 if let Some(handler) = job.options.block_check_handler.as_ref()
                 {
                     let id = job.id;
+                    let found = BackgroundWorker::transaction(|| {
+                        PgTryBuilder::new(|| {
+                            u64::call_handler(&number, handler, id)
+                        })
+                        .catch_others(|_| Err(pgrx::spi::Error::NoTupleTable))
+                        .execute()
+                    })
+                    .expect("sync: tasks: failed to execute success handler");
 
-                    if oneshot
-                        .send(evm::blocks::check_one(&number, handler, id))
-                        .is_err()
-                    {
-                        warning!("sync: check_block: failed to send on channel, event job stalled");
-                    }
+                    match found {
+                        PgResult::Boolean(found) => {
+                            if oneshot.send(found).is_err() {
+                                warning!("sync: check_block: failed to send on channel, event job stalled");
+                            }
+                        }
+                        _ => {
+                            if oneshot.send(false).is_err() {
+                                warning!("sync: check_block: failed to send on channel, event job stalled");
+                            }
+                        }
+                    };
                 }
             }
         }
