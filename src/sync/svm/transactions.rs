@@ -351,8 +351,6 @@ pub fn handle_transaction_message(tx: SolanaTransaction, job: Arc<Job>) {
                     &accounts[instruction.program_id_index as usize],
                 );
 
-                log!("{} vs {}", inner_program.as_ref().unwrap(), program_id);
-
                 if inner_program.unwrap() != program_id {
                     continue;
                 }
