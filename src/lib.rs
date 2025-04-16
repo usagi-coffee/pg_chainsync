@@ -117,7 +117,7 @@ extension_sql_file!("../sql/types.sql", name = "types_schema");
 use worker::{EVM_TASKS, RESTART_COUNT, SIGNALS, SVM_TASKS, WORKER_STATUS};
 
 #[pg_guard]
-pub extern "C" fn _PG_init() {
+pub extern "C-unwind" fn _PG_init() {
     pg_shmem_init!(WORKER_STATUS);
     pg_shmem_init!(RESTART_COUNT);
     pg_shmem_init!(EVM_TASKS);

@@ -24,7 +24,7 @@ const DATABASE: &str = "postgres";
 
 #[pg_guard]
 #[no_mangle]
-pub extern "C" fn background_worker_sync(_arg: pg_sys::Datum) {
+pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
     // Auto-quit after n restarts, require manual restart
     if *RESTART_COUNT.exclusive() >= 5 {
         return;

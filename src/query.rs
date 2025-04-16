@@ -1,5 +1,5 @@
+use pgrx::datum::{DatumWithOid, IntoDatum};
 use pgrx::prelude::*;
-use pgrx::{IntoDatum, PgOid};
 
 use tokio::sync::OnceCell;
 
@@ -25,15 +25,9 @@ impl Job {
     pub fn register(name: String, options: pgrx::JsonB) -> i64 {
         match Spi::get_one_with_args(
             "INSERT INTO chainsync.jobs (name, options) VALUES ($1, $2) RETURNING id",
-            vec![
-                (
-                    PgOid::BuiltIn(PgBuiltInOids::TEXTOID),
-                    name.into_datum(),
-                ),
-                (
-                    PgOid::BuiltIn(PgBuiltInOids::JSONBOID),
-                    options.into_datum(),
-                ),
+            &vec![
+              DatumWithOid::from(name),
+              DatumWithOid::from(options)
             ],
         ) {
             Ok(id) => id.unwrap(),
@@ -46,13 +40,10 @@ impl Job {
 
         Spi::run_with_args(
             "UPDATE chainsync.jobs SET status = $1 WHERE id = $2",
-            Some(vec![
-                (
-                    PgOid::BuiltIn(PgBuiltInOids::TEXTOID),
-                    status_text.clone().into_datum(),
-                ),
-                (PgOid::BuiltIn(PgBuiltInOids::INT8OID), id.into_datum()),
-            ]),
+            &vec![
+                DatumWithOid::from(status_text.clone()),
+                DatumWithOid::from(id),
+            ],
         )?;
 
         Ok(())
@@ -61,7 +52,7 @@ impl Job {
     pub fn query_all() -> Result<Vec<Job>, pgrx::spi::Error> {
         Spi::connect(|client| {
             let mut table =
-                client.select("SELECT * FROM chainsync.jobs", None, None)?;
+                client.select("SELECT * FROM chainsync.jobs", None, &vec![])?;
 
             let mut jobs: Vec<Job> = Vec::new();
             while table.next().is_some() {
@@ -98,9 +89,7 @@ impl Job {
     pub fn handler(handler: &String, job: i64) -> Result<(), pgrx::spi::Error> {
         Spi::run_with_args(
             format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $1))", handler).as_str(),
-            Some(vec![
-                (PgOid::BuiltIn(PgBuiltInOids::INT4OID), job.into_datum()),
-            ]),
+            &vec![DatumWithOid::from(job)],
         )
     }
 }
@@ -126,13 +115,10 @@ impl PgHandler for u64 {
     ) -> Result<PgResult, pgrx::spi::Error> {
         let found = Spi::get_one_with_args::<i64>(
         format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
-        vec![
-            (
-                PgOid::BuiltIn(PgBuiltInOids::INT8OID),
-                (*self as i64).into_datum(),
-            ),
-            (PgOid::BuiltIn(PgBuiltInOids::INT4OID), job.into_datum()),
-        ],
+        &vec![
+          DatumWithOid::from(*self as i64),
+          DatumWithOid::from(job)
+        ]
       )?;
 
         Ok(PgResult::Boolean(found.is_some()))
@@ -194,15 +180,13 @@ impl PgHandler for EvmBlock {
             pgrx::AnyNumeric::try_from(self.timestamp),
         )?;
 
+        let oid = data.composite_type_oid().unwrap();
         Spi::run_with_args(
             format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
-            Some(vec![
-                (
-                    PgOid::Custom(data.composite_type_oid().unwrap()),
-                    data.into_datum(),
-                ),
-                (PgOid::BuiltIn(PgBuiltInOids::INT4OID), job.into_datum()),
-            ]),
+            &vec![
+              unsafe { DatumWithOid::new(data, oid) },
+              DatumWithOid::from(job),
+            ],
         )?;
 
         Ok(PgResult::None)
@@ -244,15 +228,13 @@ impl PgHandler for EvmLog {
         )?;
         data.set_by_name("data", hex::encode(&self.inner.data.data))?;
 
+        let oid = data.composite_type_oid().unwrap();
         Spi::run_with_args(
             format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
-            Some(vec![
-                (
-                    PgOid::Custom(data.composite_type_oid().unwrap()),
-                    data.into_datum(),
-                ),
-                (PgOid::BuiltIn(PgBuiltInOids::INT4OID), job.into_datum()),
-            ]),
+            &vec![
+                unsafe { DatumWithOid::new(data, oid) },
+                DatumWithOid::from(job),
+            ],
         )?;
 
         Ok(PgResult::None)
@@ -295,15 +277,13 @@ impl PgHandler for SolanaBlock {
             ),
         )?;
 
+        let oid = data.composite_type_oid().unwrap();
         Spi::run_with_args(
             format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
-            Some(vec![
-                (
-                    PgOid::Custom(data.composite_type_oid().unwrap()),
-                    data.into_datum(),
-                ),
-                (PgOid::BuiltIn(PgBuiltInOids::INT4OID), job.into_datum()),
-            ]),
+            &vec![
+              unsafe { DatumWithOid::new(data, oid) },
+              DatumWithOid::from(job),
+            ],
         )?;
 
         Ok(PgResult::None)
@@ -326,15 +306,13 @@ impl PgHandler for SolanaLog {
         data.set_by_name("signature", &self.value.signature)?;
         data.set_by_name("logs", self.value.logs.clone())?;
 
+        let oid = data.composite_type_oid().unwrap();
         Spi::run_with_args(
             format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
-            Some(vec![
-                (
-                    PgOid::Custom(data.composite_type_oid().unwrap()),
-                    data.into_datum(),
-                ),
-                (PgOid::BuiltIn(PgBuiltInOids::INT4OID), job.into_datum()),
-            ]),
+            &vec![
+              unsafe { DatumWithOid::new(data, oid) },
+              DatumWithOid::from(job),
+            ],
         )?;
 
         Ok(PgResult::None)
@@ -375,15 +353,13 @@ impl PgHandler for SolanaTransaction {
             .collect();
         data.set_by_name("signatures", signatures)?;
 
+        let oid = data.composite_type_oid().unwrap();
         Spi::run_with_args(
             format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
-            Some(vec![
-                (
-                    PgOid::Custom(data.composite_type_oid().unwrap()),
-                    data.into_datum(),
-                ),
-                (PgOid::BuiltIn(PgBuiltInOids::INT4OID), job.into_datum()),
-            ]),
+            &vec![
+              unsafe { DatumWithOid::new(data, oid) },
+              DatumWithOid::from(job),
+            ]
         )?;
 
         Ok(PgResult::None)
@@ -441,15 +417,13 @@ impl PgHandler for SolanaInstruction<'_> {
 
         data.set_by_name("index", self.index)?;
 
+        let oid = data.composite_type_oid().unwrap();
         Spi::run_with_args(
             format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
-            Some(vec![
-                (
-                    PgOid::Custom(data.composite_type_oid().unwrap()),
-                    data.into_datum(),
-                ),
-                (PgOid::BuiltIn(PgBuiltInOids::INT4OID), job.into_datum()),
-            ]),
+            &vec![
+              unsafe { DatumWithOid::new(data, oid) },
+              DatumWithOid::from(job),
+            ],
         )?;
 
         Ok(PgResult::None)
@@ -509,15 +483,13 @@ impl PgHandler for SolanaInnerInstruction<'_> {
         data.set_by_name("index", self.index)?;
         data.set_by_name("inner_index", self.inner_index)?;
 
+        let oid = data.composite_type_oid().unwrap();
         Spi::run_with_args(
             format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
-            Some(vec![
-                (
-                    PgOid::Custom(data.composite_type_oid().unwrap()),
-                    data.into_datum(),
-                ),
-                (PgOid::BuiltIn(PgBuiltInOids::INT4OID), job.into_datum()),
-            ]),
+            &vec![
+              unsafe { DatumWithOid::new(data, oid) },
+              DatumWithOid::from(job),
+            ],
         )?;
 
         Ok(PgResult::None)
