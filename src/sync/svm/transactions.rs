@@ -22,6 +22,7 @@ use solana_transaction_status_client_types::{
     UiTransactionEncoding,
 };
 
+use crate::types::svm::*;
 use crate::types::Job;
 
 use crate::channel::Channel;

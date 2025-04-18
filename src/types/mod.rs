@@ -1,3 +1,6 @@
+pub mod evm;
+pub mod svm;
+
 use std::str;
 use std::sync::Arc;
 
@@ -7,33 +10,12 @@ use solana_sdk::pubkey::Pubkey;
 use tokio::sync::oneshot;
 use tokio::sync::OnceCell;
 
-use solana_transaction_status_client_types::EncodedConfirmedTransactionWithStatusMeta;
-use solana_transaction_status_client_types::TransactionDetails;
-use solana_transaction_status_client_types::UiConfirmedBlock;
-
-pub type EvmPubSub =
-    alloy::providers::RootProvider<alloy::pubsub::PubSubFrontend>;
-pub type EvmPubSubError =
-    alloy::transports::RpcError<alloy::transports::TransportErrorKind>;
-
-pub type EvmLogResponse = alloy::rpc::types::Log;
-
-pub type SolanaPubSub = solana_client::nonblocking::pubsub_client::PubsubClient;
-pub type SolanaPubSubError = solana_client::pubsub_client::PubsubClientError;
-pub type SolanaRpc = solana_client::nonblocking::rpc_client::RpcClient;
+use crate::types::evm::*;
+use crate::types::svm::*;
 
 pub const JOB_COMPOSITE_TYPE: &str = "chainsync.Job";
 
 pub type Callback = String;
-
-pub type EvmBlock = alloy::rpc::types::Header;
-pub type EvmLog = alloy::rpc::types::Log;
-
-pub type SolanaBlock = UiConfirmedBlock;
-pub type SolanaLog = solana_client::rpc_response::Response<
-    solana_client::rpc_response::RpcLogsResponse,
->;
-pub type SolanaTransaction = EncodedConfirmedTransactionWithStatusMeta;
 
 #[derive(Clone, PartialEq)]
 #[repr(u8)]
@@ -86,55 +68,6 @@ pub struct Job {
 
     #[serde(skip_serializing, skip_deserializing)]
     pub svm_rpc: OnceCell<Arc<SolanaRpc>>,
-}
-
-impl Job {
-    pub async fn connect_evm(
-        &self,
-    ) -> anyhow::Result<&EvmPubSub, EvmPubSubError> {
-        let url = self
-            .options
-            .ws
-            .as_ref()
-            .expect("Websocket URL was not provided");
-
-        self.evm
-            .get_or_try_init(|| async {
-                let ws = alloy::providers::WsConnect::new(url);
-                alloy::providers::ProviderBuilder::new().on_ws(ws).await
-            })
-            .await
-    }
-
-    pub async fn connect_svm_ws(
-        &self,
-    ) -> anyhow::Result<&Arc<SolanaPubSub>, SolanaPubSubError> {
-        let url = self
-            .options
-            .ws
-            .as_ref()
-            .expect("Websocket URL was not provided");
-
-        self.svm_ws
-            .get_or_try_init(|| async {
-                let r = SolanaPubSub::new(&url);
-                r.await.map(Arc::new)
-            })
-            .await
-    }
-
-    pub async fn connect_svm_rpc(&self) -> anyhow::Result<&Arc<SolanaRpc>> {
-        let url = self
-            .options
-            .rpc
-            .as_ref()
-            .expect("RPC URL was not provided")
-            .clone();
-
-        self.svm_rpc
-            .get_or_try_init(|| async { Ok(Arc::new(SolanaRpc::new(url))) })
-            .await
-    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -197,7 +130,7 @@ pub struct JobOptions {
     pub until: Option<String>,
 
     // SVM: Block Config
-    pub transaction_details: Option<TransactionDetails>,
+    pub transaction_details: Option<SolanaTransactionDetails>,
 }
 
 impl JobOptions {

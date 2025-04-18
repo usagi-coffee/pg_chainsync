@@ -18,6 +18,7 @@ use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 
 use bus::BusReader;
 
+use crate::types::svm::*;
 use crate::types::Job;
 
 use crate::channel::Channel;
