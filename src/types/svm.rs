@@ -4,23 +4,23 @@ use solana_transaction_status_client_types::EncodedConfirmedTransactionWithStatu
 use solana_transaction_status_client_types::TransactionDetails;
 use solana_transaction_status_client_types::UiConfirmedBlock;
 
-pub type SolanaPubSub = solana_client::nonblocking::pubsub_client::PubsubClient;
-pub type SolanaPubSubError = solana_client::pubsub_client::PubsubClientError;
-pub type SolanaRpc = solana_client::nonblocking::rpc_client::RpcClient;
+pub type SvmPubSub = solana_client::nonblocking::pubsub_client::PubsubClient;
+pub type SvmPubSubError = solana_client::pubsub_client::PubsubClientError;
+pub type SvmRpc = solana_client::nonblocking::rpc_client::RpcClient;
 
-pub type SolanaBlock = UiConfirmedBlock;
-pub type SolanaLog = solana_client::rpc_response::Response<
+pub type SvmBlock = UiConfirmedBlock;
+pub type SvmLog = solana_client::rpc_response::Response<
     solana_client::rpc_response::RpcLogsResponse,
 >;
-pub type SolanaTransaction = EncodedConfirmedTransactionWithStatusMeta;
-pub type SolanaTransactionDetails = TransactionDetails;
+pub type SvmTransaction = EncodedConfirmedTransactionWithStatusMeta;
+pub type SvmTransactionDetails = TransactionDetails;
 
 use crate::types::Job;
 
 impl Job {
     pub async fn connect_svm_ws(
         &self,
-    ) -> anyhow::Result<&Arc<SolanaPubSub>, SolanaPubSubError> {
+    ) -> anyhow::Result<&Arc<SvmPubSub>, SvmPubSubError> {
         let url = self
             .options
             .ws
@@ -29,13 +29,13 @@ impl Job {
 
         self.svm_ws
             .get_or_try_init(|| async {
-                let r = SolanaPubSub::new(&url);
+                let r = SvmPubSub::new(&url);
                 r.await.map(Arc::new)
             })
             .await
     }
 
-    pub async fn connect_svm_rpc(&self) -> anyhow::Result<&Arc<SolanaRpc>> {
+    pub async fn connect_svm_rpc(&self) -> anyhow::Result<&Arc<SvmRpc>> {
         let url = self
             .options
             .rpc
@@ -44,7 +44,7 @@ impl Job {
             .clone();
 
         self.svm_rpc
-            .get_or_try_init(|| async { Ok(Arc::new(SolanaRpc::new(url))) })
+            .get_or_try_init(|| async { Ok(Arc::new(SvmRpc::new(url))) })
             .await
     }
 }

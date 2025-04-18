@@ -204,7 +204,7 @@ pub fn handle_message(message: Message) {
     handle_log_message(log, job)
 }
 
-pub fn handle_log_message(log: SolanaLog, job: Arc<Job>) {
+pub fn handle_log_message(log: SvmLog, job: Arc<Job>) {
     let number = log.context.slot;
     log!("sync: svm: logs: {}: adding {}", "sol", number);
 

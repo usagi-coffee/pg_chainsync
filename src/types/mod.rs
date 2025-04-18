@@ -41,9 +41,9 @@ pub enum Message {
     EvmBlock(EvmBlock, Arc<Job>),
     EvmLog(EvmLog, Arc<Job>),
 
-    SvmBlock(SolanaBlock, Arc<Job>),
-    SvmLog(SolanaLog, Arc<Job>),
-    SvmTransaction(SolanaTransaction, Arc<Job>),
+    SvmBlock(SvmBlock, Arc<Job>),
+    SvmLog(SvmLog, Arc<Job>),
+    SvmTransaction(SvmTransaction, Arc<Job>),
 
     // Tasks
     TaskSuccess(Arc<Job>),
@@ -64,10 +64,10 @@ pub struct Job {
     pub evm: OnceCell<EvmPubSub>,
 
     #[serde(skip_serializing, skip_deserializing)]
-    pub svm_ws: OnceCell<Arc<SolanaPubSub>>,
+    pub svm_ws: OnceCell<Arc<SvmPubSub>>,
 
     #[serde(skip_serializing, skip_deserializing)]
-    pub svm_rpc: OnceCell<Arc<SolanaRpc>>,
+    pub svm_rpc: OnceCell<Arc<SvmRpc>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -130,7 +130,7 @@ pub struct JobOptions {
     pub until: Option<String>,
 
     // SVM: Block Config
-    pub transaction_details: Option<SolanaTransactionDetails>,
+    pub transaction_details: Option<SvmTransactionDetails>,
 }
 
 impl JobOptions {

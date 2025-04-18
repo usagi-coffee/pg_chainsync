@@ -243,7 +243,7 @@ impl PgHandler for EvmLog {
     }
 }
 
-impl PgHandler for SolanaBlock {
+impl PgHandler for SvmBlock {
     fn call_handler(
         &self,
         handler: &String,
@@ -292,7 +292,7 @@ impl PgHandler for SolanaBlock {
     }
 }
 
-impl PgHandler for SolanaLog {
+impl PgHandler for SvmLog {
     fn call_handler(
         &self,
         handler: &String,
@@ -321,7 +321,7 @@ impl PgHandler for SolanaLog {
     }
 }
 
-impl PgHandler for SolanaTransaction {
+impl PgHandler for SvmTransaction {
     fn call_handler(
         &self,
         handler: &String,

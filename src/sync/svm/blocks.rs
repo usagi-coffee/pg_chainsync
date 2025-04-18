@@ -164,7 +164,7 @@ pub fn handle_message(message: Message) {
     handle_block_message(block, job)
 }
 
-pub fn handle_block_message(block: SolanaBlock, job: Arc<Job>) {
+pub fn handle_block_message(block: SvmBlock, job: Arc<Job>) {
     let number = block.block_height.unwrap();
     log!("sync: svm: blocks: {}: adding {}", "sol", number);
 

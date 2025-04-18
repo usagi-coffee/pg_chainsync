@@ -250,7 +250,7 @@ pub fn handle_message(message: Message) {
     handle_transaction_message(tx, job)
 }
 
-pub fn handle_transaction_message(tx: SolanaTransaction, job: Arc<Job>) {
+pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
     let id = job.id;
     let meta = tx.transaction.meta.as_ref().expect("Failed to get meta");
     let loaded_addresses =
@@ -432,13 +432,13 @@ pub fn build_config(_: &JobOptions) -> RpcTransactionConfig {
 }
 
 pub struct SolanaInstruction<'a> {
-    pub _tx: &'a SolanaTransaction,
+    pub _tx: &'a SvmTransaction,
     pub _instruction: &'a CompiledInstruction,
     pub index: i16,
 }
 
 pub struct SolanaInnerInstruction<'a> {
-    pub _tx: &'a SolanaTransaction,
+    pub _tx: &'a SvmTransaction,
     pub _instruction: &'a UiCompiledInstruction,
     pub index: i16,
     pub inner_index: i16,
