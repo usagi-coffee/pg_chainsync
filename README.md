@@ -42,8 +42,7 @@ SELECT chainsync.register(
   '{
     "evm": true,
     "ws": "wss://provider-url",
-    "block_handler": "custom_block_handler",
-    "chain": 1
+    "block_handler": "custom_block_handler"
   }'::JSONB);
 
 -- Optional: Restart worker (or entire database)
@@ -78,8 +77,7 @@ SELECT chainsync.register(
     "ws": "ws://provider-url",
     "log_handler": "custom_log_handler",
     "address": "0x....",
-    "event": "Transfer(address,address,uint256)",
-    "chain": 1
+    "event": "Transfer(address,address,uint256)"
   }'::JSONB
 );
 
@@ -106,8 +104,7 @@ SELECT chainsync.register(
     "event": "Transfer(address,address,uint256)",
     "oneshot": true,
     "from_block": 12345,
-    "blocktick": 10000,
-    "chain": 1
+    "blocktick": 10000
   }'::JSONB
 );
 
@@ -129,8 +126,7 @@ SELECT chainsync.register(
     "address": "0x....",
     "event": "Transfer(address,address,uint256)",
     "cron": "0 * * * * *",
-    "from_block": 0,
-    "chain": 31337
+    "from_block": 0
   }'::JSONB
 );
 ```
@@ -149,8 +145,7 @@ SELECT chainsync.register(
     "address": "0x....",
     "event": "Transfer(address,address,uint256)",
     "preload": true,
-    "from_block": 0,
-    "chain": 31337
+    "from_block": 0
   }'::JSONB
 );
 ```
@@ -166,7 +161,7 @@ You can optionally skip block fetching and handling if you specify `block_check_
 CREATE FUNCTION find_block(block BIGINT, job JSONB) RETURNS BIGINT
 AS $$
 SELECT block_column FROM your_blocks
-WHERE chain_column = job->>'options'->>'chain' AND block_column = block
+WHERE chain_column = job->>'chain' AND block_column = block
 LIMIT 1
 $$ LANGUAGE SQL;
 
