@@ -91,6 +91,15 @@ mod chainsync {
 
         let id = Job::register(name.into(), options);
 
+        // Automatically enqueue the task if it's a one-shot job
+        if let Some(oneshot) = configuration.oneshot {
+            if oneshot {
+                if let Err(_) = EVM_TASKS.exclusive().push(id) {
+                    panic!("failed to enqueue the task")
+                }
+            }
+        }
+
         // Send signal to the worker to restart the loop
         if configuration.is_block_job() {
             if let Err(_) = SIGNALS
