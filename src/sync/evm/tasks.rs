@@ -248,10 +248,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
                     current_from = from;
                     splits = recalculate_splits(
                         current_from,
-                        std::cmp::min(
-                            to_block,
-                            current_from + current_blocktick,
-                        ),
+                        to_block,
                         current_blocktick,
                     );
                     retries = 0;
