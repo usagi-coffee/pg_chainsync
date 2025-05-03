@@ -190,7 +190,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
         let mut current_from = from_block;
         let mut splits = recalculate_splits(from_block, to_block, blocktick);
 
-        log!("sync: evm: tasks: {}: found {} splits", job.id, splits);
+        log!("sync: evm: tasks: {}: found {} splits", &job.name, splits);
 
         let mut retries = 0;
         let mut i = 1;
@@ -204,7 +204,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
 
             log!(
                 "sync: evm: tasks: {}: fetching blocks {} to {} ({} / {})",
-                job.id,
+                &job.name,
                 from,
                 to,
                 i,
@@ -227,7 +227,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
                     if current_blocktick <= 1 || retries >= 20 {
                         warning!(
                           "sync: evm: tasks: {}: failed to fetch with reduced blocktick, aborting...",
-                          job.id,
+                          &job.name,
                       );
 
                         break;
@@ -235,7 +235,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
 
                     log!(
                         "sync: evm: tasks: {}: reducing blocktick from {} to {}",
-                        job.id,
+                        &job.name,
                         current_blocktick,
                         (current_blocktick as f64 / 2 as f64).floor(),
                     );
@@ -272,7 +272,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
                 log!("{}", e);
                 warning!(
                     "sync: evm: tasks: failed to get logs for {}, aborting...",
-                    job.id
+                    &job.name,
                 );
                 channel.send(Message::TaskFailure(Arc::clone(&job)));
             }
