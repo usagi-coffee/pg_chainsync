@@ -84,27 +84,22 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
             let (tx, rx) = oneshot::channel::<Option<Job>>();
             channel.send(Message::Job(task, tx));
 
-            let job = rx.await;
-
-            if let Err(_) = job {
+            let Ok(job) = rx.await else {
                 warning!(
                     "sync: svm: tasks: failed to fetch job for task {}",
                     task
                 );
                 continue;
-            }
+            };
 
-            let job = job.unwrap();
-
-            if job.is_none() {
+            let Some(job) = job else {
                 warning!(
                     "sync: svm: tasks: failed to find job for task {}",
                     task
                 );
                 continue;
-            }
+            };
 
-            let job = job.unwrap();
             if let Err(err) = job.connect_svm_rpc().await {
                 warning!(
                     "sync: svm: tasks: failed to create provider for {}, {}",

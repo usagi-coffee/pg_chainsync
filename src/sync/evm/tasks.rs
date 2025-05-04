@@ -81,27 +81,22 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
             let (tx, rx) = oneshot::channel::<Option<Job>>();
             channel.send(Message::Job(task, tx));
 
-            let job = rx.await;
-
-            if let Err(_) = job {
+            let Ok(job) = rx.await else {
                 warning!(
                     "sync: evm: tasks: failed to fetch job for task {}",
                     task
                 );
                 continue;
-            }
+            };
 
-            let job = job.unwrap();
-
-            if job.is_none() {
+            let Some(job) = job else {
                 warning!(
                     "sync: evm: tasks: failed to find job for task {}",
                     task
                 );
                 continue;
-            }
+            };
 
-            let job = job.unwrap();
             if let Err(err) = job.connect_evm().await {
                 warning!(
                     "sync: evm: tasks: failed to create provider for {}, {}",
@@ -239,7 +234,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
                     }
                 }
                 Err(e) => {
-                    println!("{}", e);
+                    warning!("{}", e);
                     if current_blocktick <= 1 || retries >= 20 {
                         warning!(
                           "sync: evm: tasks: {}: failed to fetch with reduced blocktick, aborting...",
