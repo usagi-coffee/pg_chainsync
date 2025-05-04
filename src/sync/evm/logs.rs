@@ -280,7 +280,6 @@ pub fn build_filter(options: &JobOptions, block: u64) -> Filter {
         } else if *to_block < 0 {
             let target: i64 = block as i64 + *to_block;
             if target > 0 {
-                println!("using safe block {} from {}", target, block);
                 filter = filter.to_block::<u64>((target as u64).into());
             }
         } else if *to_block > 0 {
