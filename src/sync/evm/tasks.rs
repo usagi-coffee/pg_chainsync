@@ -175,10 +175,26 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
     let mut filter = logs::build_filter(options, block);
 
     let from_block = options.from_block.unwrap_or(0);
-    let mut to_block = options.to_block.unwrap_or(0);
-    if options.to_block.is_none() {
-        to_block = block as i64;
-    }
+    let to_block = {
+        if let Some(target) = options.to_block {
+            // Use latest
+            if target == 0 {
+                block as i64
+            }
+            // Offset
+            else if target < 0 {
+                (block as i64) + target as i64
+            }
+            // Specific block
+            else {
+                target as i64
+            }
+        }
+        // Use latest
+        else {
+            block as i64
+        }
+    };
 
     // Split logs by blocktick if needed
     if let Some(blocktick) = options.blocktick {
