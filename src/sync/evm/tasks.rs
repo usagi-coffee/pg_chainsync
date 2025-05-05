@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -6,7 +7,7 @@ use alloy::providers::Provider;
 use pgrx::bgworkers::BackgroundWorker;
 use pgrx::{log, warning};
 
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Semaphore};
 use tokio::time::{sleep_until, Duration, Instant};
 
 use cron::Schedule;
@@ -69,6 +70,8 @@ pub async fn setup(scheduler: &mut Scheduler) {
 }
 
 pub async fn handle_tasks(channel: Arc<Channel>) {
+    let mut semaphores: HashMap<String, Arc<Semaphore>> = HashMap::new();
+
     loop {
         let task: Option<i64> = { EVM_TASKS.exclusive().pop() };
 
@@ -97,6 +100,14 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                 continue;
             };
 
+            let Some(ws) = &job.options.ws else {
+                warning!(
+                    "sync: evm: tasks: no ws was provided for task {}",
+                    task
+                );
+                continue;
+            };
+
             if let Err(err) = job.connect_evm().await {
                 warning!(
                     "sync: evm: tasks: failed to create provider for {}, {}",
@@ -106,17 +117,33 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                 continue;
             };
 
-            let job = Arc::new(job);
-
-            if job.options.is_block_job() {
-                handle_blocks_task(Arc::clone(&job), &channel).await
-            } else if job.options.is_log_job() {
-                handle_log_task(Arc::clone(&job), &channel).await
-            } else {
-                warning!("sync: evm: tasks: unknown  task {}", task);
+            // Create semaphore per ws key
+            if !semaphores.contains_key(ws) {
+                semaphores.insert(ws.into(), Arc::new(Semaphore::new(1)));
             }
 
-            channel.send(Message::TaskSuccess(Arc::clone(&job)));
+            // SAFETY: The semaphore is created line before
+            let semaphore = semaphores.get(ws).unwrap().clone();
+            let channel = channel.clone();
+            tokio::spawn(async move {
+                let Ok(permit) = semaphore.acquire().await else {
+                    warning!("sync: evm: tasks: failed to acquire semaphore for task {}", task);
+                    return;
+                };
+
+                let job = Arc::new(job);
+
+                if job.options.is_block_job() {
+                    handle_blocks_task(Arc::clone(&job), &channel).await;
+                } else if job.options.is_log_job() {
+                    handle_log_task(Arc::clone(&job), &channel).await;
+                } else {
+                    warning!("sync: evm: tasks: unknown  task {}", task);
+                }
+
+                drop(permit);
+                channel.send(Message::TaskSuccess(Arc::clone(&job)));
+            });
         }
 
         sleep_until(Instant::now() + Duration::from_millis(250)).await;
@@ -191,6 +218,8 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
         }
     };
 
+    let client = job.connect_evm().await.unwrap();
+
     // Split logs by blocktick if needed
     if let Some(blocktick) = options.blocktick {
         let recalculate_splits = |from: i64, to: i64, blocktick: i64| {
@@ -224,7 +253,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
 
             filter = filter.from_block(from as u64).to_block(to as u64);
 
-            let logs = job.connect_evm().await.unwrap().get_logs(&filter).await;
+            let logs = client.get_logs(&filter).await;
 
             match logs {
                 Ok(mut logs) => {
@@ -273,7 +302,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
     }
     // Or just get all logs at once
     else {
-        match job.connect_evm().await.unwrap().get_logs(&filter).await {
+        match client.get_logs(&filter).await {
             Ok(mut logs) => {
                 for log in logs.drain(0..) {
                     logs::handle_evm_log(&job, log, &channel).await;
