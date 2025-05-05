@@ -28,9 +28,9 @@ SELECT chainsync.stop();
 
 ```sql
 -- This is your custom handler that inserts new blocks to your table
-CREATE FUNCTION custom_block_handler(block chainsync.Block, job JSONB) RETURNS blocks
+CREATE FUNCTION custom_block_handler(block chainsync.Block, job JSONB) RETURNS your_blocks
 AS $$
-INSERT INTO blocks (number, hash) -- Inserting into your custom table
+INSERT INTO your_blocks (number, hash)
 VALUES (block.number, block.hash)
 RETURNING *
 $$
@@ -44,9 +44,6 @@ SELECT chainsync.register(
     "ws": "wss://provider-url",
     "block_handler": "custom_block_handler"
   }'::JSONB);
-
--- Optional: Restart worker (or entire database)
-SELECT chainsync.restart();
 ```
 
 For the optimal performance your handler function should meet the conditions to be [inlined](https://wiki.postgresql.org/wiki/Inlining_of_SQL_functions).
@@ -55,16 +52,14 @@ Here is the complete log output, for the testing the number of fetched blocks ha
 
 ![example_output](./extra/usage1.png)
 
-The usage examples were run on PotsgreSQL 15.
-
 ### Watching new events
 
 ```sql
 
 -- This is your custom handler that inserts events to your table
-CREATE FUNCTION custom_log_handler(log chainsync.Log, job JSONB) RETURNS logs
+CREATE FUNCTION custom_log_handler(log chainsync.Log, job JSONB) RETURNS your_logs
 AS $$
-INSERT INTO logs (address, data) -- Inserting into your custom table
+INSERT INTO your_logs (address, data) -- Inserting into your custom table
 VALUES (log.address, log.data)
 RETURNING *
 $$
@@ -161,7 +156,7 @@ You can optionally skip block fetching and handling if you specify `block_check_
 CREATE FUNCTION find_block(block BIGINT, job JSONB) RETURNS BIGINT
 AS $$
 SELECT block_column FROM your_blocks
-WHERE chain_column = job->>'chain' AND block_column = block
+WHERE chain_column = job->>'your_custom_property' AND block_column = block
 LIMIT 1
 $$ LANGUAGE SQL;
 
@@ -176,7 +171,7 @@ SELECT chainsync.register(
     "await_block": true,
     "block_handler": "insert_block",
     "block_check_handler": "find_block",
-    "chain": 31337
+    "your_custom_property": 31337
   }'::JSONB
 );
 
@@ -184,7 +179,7 @@ SELECT chainsync.register(
 
 ## Installation
 
-> **_IMPORTANT_**: currently the database that the worker uses is hard-coded to `postgres` if you are using different database please modify the `DATABASE` constant inside `src/sync.rs` before building.
+> **_IMPORTANT_**: currently the database that the worker uses is hard-coded to `postgres` if you are using different database name please modify the `DATABASE` constant inside `src/sync.rs` before building.
 
 ```bash
 # Install pgrx
@@ -224,8 +219,8 @@ Volumes to adjust in `docker-compose.yml` if compiled paths are different, your 
 
 ```
 - ./target/release/pg_chainsync-pg17/usr/lib64/pgsql/pg_chainsync.so:/usr/lib/postgresql/17/lib/pg_chainsync.so:z
-- ./target/release/pg_chainsync-pg17/usr/share/pgsql/extension/pg_chainsync.control:/usr/share/postgresql/16/extension/pg_chainsync.control:z
-- ./target/release/pg_chainsync-pg17/usr/share/pgsql/extension/pg_chainsync--0.0.0.sql:/usr/share/postgresql/16/extension/pg_chainsync--0.0.0.sql:z
+- ./target/release/pg_chainsync-pg17/usr/share/pgsql/extension/pg_chainsync.control:/usr/share/postgresql/17/extension/pg_chainsync.control:z
+- ./target/release/pg_chainsync-pg17/usr/share/pgsql/extension/pg_chainsync--0.0.0.sql:/usr/share/postgresql/17/extension/pg_chainsync--0.0.0.sql:z
 ```
 
 ## License
