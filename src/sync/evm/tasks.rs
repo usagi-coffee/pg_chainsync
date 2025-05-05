@@ -117,13 +117,11 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                 continue;
             };
 
-            // Create semaphore per ws key
-            if !semaphores.contains_key(ws) {
-                semaphores.insert(ws.into(), Arc::new(Semaphore::new(1)));
-            }
+            let semaphore = semaphores
+                .entry(ws.into())
+                .or_insert(Arc::new(Semaphore::new(1)))
+                .clone();
 
-            // SAFETY: The semaphore is created line before
-            let semaphore = semaphores.get(ws).unwrap().clone();
             let channel = channel.clone();
             tokio::spawn(async move {
                 let Ok(permit) = semaphore.acquire().await else {
