@@ -164,19 +164,12 @@ async fn handle_message(mut stream: MessageStream) {
             interval.tick().await;
             log!(
                 "sync: messages: evm: blocks={}/m logs={}/m svm: blocks={}/m txs={}/m logs={}/m",
-                evm_blocks_stats.load(Ordering::Relaxed),
-                evm_logs_stats.load(Ordering::Relaxed),
-                svm_blocks_stats.load(Ordering::Relaxed),
-                svm_txs_stats.load(Ordering::Relaxed),
-                svm_logs_stats.load(Ordering::Relaxed)
+                evm_blocks_stats.swap(0, Ordering::Relaxed),
+                evm_logs_stats.swap(0, Ordering::Relaxed),
+                svm_blocks_stats.swap(0, Ordering::Relaxed),
+                svm_txs_stats.swap(0, Ordering::Relaxed),
+                svm_logs_stats.swap(0, Ordering::Relaxed)
             );
-
-            // Reset counters
-            evm_blocks_stats.store(0, Ordering::Relaxed);
-            evm_logs_stats.store(0, Ordering::Relaxed);
-            svm_blocks_stats.store(0, Ordering::Relaxed);
-            svm_txs_stats.store(0, Ordering::Relaxed);
-            svm_logs_stats.store(0, Ordering::Relaxed);
         }
     });
 
