@@ -3,6 +3,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use alloy::providers::Provider;
+use alloy::transports::RpcError;
 
 use pgrx::bgworkers::BackgroundWorker;
 use pgrx::{log, warning};
@@ -251,7 +252,13 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
 
             filter = filter.from_block(from as u64).to_block(to as u64);
 
-            let logs = client.get_logs(&filter).await;
+            let request = client.get_logs(&filter);
+
+            // Do 10 second timeout to ensure we don't block forever and force-reduce blocktick
+            let logs = tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(10)) => Err(RpcError::NullResp),
+                logs = request => logs
+            };
 
             match logs {
                 Ok(mut logs) => {
