@@ -51,6 +51,7 @@ pub enum Message {
 
     // Utility messages
     CheckBlock(u64, oneshot::Sender<bool>, Arc<Job>),
+    Shutdown,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

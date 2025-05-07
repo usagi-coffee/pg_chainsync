@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use pgrx::prelude::*;
@@ -6,6 +7,7 @@ use pgrx::bgworkers::*;
 use pgrx::log;
 
 use tokio::sync::mpsc;
+use tokio::time::Duration;
 use tokio_cron::Scheduler;
 use tokio_stream::StreamExt;
 
@@ -79,7 +81,6 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
     let mut signal_bus = Bus::<Signal>::new(64);
 
     let channel = Arc::new(Channel::new(send_message));
-    let mut stream = MessageStream::new(receive_message);
 
     runtime.block_on(async {
         let mut scheduler = Scheduler::utc();
@@ -92,6 +93,8 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
         let svm_blocks_rx = signal_bus.add_rx();
         let svm_logs_rx = signal_bus.add_rx();
         let svm_transactions_rx = signal_bus.add_rx();
+
+        let handler = tokio::spawn(handle_message(MessageStream::new(receive_message)));
 
         tokio::select! {
              _ = worker::handle_signals(Arc::clone(&channel), signal_bus) => {
@@ -112,15 +115,18 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
              _ = svm::transactions::listen(Arc::clone(&channel), svm_transactions_rx) => {
                  log!("sync: stopped listening to transactions... exiting");
              },
-             _ = handle_message(&mut stream) => {
-                 log!("sync: stopped processing messages... exiting");
-             }
              _ = evm::tasks::handle_tasks(Arc::clone(&channel)) => {
                  log!("sync: tasks: stopped tasks... exiting");
              },
              _ = svm::tasks::handle_tasks(Arc::clone(&channel)) => {
                  log!("sync: tasks: stopped tasks... exiting");
              },
+        }
+
+        if channel.send(Message::Shutdown) {
+          if let Err(err) = handler.await {
+              log!("sync: messages: exited with error: {}", err);
+          }
         }
     });
 
@@ -137,11 +143,51 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
     log!("sync: worker has exited");
 }
 
-async fn handle_message(stream: &mut MessageStream) {
-    while let Some(message) = stream.next().await {
+async fn handle_message(mut stream: MessageStream) {
+    let evm_blocks = Arc::new(AtomicUsize::new(0));
+    let evm_logs = Arc::new(AtomicUsize::new(0));
+    let evm_blocks_stats = Arc::clone(&evm_blocks);
+    let evm_logs_stats = Arc::clone(&evm_logs);
+
+    let svm_blocks = Arc::new(AtomicUsize::new(0));
+    let svm_logs = Arc::new(AtomicUsize::new(0));
+    let svm_txs = Arc::new(AtomicUsize::new(0));
+    let svm_blocks_stats = Arc::clone(&svm_blocks);
+    let svm_logs_stats = Arc::clone(&svm_logs);
+    let svm_txs_stats = Arc::clone(&svm_txs);
+
+    // Spawn stats task
+    let stats = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+
+        loop {
+            interval.tick().await;
+            log!(
+                "sync: messages: evm: blocks={}/m logs={}/m svm: blocks={}/m txs={}/m logs={}/m",
+                evm_blocks_stats.load(Ordering::Relaxed),
+                evm_logs_stats.load(Ordering::Relaxed),
+                svm_blocks_stats.load(Ordering::Relaxed),
+                svm_txs_stats.load(Ordering::Relaxed),
+                svm_logs_stats.load(Ordering::Relaxed)
+            );
+
+            // Reset counters
+            evm_blocks_stats.store(0, Ordering::Relaxed);
+            evm_logs_stats.store(0, Ordering::Relaxed);
+            svm_blocks_stats.store(0, Ordering::Relaxed);
+            svm_txs_stats.store(0, Ordering::Relaxed);
+            svm_logs_stats.store(0, Ordering::Relaxed);
+        }
+    });
+
+    loop {
+        let Some(message) = stream.next().await else {
+            warning!("sync: messages: got None");
+            continue;
+        };
+
         match message {
             Message::Job(id, oneshot) => {
-                // TODO: query_one
                 let jobs = BackgroundWorker::transaction(|| {
                     PgTryBuilder::new(Job::query_all)
                         .catch_others(|_| Err(pgrx::spi::Error::NoTupleTable))
@@ -183,11 +229,24 @@ async fn handle_message(stream: &mut MessageStream) {
                 })
                 .expect("sync: jobs: failed to update job status");
             }
-            Message::EvmBlock(..) => evm::blocks::handle_message(message),
-            Message::EvmLog(..) => evm::logs::handle_message(message),
-            Message::SvmBlock(..) => svm::blocks::handle_message(message),
-            Message::SvmLog(..) => svm::logs::handle_message(message),
+            Message::EvmBlock(..) => {
+                evm_blocks.fetch_add(1, Ordering::Relaxed);
+                evm::blocks::handle_message(message);
+            }
+            Message::EvmLog(..) => {
+                evm_logs.fetch_add(1, Ordering::Relaxed);
+                evm::logs::handle_message(message);
+            }
+            Message::SvmBlock(..) => {
+                svm_blocks.fetch_add(1, Ordering::Relaxed);
+                svm::blocks::handle_message(message);
+            }
+            Message::SvmLog(..) => {
+                svm_logs.fetch_add(1, Ordering::Relaxed);
+                svm::logs::handle_message(message);
+            }
             Message::SvmTransaction(..) => {
+                svm_txs.fetch_add(1, Ordering::Relaxed);
                 svm::transactions::handle_message(message)
             }
             Message::TaskSuccess(job) => {
@@ -244,6 +303,10 @@ async fn handle_message(stream: &mut MessageStream) {
                         }
                     };
                 }
+            }
+            Message::Shutdown => {
+                stats.abort();
+                break;
             }
         }
     }
