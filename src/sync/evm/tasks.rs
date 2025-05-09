@@ -130,6 +130,8 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                     return;
                 };
 
+                log!("sync: evm: tasks: {}: permitted", &job.name);
+
                 let job = Arc::new(job);
 
                 if job.options.is_block_job() {
