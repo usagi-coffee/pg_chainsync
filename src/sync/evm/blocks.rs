@@ -1,4 +1,3 @@
-use pgrx::prelude::*;
 use pgrx::{log, warning};
 
 use anyhow::Context;
@@ -130,50 +129,6 @@ pub async fn handle_block(
     log!("sync: evm: blocks: {}: found {}", &job.name, number);
 
     channel.send(Message::EvmBlock(block, Arc::clone(job)));
-}
-
-use crate::query::PgHandler;
-use pgrx::bgworkers::BackgroundWorker;
-
-pub fn handle_message(message: Message) {
-    let Message::EvmBlock(block, job) = message else {
-        return;
-    };
-
-    handle_evm_message(block, job)
-}
-
-pub fn handle_evm_message(block: alloy::rpc::types::Header, job: Arc<Job>) {
-    let number = block.number;
-    log!("sync: evm: blocks: {}: adding {}", &job.name, number);
-
-    let handler = job
-        .options
-        .block_handler
-        .as_ref()
-        .expect("sync: evm: blocks: missing handler");
-
-    let id = job.id;
-
-    BackgroundWorker::transaction(|| {
-        PgTryBuilder::new(|| {
-            block
-                .call_handler(&handler, id)
-                .expect("sync: evm: blocks: failed to call the handler {}");
-        })
-        .catch_rust_panic(|e| {
-            log!("{:?}", e);
-            warning!(
-                "sync: evm: blocks: failed to call handler for {}",
-                number
-            );
-        })
-        .catch_others(|e| {
-            log!("{:?}", e);
-            warning!("sync: evm: blocks: handler failed to put {}", number);
-        })
-        .execute();
-    });
 }
 
 pub async fn build_stream(

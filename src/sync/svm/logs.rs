@@ -1,4 +1,3 @@
-use pgrx::prelude::*;
 use pgrx::{log, warning};
 
 use anyhow::Context;
@@ -18,7 +17,6 @@ use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 
 use bus::BusReader;
 
-use crate::types::svm::*;
 use crate::types::Job;
 
 use crate::channel::Channel;
@@ -191,46 +189,6 @@ pub async fn handle_log(
     if !channel.send(Message::SvmLog(log, Arc::clone(job))) {
         warning!("sync: svm: logs: {}: failed to send", &job.name)
     }
-}
-
-use crate::query::PgHandler;
-use pgrx::bgworkers::BackgroundWorker;
-
-pub fn handle_message(message: Message) {
-    let Message::SvmLog(log, job) = message else {
-        return;
-    };
-
-    handle_log_message(log, job)
-}
-
-pub fn handle_log_message(log: SvmLog, job: Arc<Job>) {
-    let number = log.context.slot;
-    log!("sync: svm: logs: {}: adding {}", "sol", number);
-
-    let handler = job
-        .options
-        .log_handler
-        .as_ref()
-        .expect("sync: svm: logs: missing handler");
-
-    let id = job.id;
-
-    BackgroundWorker::transaction(|| {
-        PgTryBuilder::new(|| {
-            log.call_handler(&handler, id)
-                .expect("sync: svm: logs: failed to call the handler {}");
-        })
-        .catch_rust_panic(|e| {
-            log!("{:?}", e);
-            warning!("sync: svm: logs: failed to call handler for {}", number);
-        })
-        .catch_others(|e| {
-            log!("{:?}", e);
-            warning!("sync: svm: logs: handler failed to put {}", number);
-        })
-        .execute();
-    });
 }
 
 pub fn build_config(_: &JobOptions) -> RpcTransactionLogsConfig {

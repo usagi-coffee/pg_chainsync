@@ -1,4 +1,3 @@
-use pgrx::prelude::*;
 use pgrx::{log, warning};
 
 use anyhow::Context;
@@ -18,7 +17,6 @@ use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 
 use bus::BusReader;
 
-use crate::types::svm::*;
 use crate::types::Job;
 
 use crate::channel::Channel;
@@ -149,52 +147,6 @@ pub async fn handle_block(
     if !channel.send(Message::SvmBlock(block, Arc::clone(job))) {
         warning!("sync: svm: blocks: {}: failed to send", &job.name)
     }
-}
-
-use crate::query::PgHandler;
-use pgrx::bgworkers::BackgroundWorker;
-
-pub fn handle_message(message: Message) {
-    log!("sync: svm: blocks: handling message");
-    let Message::SvmBlock(block, job) = message else {
-        return;
-    };
-    log!("sync: svm: blocks: handling message next");
-
-    handle_block_message(block, job)
-}
-
-pub fn handle_block_message(block: SvmBlock, job: Arc<Job>) {
-    let number = block.block_height.unwrap();
-    log!("sync: svm: blocks: {}: adding {}", "sol", number);
-
-    let handler = job
-        .options
-        .block_handler
-        .as_ref()
-        .expect("sync: svm: blocks: missing handler");
-
-    let id = job.id;
-
-    BackgroundWorker::transaction(|| {
-        PgTryBuilder::new(|| {
-            block
-                .call_handler(&handler, id)
-                .expect("sync: svm: blocks: failed to call the handler {}");
-        })
-        .catch_rust_panic(|e| {
-            log!("{:?}", e);
-            warning!(
-                "sync: svm: blocks: failed to call handler for {}",
-                number
-            );
-        })
-        .catch_others(|e| {
-            log!("{:?}", e);
-            warning!("sync: svm: blocks: handler failed to put {}", number);
-        })
-        .execute();
-    });
 }
 
 pub fn build_filter(options: &JobOptions) -> RpcBlockSubscribeFilter {

@@ -222,21 +222,99 @@ async fn handle_message(mut stream: MessageStream) {
                     );
                 }
             }
-            Message::EvmBlock(..) => {
+            Message::EvmBlock(block, job) => {
                 evm_blocks.fetch_add(1, Ordering::Relaxed);
-                evm::blocks::handle_message(message);
+                log!(
+                    "sync: evm: blocks: {}: adding {}",
+                    &job.name,
+                    &block.number
+                );
+
+                let Some(handler) = job.options.block_handler.as_ref() else {
+                    error!("sync: evm: blocks: {}: missing handler", job.name);
+                };
+
+                let id = job.id;
+                if let Err(error) =
+                    anyhow_pg_try!(|| block.call_handler(&handler, id))
+                {
+                    warning!(
+                        "sync: evm: blocks: {}: block handler failed with {}",
+                        job.id,
+                        error
+                    );
+                }
             }
-            Message::EvmLog(..) => {
+            Message::EvmLog(log, job) => {
                 evm_logs.fetch_add(1, Ordering::Relaxed);
-                evm::logs::handle_message(message);
+                log!(
+                    "sync: evm: logs: {}: adding {}<{}>",
+                    &job.name,
+                    log.transaction_hash.as_ref().unwrap(),
+                    log.log_index.as_ref().unwrap()
+                );
+
+                let Some(handler) = job.options.log_handler.as_ref() else {
+                    error!("sync: evm: logs: {}: missing handler", job.name);
+                };
+
+                let id = job.id;
+                if let Err(error) =
+                    anyhow_pg_try!(|| log.call_handler(&handler, id))
+                {
+                    warning!(
+                        "sync: evm: logs: {}: log handler failed with {}",
+                        job.id,
+                        error
+                    );
+                }
             }
-            Message::SvmBlock(..) => {
+            Message::SvmBlock(block, job) => {
                 svm_blocks.fetch_add(1, Ordering::Relaxed);
-                svm::blocks::handle_message(message);
+                log!(
+                    "sync: svm: blocks: {}: adding {}",
+                    job.name,
+                    block.block_height.as_ref().unwrap()
+                );
+
+                let Some(handler) = job.options.block_handler.as_ref() else {
+                    error!("sync: svm: blocks: {}: missing handler", job.name);
+                };
+
+                let id = job.id;
+                if let Err(error) =
+                    anyhow_pg_try!(|| block.call_handler(&handler, id))
+                {
+                    warning!(
+                        "sync: evm: blocks: {}: block handler failed with {}",
+                        job.id,
+                        error
+                    );
+                }
             }
-            Message::SvmLog(..) => {
+            Message::SvmLog(log, job) => {
                 svm_logs.fetch_add(1, Ordering::Relaxed);
-                svm::logs::handle_message(message);
+                svm_blocks.fetch_add(1, Ordering::Relaxed);
+                log!(
+                    "sync: svm: logs: {}: adding {}",
+                    job.name,
+                    log.context.slot
+                );
+
+                let Some(handler) = job.options.log_handler.as_ref() else {
+                    error!("sync: svm: blocks: {}: missing handler", job.name);
+                };
+
+                let id = job.id;
+                if let Err(error) =
+                    anyhow_pg_try!(|| log.call_handler(&handler, id))
+                {
+                    warning!(
+                        "sync: evm: logs: {}: log handler failed with {}",
+                        job.id,
+                        error
+                    );
+                }
             }
             Message::SvmTransaction(..) => {
                 svm_txs.fetch_add(1, Ordering::Relaxed);

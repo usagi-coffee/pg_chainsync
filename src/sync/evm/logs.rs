@@ -195,60 +195,6 @@ pub async fn handle_evm_log(
     }
 }
 
-use crate::query::PgHandler;
-use pgrx::bgworkers::BackgroundWorker;
-
-pub fn handle_message(message: Message) {
-    let Message::EvmLog(log, job) = message else {
-        return;
-    };
-
-    handle_evm_message(log, job)
-}
-
-pub fn handle_evm_message(log: alloy::rpc::types::Log, job: Arc<Job>) {
-    let transaction = log.transaction_hash.unwrap();
-    let index = log.log_index.unwrap();
-
-    log!(
-        "sync: evm: logs: {}: adding {}<{}>",
-        &job.name,
-        transaction,
-        index
-    );
-
-    let handler = job
-        .options
-        .log_handler
-        .as_ref()
-        .expect("sync: evm: logs: missing handler");
-    let id = job.id;
-
-    BackgroundWorker::transaction(|| {
-        PgTryBuilder::new(|| {
-            log.call_handler(&handler, id)
-                .expect("sync: evm: logs: failed to call the handler");
-        })
-        .catch_rust_panic(|e| {
-            log!("{:?}", e);
-            warning!(
-                "sync: evm: logs: failed to call handler for {}<{}>",
-                transaction,
-                index
-            );
-        })
-        .catch_others(|e| {
-            log!("{:?}", e);
-            warning!(
-                "sync: evm: logs: handler failed to put {}<{}>",
-                transaction,
-                index
-            );
-        })
-        .execute();
-    });
-}
-
 pub fn build_filter(options: &JobOptions, block: u64) -> Filter {
     let mut filter = Filter::new();
     filter = filter.from_block(BlockNumberOrTag::Latest);
