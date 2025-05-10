@@ -27,4 +27,17 @@ impl Job {
             })
             .await
     }
+
+    pub async fn reconnect_evm(
+        &self,
+    ) -> anyhow::Result<EvmPubSub, EvmPubSubError> {
+        let url = self
+            .options
+            .ws
+            .as_ref()
+            .expect("Websocket URL was not provided");
+
+        let ws = alloy::providers::WsConnect::new(url);
+        alloy::providers::ProviderBuilder::new().on_ws(ws).await
+    }
 }

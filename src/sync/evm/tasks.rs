@@ -219,7 +219,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
         }
     };
 
-    let client = job.connect_evm().await.unwrap();
+    let mut client = job.reconnect_evm().await.expect("ws to connect");
 
     // Split logs by blocktick if needed
     if let Some(blocktick) = options.blocktick {
@@ -280,6 +280,8 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
                         break;
                     }
 
+                    // Reconnect the client
+                    client = job.reconnect_evm().await.expect("ws to connect");
                     log!(
                         "sync: evm: tasks: {}: reducing blocktick from {} to {}",
                         &job.name,
@@ -316,7 +318,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
                 }
             }
             Err(e) => {
-                log!("{}", e);
+                warning!("{}", e);
                 warning!(
                     "sync: evm: tasks: failed to get logs for {}, aborting...",
                     &job.name,
