@@ -4,6 +4,8 @@ use pgrx::PGRXSharedMemory;
 use pgrx::bgworkers::BackgroundWorker;
 use pgrx::bgworkers::*;
 
+use pgrx::GucSetting;
+
 use crate::channel::Channel;
 use std::sync::Arc;
 
@@ -20,6 +22,8 @@ pub static EVM_TASKS: PgLwLock<heapless::Vec<i64, 32>> =
     PgLwLock::new(c"evm_tasks");
 pub static SVM_TASKS: PgLwLock<heapless::Vec<i64, 32>> =
     PgLwLock::new(c"svm_tasks");
+
+pub static WS_PERMITS: GucSetting<i32> = GucSetting::<i32>::new(1);
 
 // Should be more than restart count
 pub static STOP_COUNT: i32 = 999;

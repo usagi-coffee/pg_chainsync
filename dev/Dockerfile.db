@@ -1,4 +1,5 @@
 FROM postgres:17
 RUN apt-get update && apt-get install -y telnet curl
 RUN echo "shared_preload_libraries = 'pg_chainsync.so'" >> /usr/share/postgresql/17/postgresql.conf.sample
+RUN echo "chainsync.ws_permits = 2" >> /usr/share/postgresql/17/postgresql.conf.sample
 RUN echo "CREATE EXTENSION IF NOT EXISTS pg_chainsync;" > /docker-entrypoint-initdb.d/01_pg_chainsync.sql

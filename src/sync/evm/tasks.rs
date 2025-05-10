@@ -18,7 +18,7 @@ use crate::channel::Channel;
 use crate::sync::evm::logs;
 use crate::types::*;
 
-use crate::worker::EVM_TASKS;
+use crate::worker::{EVM_TASKS, WS_PERMITS};
 
 pub async fn setup(scheduler: &mut Scheduler) {
     let tasks = BackgroundWorker::transaction(|| Job::query_all());
@@ -120,7 +120,7 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
 
             let semaphore = semaphores
                 .entry(ws.into())
-                .or_insert(Arc::new(Semaphore::new(1)))
+                .or_insert(Arc::new(Semaphore::new(WS_PERMITS.get() as usize)))
                 .clone();
 
             let channel = channel.clone();

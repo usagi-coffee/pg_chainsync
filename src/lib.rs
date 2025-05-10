@@ -1,5 +1,8 @@
 use pgrx::prelude::*;
-use pgrx::{pg_shmem_init, PgSharedMemoryInitialization};
+use pgrx::{
+    pg_shmem_init, GucContext, GucFlags, GucRegistry,
+    PgSharedMemoryInitialization,
+};
 
 mod sync;
 mod worker;
@@ -123,7 +126,9 @@ mod chainsync {
 
 extension_sql_file!("../sql/types.sql", name = "types_schema");
 
-use worker::{EVM_TASKS, RESTART_COUNT, SIGNALS, SVM_TASKS, WORKER_STATUS};
+use worker::{
+    EVM_TASKS, RESTART_COUNT, SIGNALS, SVM_TASKS, WORKER_STATUS, WS_PERMITS,
+};
 
 #[pg_guard]
 pub extern "C-unwind" fn _PG_init() {
@@ -132,6 +137,17 @@ pub extern "C-unwind" fn _PG_init() {
     pg_shmem_init!(EVM_TASKS);
     pg_shmem_init!(SVM_TASKS);
     pg_shmem_init!(SIGNALS);
+
+    GucRegistry::define_int_guc(
+        "chainsync.ws_permits",
+        "number of ws permits per key",
+        "number of ws permits per key",
+        &WS_PERMITS,
+        1,
+        999,
+        GucContext::Postmaster,
+        GucFlags::default(),
+    );
 
     worker::spawn().load();
 }
