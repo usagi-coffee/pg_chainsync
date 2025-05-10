@@ -311,8 +311,8 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
                 &job.name,
                 from,
                 to,
-                state.index,
-                state.splits() - 1
+                state.index + 1,
+                state.splits()
             );
 
             filter = filter.from_block(from as u64).to_block(to as u64);
