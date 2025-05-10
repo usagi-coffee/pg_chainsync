@@ -21,8 +21,8 @@ impl Channel {
     pub fn send(&self, message: Message) -> bool {
         match self.sender.try_send(message) {
             Ok(()) => true,
-            Err(_) => {
-                warning!("sync: channel: failed to send message");
+            Err(e) => {
+                warning!("sync: channel: failed to send message, {}", e);
                 false
             }
         }

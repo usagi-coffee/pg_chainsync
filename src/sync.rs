@@ -24,6 +24,17 @@ pub mod svm;
 
 const DATABASE: &str = "postgres";
 
+macro_rules! anyhow_pg_try {
+    ($expr:expr) => {
+        BackgroundWorker::transaction(|| {
+            PgTryBuilder::new($expr)
+                .catch_others(|e| Err(anyhow::anyhow!(format!("{:?}", e))))
+                .catch_rust_panic(|e| Err(anyhow::anyhow!(format!("{:?}", e))))
+                .execute()
+        })
+    };
+}
+
 #[pg_guard]
 #[no_mangle]
 pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
@@ -47,20 +58,18 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
 
     log!("sync: worker has started!");
 
-    let jobs = BackgroundWorker::transaction(|| {
-        PgTryBuilder::new(Job::query_all)
-            .catch_others(|_| Err(pgrx::spi::Error::NoTupleTable))
-            .execute()
-    })
-    .unwrap_or(Vec::new());
+    let jobs = match anyhow_pg_try!(|| Job::query_all()) {
+        Ok(jobs) => jobs,
+        Err(error) => error!("sync: failed to query jobs with {}", error),
+    };
 
     for job in &jobs {
         let id = job.id.clone();
-        BackgroundWorker::transaction(|| {
-            let _ = PgTryBuilder::new(|| Job::update(id, JobStatus::Stopped))
-                .catch_others(|_| Err(pgrx::spi::Error::NoTupleTable))
-                .execute();
-        });
+        if let Err(error) =
+            anyhow_pg_try!(|| Job::update(id, JobStatus::Stopped))
+        {
+            warning!("sync: {}: failed to stop with {}", job.id, error);
+        }
     }
 
     log!("sync: {} jobs found", jobs.len());
@@ -132,11 +141,11 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
 
     for job in &jobs {
         let id = job.id.clone();
-        BackgroundWorker::transaction(|| {
-            let _ = PgTryBuilder::new(|| Job::update(id, JobStatus::Stopped))
-                .catch_others(|_| Err(pgrx::spi::Error::NoTupleTable))
-                .execute();
-        });
+        if let Err(error) =
+            anyhow_pg_try!(|| Job::update(id, JobStatus::Stopped))
+        {
+            warning!("sync: {}: failed to stop with {}", job.id, error);
+        }
     }
 
     *WORKER_STATUS.exclusive() = WorkerStatus::STOPPED;
@@ -181,46 +190,47 @@ async fn handle_message(mut stream: MessageStream) {
 
         match message {
             Message::Job(id, oneshot) => {
-                let jobs = BackgroundWorker::transaction(|| {
-                    PgTryBuilder::new(Job::query_all)
-                        .catch_others(|_| Err(pgrx::spi::Error::NoTupleTable))
-                        .execute()
-                })
-                .unwrap_or(Vec::new());
-
-                match jobs.into_iter().find(|job| job.id == id) {
-                    Some(job) => {
-                        if oneshot.send(Some(job)).is_err() {
-                            warning!("sync: jobs: failed to send on channel");
+                match anyhow_pg_try!(|| Job::query_all()) {
+                    Ok(jobs) => {
+                        if oneshot
+                            .send(jobs.into_iter().find(|job| job.id == id))
+                            .is_err()
+                        {
+                            warning!("sync: messages: failed to return a job");
                         }
                     }
-                    None => {
-                        if oneshot.send(None).is_err() {
-                            warning!("sync: jobs: failed to send on channel");
-                        }
+                    Err(error) => {
+                        warning!(
+                            "sync: messages: failed to retrieve jobs with {}",
+                            error
+                        );
                     }
-                };
-            }
-            Message::Jobs(oneshot) => {
-                let jobs = BackgroundWorker::transaction(|| {
-                    PgTryBuilder::new(Job::query_all)
-                        .catch_others(|_| Err(pgrx::spi::Error::NoTupleTable))
-                        .execute()
-                })
-                .unwrap_or(Vec::new());
-
-                if oneshot.send(jobs).is_err() {
-                    warning!("sync: jobs: failed to send on channel");
                 }
             }
+
+            Message::Jobs(oneshot) => match anyhow_pg_try!(|| Job::query_all())
+            {
+                Ok(jobs) => {
+                    if oneshot.send(jobs).is_err() {
+                        warning!("sync: messages: failed to return jobs");
+                    }
+                }
+                Err(error) => {
+                    warning!(
+                        "sync: messages: failed to retrieve jobs with {}",
+                        error
+                    );
+                }
+            },
             Message::UpdateJob(status, job) => {
                 let id = job.id;
-                BackgroundWorker::transaction(|| {
-                    PgTryBuilder::new(|| Job::update(id, status))
-                        .catch_others(|_| Err(pgrx::spi::Error::NoTupleTable))
-                        .execute()
-                })
-                .expect("sync: jobs: failed to update job status");
+                if let Err(error) = anyhow_pg_try!(|| Job::update(id, status)) {
+                    warning!(
+                        "sync: messages: {}: updating job failed with {}",
+                        &job.name,
+                        error
+                    );
+                }
             }
             Message::EvmBlock(..) => {
                 evm_blocks.fetch_add(1, Ordering::Relaxed);
@@ -246,55 +256,42 @@ async fn handle_message(mut stream: MessageStream) {
                 if let Some(handler) = job.options.success_handler.as_ref() {
                     let id = job.id;
 
-                    BackgroundWorker::transaction(|| {
-                        PgTryBuilder::new(|| Job::handler(&handler, id))
-                            .catch_others(|_| {
-                                Err(pgrx::spi::Error::NoTupleTable)
-                            })
-                            .execute()
-                    })
-                    .expect("sync: tasks: failed to execute success handler");
+                    if let Err(error) =
+                        anyhow_pg_try!(|| Job::handler(&handler, id))
+                    {
+                        warning!("sync: messages: {}: task success handler failed with {}", &job.name, error);
+                    }
                 }
             }
             Message::TaskFailure(job) => {
                 if let Some(handler) = job.options.failure_handler.as_ref() {
                     let id = job.id;
 
-                    BackgroundWorker::transaction(|| {
-                        PgTryBuilder::new(|| Job::handler(&handler, id))
-                            .catch_others(|_| {
-                                Err(pgrx::spi::Error::NoTupleTable)
-                            })
-                            .execute()
-                    })
-                    .expect("sync: tasks: failed to execute failure handler");
+                    if let Err(error) =
+                        anyhow_pg_try!(|| Job::handler(&handler, id))
+                    {
+                        warning!("sync: messages: {}: task failure handler failed with {}", &job.name, error);
+                    }
                 }
             }
             Message::CheckBlock(number, oneshot, job) => {
                 if let Some(handler) = job.options.block_check_handler.as_ref()
                 {
                     let id = job.id;
-                    let found = BackgroundWorker::transaction(|| {
-                        PgTryBuilder::new(|| {
-                            u64::call_handler(&number, handler, id)
-                        })
-                        .catch_others(|_| Err(pgrx::spi::Error::NoTupleTable))
-                        .execute()
-                    })
-                    .expect("sync: tasks: failed to execute success handler");
 
-                    match found {
-                        PgResult::Boolean(found) => {
-                            if oneshot.send(found).is_err() {
-                                warning!("sync: check_block: failed to send on channel, event job stalled");
-                            }
-                        }
-                        _ => {
-                            if oneshot.send(false).is_err() {
-                                warning!("sync: check_block: failed to send on channel, event job stalled");
-                            }
-                        }
+                    let found = match anyhow_pg_try!(|| {
+                        u64::call_handler(&number, handler, id)
+                    }) {
+                        Ok(found) => matches!(found, PgResult::Boolean(true)),
+                        Err(_) => false,
                     };
+
+                    if let Err(_) = oneshot.send(found) {
+                        warning!(
+                            "sync: messages: {}: check block failed to return with, task is probably deadlocked!",
+                            &job.name
+                        );
+                    }
                 }
             }
             Message::Shutdown => {
