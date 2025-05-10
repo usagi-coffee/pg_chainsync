@@ -183,6 +183,73 @@ async fn handle_blocks_task(job: Arc<Job>, channel: &Arc<Channel>) {
     }
 }
 
+struct FetchState {
+    from: i64,
+    to: i64,
+    blocktick: i64,
+    index: i64,
+    retries: i32,
+}
+
+impl FetchState {
+    fn new(from: i64, to: i64, blocktick: i64) -> Self {
+        FetchState {
+            from,
+            to,
+            blocktick,
+            index: 0,
+            retries: 0,
+        }
+    }
+
+    fn range(&self) -> (i64, i64) {
+        let from = self.from + self.index * self.blocktick;
+        let to = {
+            if from == self.to {
+                self.to
+            } else {
+                std::cmp::min(self.to, from + self.blocktick - 1)
+            }
+        };
+
+        (from, to)
+    }
+
+    fn next(&mut self) {
+        self.index += 1;
+    }
+
+    fn remaining(&self) -> bool {
+        self.index < self.splits()
+    }
+
+    fn reduce_blocktick(&mut self, from: i64) {
+        self.from = from;
+        self.index = 0;
+        self.retries = 0;
+
+        self.blocktick =
+            std::cmp::max((self.blocktick as f64 / 2.0).floor() as i64, 1);
+    }
+
+    fn recalculate(&mut self, from: i64, blocktick: i64) {
+        self.from = from;
+        self.index = 0;
+        self.retries = 0;
+
+        self.blocktick = std::cmp::max(blocktick, 1);
+    }
+
+    fn splits(&self) -> i64 {
+        if self.to == self.from {
+            1
+        } else {
+            (((self.to + 1) - self.from) as f64 / self.blocktick as f64).ceil()
+                as i64
+        }
+    }
+}
+
 async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
     let options = &job.options;
 
@@ -223,24 +290,20 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
 
     // Split logs by blocktick if needed
     if let Some(blocktick) = options.blocktick {
-        let recalculate_splits = |from: i64, to: i64, blocktick: i64| {
-            ((to - from) as f64 / blocktick as f64).ceil() as i64
-        };
+        let mut state = FetchState::new(from_block, to_block, blocktick);
 
-        let mut current_blocktick = blocktick;
-        let mut current_from = from_block;
-        let mut splits = recalculate_splits(from_block, to_block, blocktick);
+        while state.remaining() {
+            let (from, to) = state.range();
 
-        log!("sync: evm: tasks: {}: found {} splits", &job.name, splits);
+            // Sometimes "busy block periods" reduce the blocktick, try to revert every now and then
+            if state.index > 100 && state.blocktick != blocktick {
+                state.recalculate(from, blocktick);
+                log!(
+                    "sync: evm: tasks: {}: re-trying the original blocktick...",
+                    &job.name
+                );
 
-        let mut retries = 0;
-        let mut i = 1;
-        while i <= splits {
-            let mut from = current_from + (i - 1) * current_blocktick;
-            let to = std::cmp::min(to_block, from + current_blocktick);
-
-            if i > 1 {
-                from = from + 1;
+                continue;
             }
 
             log!(
@@ -248,8 +311,8 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
                 &job.name,
                 from,
                 to,
-                i,
-                splits
+                state.index,
+                state.splits()
             );
 
             filter = filter.from_block(from as u64).to_block(to as u64);
@@ -264,14 +327,16 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
 
             match logs {
                 Ok(mut logs) => {
-                    retries = 0;
+                    state.retries = 0;
                     for log in logs.drain(0..) {
                         logs::handle_evm_log(&job, log, &channel).await;
                     }
+
+                    state.next();
                 }
                 Err(e) => {
                     warning!("sync: evm: tasks: {:?}", e);
-                    if current_blocktick <= 1 || retries >= 20 {
+                    if state.blocktick <= 1 || state.retries >= 20 {
                         warning!(
                           "sync: evm: tasks: {}: failed to fetch with reduced blocktick, aborting...",
                           &job.name,
@@ -285,28 +350,16 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
                     log!(
                         "sync: evm: tasks: {}: reducing blocktick from {} to {}",
                         &job.name,
-                        current_blocktick,
-                        (current_blocktick as f64 / 2 as f64).floor(),
+                        state.blocktick,
+                        (state.blocktick as f64 / 2.0).floor(),
                     );
 
                     sleep_until(Instant::now() + Duration::from_millis(200))
                         .await;
 
-                    current_blocktick =
-                        (current_blocktick as f64 / 2 as f64).floor() as i64;
-                    current_from = from;
-                    splits = recalculate_splits(
-                        current_from,
-                        to_block,
-                        current_blocktick,
-                    );
-                    retries = 0;
-                    i = 1;
-                    continue;
+                    state.reduce_blocktick(from);
                 }
             }
-
-            i = i + 1;
         }
     }
     // Or just get all logs at once
@@ -326,5 +379,119 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
                 channel.send(Message::TaskFailure(Arc::clone(&job)));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn splits_edge() {
+        let mut s = FetchState::new(1, 1, 10);
+        assert_eq!(s.index, 0);
+        assert_eq!(s.blocktick, 10);
+        assert_eq!(s.splits(), 1);
+        assert_eq!(s.range(), (1, 1));
+
+        while s.remaining() {
+            s.next();
+        }
+
+        assert_eq!(s.index, 1);
+    }
+
+    #[test]
+    fn splits_no_reduce_clamp() {
+        let mut s = FetchState::new(1, 50, 10);
+        assert_eq!(s.splits(), 5);
+
+        let mut ranges = Vec::new();
+        while s.remaining() {
+            ranges.push(s.range());
+            s.next();
+        }
+
+        assert_eq!(
+            ranges,
+            vec![(1, 10), (11, 20), (21, 30), (31, 40), (41, 50)]
+        );
+    }
+
+    #[test]
+    fn splits_reduce_once() {
+        let mut s = FetchState::new(1, 30, 10);
+        assert_eq!(s.splits(), 3);
+
+        let mut ranges = Vec::new();
+        ranges.push(s.range()); // (1, 10)
+        s.next();
+
+        assert_eq!(ranges[0], (1, 10));
+
+        let current = s.range();
+        assert_eq!(current, (11, 20));
+
+        s.reduce_blocktick(current.0);
+        assert_eq!(s.index, 0);
+
+        while s.remaining() {
+            ranges.push(s.range());
+            s.next();
+        }
+
+        assert_eq!(
+            ranges,
+            vec![(1, 10), (11, 15), (16, 20), (21, 25), (26, 30)]
+        );
+    }
+
+    #[test]
+    fn splits_reduce_twice() {
+        let mut s = FetchState::new(1, 17, 10);
+        assert_eq!(s.splits(), 2);
+
+        let mut ranges = Vec::new();
+        ranges.push(s.range());
+        assert_eq!(ranges[0], (1, 10));
+
+        s.next();
+
+        s.reduce_blocktick(s.range().0);
+        s.reduce_blocktick(s.range().0);
+        assert_eq!(s.index, 0);
+
+        while s.remaining() {
+            ranges.push(s.range());
+            s.next();
+        }
+
+        assert_eq!(
+            ranges,
+            vec![(1, 10), (11, 12), (13, 14), (15, 16), (17, 17)]
+        );
+    }
+
+    #[test]
+    fn splits_revert() {
+        let mut s = FetchState::new(1, 30, 10);
+
+        let mut ranges = Vec::new();
+        ranges.push(s.range()); // (1, 10)
+        s.next();
+
+        s.reduce_blocktick(s.range().0);
+        ranges.push(s.range());
+        s.next();
+
+        // Revert
+        s.recalculate(s.range().0, 10);
+
+        while s.remaining() {
+            ranges.push(s.range());
+            s.next();
+        }
+
+        assert_eq!(ranges, vec![(1, 10), (11, 15), (16, 25), (26, 30)]);
     }
 }
