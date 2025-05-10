@@ -13,6 +13,7 @@ use tokio_stream::StreamExt;
 
 use bus::Bus;
 
+use crate::anyhow_pg_try;
 use crate::channel::*;
 use crate::query::{PgHandler, PgResult};
 use crate::types::*;
@@ -23,17 +24,6 @@ pub mod evm;
 pub mod svm;
 
 const DATABASE: &str = "postgres";
-
-macro_rules! anyhow_pg_try {
-    ($expr:expr) => {
-        BackgroundWorker::transaction(|| {
-            PgTryBuilder::new($expr)
-                .catch_others(|e| Err(anyhow::anyhow!(format!("{:?}", e))))
-                .catch_rust_panic(|e| Err(anyhow::anyhow!(format!("{:?}", e))))
-                .execute()
-        })
-    };
-}
 
 #[pg_guard]
 #[no_mangle]

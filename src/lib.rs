@@ -5,7 +5,9 @@ use pgrx::{
 };
 
 mod sync;
-mod worker;
+
+#[macro_use]
+pub mod worker;
 
 pub mod channel;
 pub mod query;
@@ -140,8 +142,8 @@ pub extern "C-unwind" fn _PG_init() {
 
     GucRegistry::define_int_guc(
         "chainsync.ws_permits",
-        "number of ws permits per key",
-        "number of ws permits per key",
+        "number of permits per ws key",
+        "number of permits per ws key",
         &WS_PERMITS,
         1,
         999,

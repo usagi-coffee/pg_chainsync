@@ -73,3 +73,15 @@ pub async fn handle_signals(_: Arc<Channel>, mut bus: Bus<Signal>) {
         sleep_until(Instant::now() + Duration::from_millis(100)).await;
     }
 }
+
+#[macro_export]
+macro_rules! anyhow_pg_try {
+    ($expr:expr) => {
+        BackgroundWorker::transaction(|| {
+            PgTryBuilder::new($expr)
+                .catch_others(|e| Err(anyhow::anyhow!(format!("{:?}", e))))
+                .catch_rust_panic(|e| Err(anyhow::anyhow!(format!("{:?}", e))))
+                .execute()
+        })
+    };
+}
