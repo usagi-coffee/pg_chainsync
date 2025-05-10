@@ -148,10 +148,18 @@ pub async fn handle_evm_log(
                         error!("sync: evm: logs: {}: too many retries to get the block...", &job.name);
                     }
 
-                    if let Ok(Some(block)) = job
-                        .connect_evm()
-                        .await
-                        .unwrap()
+                    // Reconnect ws on every block retry
+                    let Ok(client) = job.reconnect_evm().await else {
+                        warning!(
+                            "sync: evm: logs: {}: failed to connect to evm at await block handler",
+                            &job.name
+                        );
+                        sleep(Duration::from_millis(1000)).await;
+                        retries = retries + 1;
+                        continue;
+                    };
+
+                    if let Ok(Some(block)) = client
                         .get_block(
                             block.into(),
                             alloy::rpc::types::BlockTransactionsKind::Hashes,

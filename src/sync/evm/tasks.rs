@@ -270,7 +270,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
                     }
                 }
                 Err(e) => {
-                    warning!("{}", e);
+                    warning!("sync: evm: tasks: {:?}", e);
                     if current_blocktick <= 1 || retries >= 20 {
                         warning!(
                           "sync: evm: tasks: {}: failed to fetch with reduced blocktick, aborting...",
@@ -318,9 +318,9 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
                 }
             }
             Err(e) => {
-                warning!("{}", e);
+                warning!("sync: evm: tasks: {}: {:?}", &job.name, e);
                 warning!(
-                    "sync: evm: tasks: failed to get logs for {}, aborting...",
+                    "sync: evm: tasks: {}: failed to get logs, aborting...",
                     &job.name,
                 );
                 channel.send(Message::TaskFailure(Arc::clone(&job)));
