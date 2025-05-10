@@ -145,9 +145,7 @@ pub async fn handle_evm_log(
                 let mut retries = 0;
                 loop {
                     if retries > 20 {
-                        panic!(
-                            "sync: evm: logs: too many retries to get the block..."
-                        );
+                        error!("sync: evm: logs: {}: too many retries to get the block...", &job.name);
                     }
 
                     if let Ok(Some(block)) = job
@@ -168,7 +166,8 @@ pub async fn handle_evm_log(
                     }
 
                     log!(
-                        "sync: evm: logs: could not find block {}, retrying",
+                        "sync: evm: logs: {}: could not find block {}, retrying",
+                        &job.name,
                         block
                     );
                     sleep(Duration::from_millis(1000)).await;
