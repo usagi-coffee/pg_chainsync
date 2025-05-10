@@ -174,8 +174,8 @@ async fn handle_message(mut stream: MessageStream) {
 
     loop {
         let Some(message) = stream.next().await else {
-            warning!("sync: messages: got None");
-            continue;
+            warning!("sync: messages: stream is dead");
+            break;
         };
 
         match message {
