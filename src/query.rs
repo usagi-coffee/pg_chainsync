@@ -462,10 +462,7 @@ impl PgHandler for SolanaInnerInstruction<'_> {
             pgrx::AnyNumeric::try_from(self._tx.block_time.unwrap()),
         )?;
 
-        data.set_by_name(
-            "data",
-            bs58::encode(&self._instruction.data).into_string(),
-        )?;
+        data.set_by_name("data", &self._instruction.data)?;
 
         data.set_by_name(
             "program_id",

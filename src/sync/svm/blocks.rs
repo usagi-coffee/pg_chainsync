@@ -4,7 +4,9 @@ use anyhow::Context;
 use solana_client::rpc_config::{
     RpcBlockConfig, RpcBlockSubscribeConfig, RpcBlockSubscribeFilter,
 };
-use solana_transaction_status_client_types::TransactionDetails;
+use solana_transaction_status_client_types::{
+    TransactionDetails, UiTransactionEncoding,
+};
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -176,6 +178,7 @@ pub fn build_config(options: &JobOptions) -> RpcBlockConfig {
 
 pub fn build_subscribe_config(options: &JobOptions) -> RpcBlockSubscribeConfig {
     let mut config = RpcBlockSubscribeConfig {
+        encoding: Some(UiTransactionEncoding::Base58),
         commitment: Some(CommitmentConfig {
             commitment: CommitmentLevel::Finalized,
         }),

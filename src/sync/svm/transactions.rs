@@ -293,39 +293,40 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                 for (j, inner_instruction) in
                     inner.instructions.iter().enumerate()
                 {
-                    match inner_instruction {
-                        UiInstruction::Compiled(inner_instruction) => {
-                            // Filter out program id if specified
-                            if let Some(program_id) = job.options.program {
-                                let inner_program = Pubkey::from_str(
-                                    &accounts[inner_instruction.program_id_index
-                                        as usize],
-                                );
+                    if let UiInstruction::Compiled(inner_instruction) =
+                        inner_instruction
+                    {
+                        // Filter out program id if specified
+                        if let Some(program_id) = job.options.program {
+                            let inner_program = Pubkey::from_str(
+                                &accounts[inner_instruction.program_id_index
+                                    as usize],
+                            );
 
-                                if inner_program.unwrap() != program_id {
-                                    continue;
-                                }
-                            }
-
-                            let bundled = SolanaInnerInstruction {
-                                _tx: &tx,
-                                _instruction: inner_instruction,
-                                index: i as i16,
-                                inner_index: j as i16,
-                            };
-
-                            if let Err(error) = anyhow_pg_try!(|| bundled
-                                .call_handler(&instruction_handler, id))
-                            {
-                                warning!("sync: svm: transactions: {}: instruction handler failed with {}", &id, error);
+                            if inner_program.unwrap() != program_id {
+                                continue;
                             }
                         }
-                        _ => {
-                            log!(
-                              "sync: svm: transactions: {}: adding inner instruction {:?}",
-                              &id,
-                              inner_instruction
-                            );
+
+                        let bundled = SolanaInnerInstruction {
+                            _tx: &tx,
+                            _instruction: inner_instruction,
+                            index: i as i16 + 1,
+                            inner_index: j as i16 + 1,
+                        };
+
+                        log!(
+                            "sync: svm: transactions: {}: adding inner instruction {}.{}",
+                            &id,
+                            bundled.index,
+                            bundled.inner_index
+                        );
+
+                        if let Err(error) =
+                            anyhow_pg_try!(|| bundled
+                                .call_handler(&instruction_handler, id))
+                        {
+                            warning!("sync: svm: transactions: {}: instruction handler failed with {}", &id, error);
                         }
                     }
                 }
@@ -345,7 +346,7 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
             let instruction = SolanaInstruction {
                 _tx: &tx,
                 _instruction: instruction,
-                index: i as i16,
+                index: i as i16 + 1,
             };
 
             if let Err(error) = anyhow_pg_try!(
@@ -356,27 +357,23 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
         }
     }
 
-    let transaction_handler = job
-        .options
-        .transaction_handler
-        .as_ref()
-        .expect("sync: svm: transactions: missing handler");
-
-    let id = job.id;
-    if let Err(error) =
-        anyhow_pg_try!(|| tx.call_handler(&transaction_handler, id))
-    {
-        warning!(
-            "sync: evm: transactions: {}: transaction handler failed with {}",
-            &id,
-            error
-        );
-    }
+    if let Some(transaction_handler) = &job.options.transaction_handler {
+        let id = job.id;
+        if let Err(error) =
+            anyhow_pg_try!(|| tx.call_handler(transaction_handler, id))
+        {
+            warning!(
+              "sync: evm: transactions: {}: transaction handler failed with {}",
+              &id,
+              error
+            );
+        }
+    };
 }
 
 pub fn build_config(_: &JobOptions) -> RpcTransactionConfig {
     RpcTransactionConfig {
-        encoding: Some(UiTransactionEncoding::Binary),
+        encoding: Some(UiTransactionEncoding::Base58),
         commitment: Some(CommitmentConfig::finalized()),
         max_supported_transaction_version: Some(0),
         ..Default::default()
