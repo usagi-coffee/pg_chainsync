@@ -242,6 +242,8 @@ pub async fn handle_log(
 use crate::query::PgHandler;
 use pgrx::bgworkers::BackgroundWorker;
 
+use crate::anyhow_pg_try;
+
 pub fn handle_message(message: Message) {
     let Message::SvmTransaction(tx, job) = message else {
         return;
@@ -312,28 +314,11 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                                 inner_index: j as i16,
                             };
 
-                            BackgroundWorker::transaction(|| {
-                                PgTryBuilder::new(|| {
-                                  bundled.call_handler(&instruction_handler, id).expect(
-                                      "sync: svm: transactions: failed to call the handler {}",
-                                  );
-                              })
-                              .catch_rust_panic(|e| {
-                                  log!("{:?}", e);
-                                  warning!(
-                                      "sync: svm: transactions: failed to call handler for {}",
-                                      &signature
-                                  );
-                              })
-                              .catch_others(|e| {
-                                  log!("{:?}", e);
-                                  warning!(
-                                      "sync: svm: transactions: handler failed to put {}",
-                                      &signature
-                                  );
-                              })
-                              .execute();
-                            });
+                            if let Err(error) = anyhow_pg_try!(|| bundled
+                                .call_handler(&instruction_handler, id))
+                            {
+                                warning!("sync: svm: transactions: {}: instruction handler failed with {}", &id, error);
+                            }
                         }
                         _ => {
                             log!(
@@ -363,29 +348,11 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                 index: i as i16,
             };
 
-            // Outer instruction
-            BackgroundWorker::transaction(|| {
-                PgTryBuilder::new(|| {
-                    instruction.call_handler(&instruction_handler, id).expect(
-                        "sync: svm: transactions: failed to call the handler {}",
-                    );
-                })
-                .catch_rust_panic(|e| {
-                    log!("{:?}", e);
-                    warning!(
-                        "sync: svm: transactions: failed to call handler for {}",
-                        &signature
-                    );
-                })
-                .catch_others(|e| {
-                    log!("{:?}", e);
-                    warning!(
-                        "sync: svm: transactions: handler failed to put {}",
-                        &signature
-                    );
-                })
-                .execute();
-            });
+            if let Err(error) = anyhow_pg_try!(
+                || instruction.call_handler(&instruction_handler, id)
+            ) {
+                warning!("sync: svm: transactions: {}: instruction handler failed with {}", &id, error);
+            }
         }
     }
 
@@ -396,30 +363,15 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
         .expect("sync: svm: transactions: missing handler");
 
     let id = job.id;
-
-    // Call instruction handler
-    BackgroundWorker::transaction(|| {
-        PgTryBuilder::new(|| {
-            tx.call_handler(&transaction_handler, id).expect(
-                "sync: svm: transactions: failed to call the handler {}",
-            );
-        })
-        .catch_rust_panic(|e| {
-            log!("{:?}", e);
-            warning!(
-                "sync: svm: transactions: failed to call handler for {}",
-                &signature
-            );
-        })
-        .catch_others(|e| {
-            log!("{:?}", e);
-            warning!(
-                "sync: svm: transactions: handler failed to put {}",
-                &signature
-            );
-        })
-        .execute();
-    });
+    if let Err(error) =
+        anyhow_pg_try!(|| tx.call_handler(&transaction_handler, id))
+    {
+        warning!(
+            "sync: evm: transactions: {}: transaction handler failed with {}",
+            &id,
+            error
+        );
+    }
 }
 
 pub fn build_config(_: &JobOptions) -> RpcTransactionConfig {
