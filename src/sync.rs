@@ -310,7 +310,7 @@ async fn handle_message(mut stream: MessageStream) {
                     anyhow_pg_try!(|| log.call_handler(&handler, id))
                 {
                     warning!(
-                        "sync: evm: logs: {}: log handler failed with {}",
+                        "sync: svm: logs: {}: log handler failed with {}",
                         job.id,
                         error
                     );
@@ -363,9 +363,10 @@ async fn handle_message(mut stream: MessageStream) {
                 }
             }
             Message::Shutdown => {
-                stats.abort();
                 break;
             }
         }
     }
+
+    stats.abort();
 }
