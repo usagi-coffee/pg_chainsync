@@ -459,7 +459,9 @@ impl PgHandler for SolanaInnerInstruction<'_> {
         data.set_by_name("slot", pgrx::AnyNumeric::try_from(self._tx.slot))?;
         data.set_by_name(
             "block_time",
-            pgrx::AnyNumeric::try_from(self._tx.block_time.unwrap()),
+            self._tx
+                .block_time
+                .expect("block time to be in instruction's transaction"),
         )?;
 
         data.set_by_name("data", &self._instruction.data)?;
