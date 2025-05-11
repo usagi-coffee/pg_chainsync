@@ -273,7 +273,6 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
     accounts.extend(loaded_addresses.readonly.clone());
 
     let signature = decoded.get_signature();
-    log!("sync: svm: transactions: {}: adding {}", "sol", &signature);
 
     let inner_instructions: &Vec<UiInnerInstructions> = meta
         .inner_instructions
@@ -316,8 +315,9 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                         };
 
                         log!(
-                            "sync: svm: transactions: {}: adding inner instruction {}.{}",
-                            &id,
+                            "sync: svm: transactions: {}: adding {}<{}.{}>",
+                            &job.name,
+                            &signature,
                             bundled.index,
                             bundled.inner_index
                         );
@@ -358,6 +358,12 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
     }
 
     if let Some(transaction_handler) = &job.options.transaction_handler {
+        log!(
+            "sync: svm: transactions: {}: adding {}",
+            &job.name,
+            &signature
+        );
+
         let id = job.id;
         if let Err(error) =
             anyhow_pg_try!(|| tx.call_handler(transaction_handler, id))
