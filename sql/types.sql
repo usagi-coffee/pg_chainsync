@@ -44,7 +44,7 @@ CREATE TYPE chainsync.SvmInstruction AS (
   index SMALLINT,
   inner_index SMALLINT,
   data TEXT,
-  block_time NUMERIC
+  block_time BIGINT
 );
 
 CREATE TYPE chainsync.SvmTransaction AS (
@@ -54,7 +54,7 @@ CREATE TYPE chainsync.SvmTransaction AS (
   instructions chainsync.SvmInstruction[],
   logs TEXT[],
   signatures TEXT[],
-  block_time NUMERIC
+  block_time BIGINT
 );
 
 CREATE TYPE chainsync.SvmBlock AS (
@@ -64,7 +64,7 @@ CREATE TYPE chainsync.SvmBlock AS (
   previous_block_hash TEXT,
   transactions chainsync.SvmTransaction[],
   signatures TEXT[],
-  block_time NUMERIC
+  block_time BIGINT
 );
 
 CREATE TYPE chainsync.SvmLog AS (

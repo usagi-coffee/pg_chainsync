@@ -258,7 +258,7 @@ impl PgHandler for SvmBlock {
         data.set_by_name(
             "block_height",
             pgrx::AnyNumeric::try_from(
-                self.block_height.expect("Block height not in block"),
+                self.block_height.expect("block height in a block"),
             ),
         )?;
         data.set_by_name("block_hash", self.blockhash.clone())?;
@@ -273,9 +273,7 @@ impl PgHandler for SvmBlock {
 
         data.set_by_name(
             "block_time",
-            pgrx::AnyNumeric::try_from(
-                self.block_time.expect("Block time not in block"),
-            ),
+            self.block_time.expect("block time in a block"),
         )?;
 
         let oid = data.composite_type_oid().unwrap();
@@ -336,7 +334,7 @@ impl PgHandler for SvmTransaction {
         data.set_by_name("slot", pgrx::AnyNumeric::try_from(self.slot))?;
         data.set_by_name(
             "block_time",
-            pgrx::AnyNumeric::try_from(self.block_time.unwrap()),
+            self.block_time.expect("block time to be in transaction"),
         )?;
 
         let accounts: Vec<String> = decoded
@@ -395,7 +393,9 @@ impl PgHandler for SolanaInstruction<'_> {
         data.set_by_name("slot", pgrx::AnyNumeric::try_from(self._tx.slot))?;
         data.set_by_name(
             "block_time",
-            pgrx::AnyNumeric::try_from(self._tx.block_time.unwrap()),
+            self._tx
+                .block_time
+                .expect("block time to be in instruction's transaction"),
         )?;
 
         data.set_by_name(
