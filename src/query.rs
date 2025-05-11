@@ -90,7 +90,7 @@ impl Job {
     pub fn handler(handler: &String, job: i64) -> Result<(), anyhow::Error> {
         Spi::run_with_args(
             format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $1))", handler).as_str(),
-            &vec![DatumWithOid::from(job)],
+            &vec![DatumWithOid::from(job as i32)],
         ).map_err(|e| e.into())
     }
 }
