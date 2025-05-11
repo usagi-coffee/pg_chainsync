@@ -96,29 +96,40 @@ mod chainsync {
 
         let id = Job::register(name.into(), options);
 
-        // Automatically enqueue the task if it's a one-shot job
-        if let Some(oneshot) = configuration.oneshot {
-            if oneshot {
-                if let Err(_) = EVM_TASKS.exclusive().push(id) {
-                    panic!("failed to enqueue the task")
+        if matches!(configuration.evm, Some(true)) {
+            if let Some(oneshot) = configuration.oneshot {
+                if oneshot {
+                    if let Err(_) = EVM_TASKS.exclusive().push(id) {
+                        panic!("failed to enqueue the task")
+                    }
+                }
+            }
+        } else if matches!(configuration.svm, Some(true)) {
+            if let Some(oneshot) = configuration.oneshot {
+                if oneshot {
+                    if let Err(_) = SVM_TASKS.exclusive().push(id) {
+                        panic!("failed to enqueue the task")
+                    }
                 }
             }
         }
 
-        // Send signal to the worker to restart the loop
-        if configuration.is_block_job() {
-            if let Err(_) = SIGNALS
-                .exclusive()
-                .push(crate::types::Signal::RestartBlocks as u8)
-            {
-                panic!("failed to send restart signal");
-            }
-        } else if configuration.is_log_job() {
-            if let Err(_) = SIGNALS
-                .exclusive()
-                .push(crate::types::Signal::RestartLogs as u8)
-            {
-                panic!("failed to send restart signal");
+        // Send signal to the worker to restart the loop if it's a job
+        if !matches!(configuration.oneshot, Some(true)) {
+            if configuration.is_block_job() {
+                if let Err(_) = SIGNALS
+                    .exclusive()
+                    .push(crate::types::Signal::RestartBlocks as u8)
+                {
+                    panic!("failed to send restart signal");
+                }
+            } else if configuration.is_log_job() {
+                if let Err(_) = SIGNALS
+                    .exclusive()
+                    .push(crate::types::Signal::RestartLogs as u8)
+                {
+                    panic!("failed to send restart signal");
+                }
             }
         }
 
