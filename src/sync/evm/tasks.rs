@@ -2,17 +2,19 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use anyhow::anyhow;
+
 use alloy::providers::Provider;
-use alloy::transports::RpcError;
+use alloy::rpc::types::Log;
 
 use pgrx::bgworkers::BackgroundWorker;
 use pgrx::{log, warning};
 
 use tokio::sync::{oneshot, Semaphore};
 use tokio::time::{sleep_until, Duration, Instant};
+use tokio_cron::{Job as CronJob, Scheduler};
 
 use cron::Schedule;
-use tokio_cron::{Job as CronJob, Scheduler};
 
 use crate::channel::Channel;
 use crate::sync::evm::logs;
@@ -102,17 +104,14 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
             };
 
             let Some(ws) = &job.options.ws else {
-                warning!(
-                    "sync: evm: tasks: no ws was provided for task {}",
-                    task
-                );
+                warning!("sync: evm: tasks: {}: no ws was provided", &job.name);
                 continue;
             };
 
             if let Err(err) = job.connect_evm().await {
                 warning!(
-                    "sync: evm: tasks: failed to create provider for {}, {}",
-                    task,
+                    "sync: evm: tasks: {}: failed to create provider with {}",
+                    &job.name,
                     err
                 );
                 continue;
@@ -125,27 +124,45 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                 )))
                 .clone();
 
+            let job = Arc::new(job);
             let channel = channel.clone();
             tokio::spawn(async move {
                 let Ok(permit) = semaphore.acquire().await else {
-                    warning!("sync: evm: tasks: failed to acquire semaphore for task {}", task);
+                    warning!(
+                        "sync: evm: tasks: {}: failed to acquire semaphore",
+                        &job.name
+                    );
                     return;
                 };
 
                 log!("sync: evm: tasks: {}: permitted", &job.name);
 
-                let job = Arc::new(job);
-
-                if job.options.is_block_job() {
-                    handle_blocks_task(Arc::clone(&job), &channel).await;
-                } else if job.options.is_log_job() {
-                    handle_log_task(Arc::clone(&job), &channel).await;
-                } else {
-                    warning!("sync: evm: tasks: unknown  task {}", task);
-                }
+                let task = {
+                    if job.options.is_block_job() {
+                        handle_blocks_task(job.clone(), &channel).await
+                    } else if job.options.is_log_job() {
+                        handle_log_task(job.clone(), &channel).await
+                    } else {
+                        Err(anyhow!("unknown task"))
+                    }
+                };
 
                 drop(permit);
-                channel.send(Message::TaskSuccess(Arc::clone(&job)));
+
+                match task {
+                    Ok(()) => {
+                        log!("sync: evm: tasks: {}: task completed", &job.name);
+                        channel.send(Message::TaskSuccess(job.clone()))
+                    }
+                    Err(error) => {
+                        warning!(
+                            "sync: evm: tasks: {}: task failed with {}",
+                            &job.name,
+                            error
+                        );
+                        channel.send(Message::TaskFailure(job.clone()))
+                    }
+                };
             });
         }
 
@@ -153,36 +170,74 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
     }
 }
 
-async fn handle_blocks_task(job: Arc<Job>, channel: &Arc<Channel>) {
+async fn handle_blocks_task(
+    job: Arc<Job>,
+    channel: &Arc<Channel>,
+) -> Result<(), anyhow::Error> {
     let options = &job.options;
 
-    let mut to = options.to_block.unwrap_or(0);
-    if options.to_block.is_none() {
-        to = job
-            .connect_evm()
-            .await
-            .unwrap()
-            .get_block_number()
-            .await
-            .unwrap() as i64;
-    }
+    let mut client = job.reconnect_evm().await?;
 
-    for i in options.from_block.unwrap()..to {
-        if let Ok(block) = job
-            .connect_evm()
-            .await
-            .unwrap()
-            .get_block(
-                (i as u64).into(),
-                alloy::rpc::types::BlockTransactionsKind::Hashes,
-            )
-            .await
-        {
+    let mut from = options.from_block.unwrap_or(0);
+    let to = {
+        if let Some(to_block) = options.to_block {
+            to_block
+        } else {
+            client.get_block_number().await? as i64
+        }
+    };
+
+    let mut retries = 0;
+    'blocks: loop {
+        if retries >= 10 {
+            return Err(anyhow!(
+                "failed to get block after 10 retries, aborting..."
+            ));
+        }
+
+        client = job.reconnect_evm().await?;
+
+        for i in from..to {
+            let block = match client
+                .get_block(
+                    (i as u64).into(),
+                    // TODO: add configuration option for full block, for now only hashes
+                    alloy::rpc::types::BlockTransactionsKind::Hashes,
+                )
+                .await
+            {
+                Ok(block) => block,
+                Err(error) => {
+                    warning!(
+                      "sync: evm: blocks: {}: failed to get block with {}, reconnecting...",
+                      &job.name,
+                      error
+                    );
+                    retries += 1;
+
+                    continue 'blocks;
+                }
+            };
+
+            retries = 0;
+
             if let Some(block) = block {
                 channel.send(Message::EvmBlock(block.header, Arc::clone(&job)));
+            } else {
+                warning!(
+                    "sync: evm: blocks: {}: got empty block at {}",
+                    &job.name,
+                    i
+                );
             }
+
+            from = i;
         }
+
+        break;
     }
+
+    Ok(())
 }
 
 struct FetchState {
@@ -190,7 +245,6 @@ struct FetchState {
     to: i64,
     blocktick: i64,
     index: i64,
-    retries: i32,
 }
 
 impl FetchState {
@@ -200,7 +254,6 @@ impl FetchState {
             to,
             blocktick,
             index: 0,
-            retries: 0,
         }
     }
 
@@ -228,7 +281,6 @@ impl FetchState {
     fn reduce_blocktick(&mut self, from: i64) {
         self.from = from;
         self.index = 0;
-        self.retries = 0;
 
         self.blocktick =
             std::cmp::max((self.blocktick as f64 / 2.0).floor() as i64, 1);
@@ -237,7 +289,6 @@ impl FetchState {
     fn recalculate(&mut self, from: i64, blocktick: i64) {
         self.from = from;
         self.index = 0;
-        self.retries = 0;
 
         self.blocktick = std::cmp::max(blocktick, 1);
     }
@@ -252,30 +303,26 @@ impl FetchState {
     }
 }
 
-async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
+async fn handle_log_task(
+    job: Arc<Job>,
+    channel: &Arc<Channel>,
+) -> Result<(), anyhow::Error> {
     let options = &job.options;
+    let mut client = job.reconnect_evm().await?;
 
-    // SAFETY: before we connected so we are safe to do all these crazy things
-    let block = job
-        .connect_evm()
-        .await
-        .unwrap()
-        .get_block_number()
-        .await
-        .unwrap() as u64;
-
-    let mut filter = logs::build_filter(options, block);
+    let latest = client.get_block_number().await?;
+    let mut filter = logs::build_filter(options, latest);
 
     let from_block = options.from_block.unwrap_or(0);
     let to_block = {
         if let Some(target) = options.to_block {
             // Use latest
             if target == 0 {
-                block as i64
+                latest as i64
             }
             // Offset
             else if target < 0 {
-                (block as i64) + target as i64
+                (latest as i64) + target as i64
             }
             // Specific block
             else {
@@ -284,16 +331,16 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
         }
         // Use latest
         else {
-            block as i64
+            latest as i64
         }
     };
 
     let reset = EVM_BLOCKTICK_RESET.get() as i64;
-    let mut client = job.reconnect_evm().await.expect("ws to connect");
 
     // Split logs by blocktick if needed
     if let Some(blocktick) = options.blocktick {
         let mut state = FetchState::new(from_block, to_block, blocktick);
+        let mut retries = 0;
 
         while state.remaining() {
             let (from, to) = state.range();
@@ -319,46 +366,66 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
             );
 
             filter = filter.from_block(from as u64).to_block(to as u64);
-
             let request = client.get_logs(&filter);
 
             // Do 10 second timeout to ensure we don't block forever and force-reduce blocktick
-            let logs = tokio::select! {
-                _ = tokio::time::sleep(Duration::from_secs(10)) => Err(RpcError::NullResp),
-                logs = request => logs
+            let logs: Result<Vec<Log>, anyhow::Error> = tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(10)) => Err(anyhow!("logs request took too long")),
+                logs = request => logs.map_err(|e| e.into())
             };
 
             match logs {
                 Ok(mut logs) => {
-                    state.retries = 0;
+                    retries = 0;
+
                     for log in logs.drain(0..) {
                         logs::handle_evm_log(&job, log, &channel).await;
                     }
 
                     state.next();
                 }
-                Err(e) => {
-                    warning!("sync: evm: tasks: {:?}", e);
-                    if state.blocktick <= 1 || state.retries >= 20 {
-                        warning!(
-                          "sync: evm: tasks: {}: failed to fetch with reduced blocktick, aborting...",
-                          &job.name,
-                      );
+                Err(error) => {
+                    warning!(
+                        "sync: evm: tasks: {}: failed to get logs with {}",
+                        &job.name,
+                        error
+                    );
 
-                        break;
+                    // Once we hit blocktick of 1 this is too slow at this point
+                    if state.blocktick <= 1 {
+                        return Err(anyhow!("blocktick was reduced too much"));
                     }
 
-                    // Reconnect the client
-                    client = job.reconnect_evm().await.expect("ws to connect");
+                    // Somethings wrong if we hit 20 retries in a row....
+                    if retries >= 20 {
+                        return Err(anyhow!("too many retries"));
+                    }
+
+                    // Reconnect loop
+                    'reconnect: loop {
+                        sleep_until(
+                            Instant::now() + Duration::from_millis(200),
+                        )
+                        .await;
+
+                        match job.reconnect_evm().await {
+                            Ok(reconnected) => {
+                                client = reconnected;
+                                break 'reconnect;
+                            }
+                            Err(error) => {
+                                warning!("sync: evm: tasks: {}: failed to reconnect with {}", &job.name, error);
+                                retries += 1;
+                            }
+                        }
+                    }
+
                     log!(
                         "sync: evm: tasks: {}: reducing blocktick from {} to {}",
                         &job.name,
                         state.blocktick,
                         (state.blocktick as f64 / 2.0).floor(),
                     );
-
-                    sleep_until(Instant::now() + Duration::from_millis(200))
-                        .await;
 
                     state.reduce_blocktick(from);
                 }
@@ -373,16 +440,17 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
                     logs::handle_evm_log(&job, log, &channel).await;
                 }
             }
-            Err(e) => {
-                warning!("sync: evm: tasks: {}: {:?}", &job.name, e);
+            Err(error) => {
                 warning!(
-                    "sync: evm: tasks: {}: failed to get logs, aborting...",
+                    "sync: evm: tasks: {}: failed to get logs with {}",
                     &job.name,
+                    error
                 );
-                channel.send(Message::TaskFailure(Arc::clone(&job)));
             }
         }
     }
+
+    Ok(())
 }
 
 #[cfg(test)]
