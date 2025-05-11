@@ -417,6 +417,7 @@ impl PgHandler for SolanaInstruction<'_> {
         )?;
 
         data.set_by_name("index", self.index)?;
+        data.set_by_name("inner_index", 0)?;
 
         let oid = data.composite_type_oid().unwrap();
         Spi::run_with_args(
