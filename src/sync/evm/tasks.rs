@@ -18,7 +18,7 @@ use crate::channel::Channel;
 use crate::sync::evm::logs;
 use crate::types::*;
 
-use crate::worker::{EVM_TASKS, WS_PERMITS};
+use crate::worker::{EVM_BLOCKTICK_RESET, EVM_TASKS, EVM_WS_PERMITS};
 
 pub async fn setup(scheduler: &mut Scheduler) {
     let tasks = BackgroundWorker::transaction(|| Job::query_all());
@@ -120,7 +120,9 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
 
             let semaphore = semaphores
                 .entry(ws.into())
-                .or_insert(Arc::new(Semaphore::new(WS_PERMITS.get() as usize)))
+                .or_insert(Arc::new(Semaphore::new(
+                    EVM_WS_PERMITS.get() as usize
+                )))
                 .clone();
 
             let channel = channel.clone();
@@ -286,6 +288,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
         }
     };
 
+    let reset = EVM_BLOCKTICK_RESET.get() as i64;
     let mut client = job.reconnect_evm().await.expect("ws to connect");
 
     // Split logs by blocktick if needed
@@ -296,7 +299,7 @@ async fn handle_log_task(job: Arc<Job>, channel: &Arc<Channel>) {
             let (from, to) = state.range();
 
             // Sometimes "busy block periods" reduce the blocktick, try to revert every now and then
-            if state.index > 100 && state.blocktick != blocktick {
+            if state.index >= reset && state.blocktick != blocktick {
                 state.recalculate(from, blocktick);
                 log!(
                     "sync: evm: tasks: {}: re-trying the original blocktick...",
