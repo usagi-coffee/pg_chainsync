@@ -35,8 +35,8 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
             let mut map = StreamMap::new();
 
             for job in jobs.iter_mut() {
-                if let Err(err) = job.connect_evm().await {
-                    warning!("sync: evm: logs: {}: ws: {}", job.id, err);
+                if let Err(error) = job.connect_evm().await {
+                    warning!("sync: evm: logs: {}: listener failed to connect with {}", &job.name, error);
                     continue 'sync;
                 }
             }
@@ -52,10 +52,17 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                             Arc::clone(job),
                         ));
 
-                        log!("sync: evm: log: {}: started listening", job.id);
+                        log!(
+                            "sync: evm: log: {}: started listening",
+                            &job.name
+                        );
                     }
-                    Err(err) => {
-                        warning!("sync: evm: log: {}: {}", job.id, err);
+                    Err(error) => {
+                        warning!(
+                            "sync: evm: log: {}: failed to build stream with {}",
+                            &job.name,
+                            error
+                        );
                         continue 'sync;
                     }
                 }
@@ -90,7 +97,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         let job = &jobs[i];
 
                         if log.is_none() {
-                            warning!("sync: evm: log: stream {} has ended, restarting providers", job.id);
+                            warning!("sync: evm: log: {}: stream has ended, restarting providers", &job.name);
                             continue 'sync;
                         }
 

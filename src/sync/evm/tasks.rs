@@ -45,24 +45,23 @@ pub async fn setup(scheduler: &mut Scheduler) {
         // Enqueue preloaded tasks
         if matches!(task.options.preload, Some(true)) {
             if EVM_TASKS.exclusive().push(task.id).is_err() {
-                warning!("sync: evm: tasks: failed to enqueue {}", task.id);
+                warning!("sync: evm: tasks: {}: failed to enqueue", &task.name);
             }
         }
 
-        // Cron
+        // Cron tasks
         if let Some(cron) = &task.options.cron {
-            log!("sync: evm: tasks: {} ", id);
             if Schedule::from_str(&cron).is_err() {
                 warning!(
-                    "sync: evm: tasks: task {} has incorrect cron expression {}",
-                    task.id,
-                    cron
+                    "sync: evm: tasks: {}: has incorrect cron expression {}",
+                    task.name,
+                    &cron
                 );
 
                 continue;
             }
 
-            log!("sync: evm: tasks: {}: scheduling {}", id, cron);
+            log!("sync: evm: tasks: {}: scheduling {}", &task.name, &cron);
             scheduler.add(CronJob::new_sync(cron, move || {
                 if EVM_TASKS.exclusive().push(id).is_err() {
                     warning!("sync: evm: tasks: failed to enqueue {}", id);

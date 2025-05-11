@@ -38,8 +38,12 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
             for job in jobs.iter_mut() {
                 match job.connect_evm().await {
                     Ok(_) => {}
-                    Err(err) => {
-                        warning!("sync: evm: blocks: {}: ws: {}", job.id, err);
+                    Err(error) => {
+                        warning!(
+                            "sync: evm: blocks: {}: listener failed to connect with {}",
+                            &job.name,
+                            error
+                        );
                         continue 'sync;
                     }
                 }
@@ -50,7 +54,11 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 
                 match build_stream(&job).await {
                     Ok(stream) => {
-                        log!("sync: evm: blocks: {} started listening", job.id);
+                        log!(
+                            "sync: evm: blocks: {}: started listening",
+                            &job.name
+                        );
+
                         channel.send(Message::UpdateJob(
                             JobStatus::Running,
                             Arc::clone(job),
@@ -58,8 +66,8 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 
                         map.insert(i, StreamNotifyClose::new(stream));
                     }
-                    Err(err) => {
-                        warning!("sync: evm: blocks: {}: {}", job.id, err);
+                    Err(error) => {
+                        warning!("sync: evm: blocks: {}: failed to build stream with {}", &job.name, error);
                         continue 'sync;
                     }
                 }
@@ -98,8 +106,8 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 
                         if block.is_none() {
                             warning!(
-                                "sync: evm: blocks: stream {} has ended, restarting providers",
-                                job.id
+                                "sync: evm: blocks: {}: stream has ended, restarting providers",
+                                &job.name
                             );
                             continue 'sync;
                         }
