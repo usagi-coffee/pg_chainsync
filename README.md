@@ -28,7 +28,7 @@ SELECT chainsync.stop();
 
 ```sql
 -- This is your custom handler that inserts new blocks to your table
-CREATE FUNCTION custom_block_handler(block chainsync.Block, job JSONB) RETURNS your_blocks
+CREATE FUNCTION custom_block_handler(block chainsync.EvmBlock, job JSONB) RETURNS your_blocks
 AS $$
 INSERT INTO your_blocks (number, hash)
 VALUES (block.number, block.hash)
@@ -57,7 +57,7 @@ Here is the complete log output, for the testing the number of fetched blocks ha
 ```sql
 
 -- This is your custom handler that inserts events to your table
-CREATE FUNCTION custom_log_handler(log chainsync.Log, job JSONB) RETURNS your_logs
+CREATE FUNCTION custom_log_handler(log chainsync.EvmLog, job JSONB) RETURNS your_logs
 AS $$
 INSERT INTO your_logs (address, data) -- Inserting into your custom table
 VALUES (log.address, log.data)
