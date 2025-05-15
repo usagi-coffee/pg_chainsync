@@ -208,7 +208,7 @@ async fn handle_message(mut stream: MessageStream) {
                 let id = job.id;
                 if let Err(error) = anyhow_pg_try!(|| Job::update(id, status)) {
                     warning!(
-                        "sync: messages: {}: updating job failed with {}",
+                        "sync: messages: {}: updating status failed with {}",
                         &job.name,
                         error
                     );

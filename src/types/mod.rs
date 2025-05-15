@@ -30,7 +30,8 @@ pub enum Signal {
 #[repr(u8)]
 pub enum JobStatus {
     Stopped = 0,
-    Running = 1,
+    Waiting = 1,
+    Running = 2,
 }
 
 pub enum Message {
@@ -168,9 +169,11 @@ impl From<u8> for Signal {
 impl Into<String> for JobStatus {
     fn into(self) -> String {
         match self {
-            JobStatus::Stopped => "STOPPED".to_string(),
-            JobStatus::Running => "RUNNING".to_string(),
+            JobStatus::Stopped => "STOPPED",
+            JobStatus::Waiting => "WAITING",
+            JobStatus::Running => "RUNNING",
         }
+        .into()
     }
 }
 

@@ -42,10 +42,7 @@ impl Job {
 
         Spi::run_with_args(
             "UPDATE chainsync.jobs SET status = $1 WHERE id = $2",
-            &vec![
-                DatumWithOid::from(status_text.clone()),
-                DatumWithOid::from(id),
-            ],
+            &vec![DatumWithOid::from(status_text), DatumWithOid::from(id)],
         )
         .map_err(|e| e.into())
     }
