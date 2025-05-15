@@ -28,6 +28,8 @@ pub async fn setup(scheduler: &mut Scheduler) {
     };
 
     let tasks = jobs.svm_jobs().tasks().into_iter();
+    log!("sync: svm: tasks: {} tasks found", tasks.len());
+
     for task in tasks {
         let id = task.id;
         // Enqueue preloaded tasks

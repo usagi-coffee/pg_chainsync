@@ -63,14 +63,6 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
     }
 
     log!("sync: {} jobs found", jobs.len());
-    log!(
-        "sync: evm: tasks: {} tasks found",
-        jobs.evm_jobs().tasks().len()
-    );
-    log!(
-        "sync: svm: tasks: {} tasks found",
-        jobs.svm_jobs().tasks().len()
-    );
 
     *WORKER_STATUS.exclusive() = WorkerStatus::RUNNING;
 

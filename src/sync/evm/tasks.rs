@@ -30,6 +30,8 @@ pub async fn setup(scheduler: &mut Scheduler) {
     };
 
     let tasks = jobs.evm_jobs().tasks().into_iter();
+    log!("sync: evm: tasks: {} tasks found", tasks.len());
+
     for task in tasks {
         let id = task.id;
 
