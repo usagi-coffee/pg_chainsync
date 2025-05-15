@@ -31,6 +31,7 @@ alloy-chains = { version = "0.1", features = ["serde"] }
 solana-sdk = "2.1.7"
 solana-client = "2.1.7"
 solana-transaction-status-client-types = "2.1.7"
+chrono = "0.4.41"
 
 [dev-dependencies]
 pgrx-tests = "0.14.1"

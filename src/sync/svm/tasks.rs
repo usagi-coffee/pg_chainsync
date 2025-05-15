@@ -2,41 +2,32 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use pgrx::bgworkers::BackgroundWorker;
-use pgrx::{log, warning};
+use pgrx::{log, warning, PgTryBuilder};
 
 use solana_sdk::commitment_config::CommitmentLevel;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
+
 use tokio::sync::oneshot;
 use tokio::time::{sleep_until, Duration, Instant};
-
-use cron::Schedule;
 use tokio_cron::{Job as CronJob, Scheduler};
 
-use crate::channel::Channel;
-use crate::types::*;
-
-use crate::worker::SVM_TASKS;
+use chrono::Utc;
+use cron::Schedule;
 
 use super::blocks::build_config;
+use crate::anyhow_pg_try;
+use crate::channel::Channel;
+use crate::types::*;
+use crate::worker::SVM_TASKS;
 
 pub async fn setup(scheduler: &mut Scheduler) {
-    let tasks = BackgroundWorker::transaction(|| Job::query_all());
-    if tasks.is_err() {
+    let Ok(jobs) = anyhow_pg_try!(|| Job::query_all()) else {
         warning!("sync: svm: tasks: failed to setup tasks");
         return;
-    }
+    };
 
-    // turn tasks to arc
-    // SAFETY: we checked error before, avoiding indent..
-    let tasks = tasks
-        .unwrap()
-        .svm_jobs()
-        .tasks()
-        .into_iter()
-        .map(Arc::new)
-        .collect::<Vec<_>>();
-
+    let tasks = jobs.svm_jobs().tasks().into_iter();
     for task in tasks {
         let id = task.id;
         // Enqueue preloaded tasks
@@ -50,8 +41,7 @@ pub async fn setup(scheduler: &mut Scheduler) {
 
         // Cron
         if let Some(cron) = &task.options.cron {
-            log!("sync: svm: tasks: {} ", id);
-            if Schedule::from_str(&cron).is_err() {
+            let Ok(schedule) = Schedule::from_str(&cron) else {
                 warning!(
                     "sync: svm: tasks: task {} has incorrect cron expression {}",
                     task.id,
@@ -59,9 +49,15 @@ pub async fn setup(scheduler: &mut Scheduler) {
                 );
 
                 continue;
-            }
+            };
 
-            log!("sync: tasks: {}: scheduling {}", id, cron);
+            log!(
+                "sync: tasks: {}: scheduling {}, next at {}",
+                id,
+                cron,
+                schedule.upcoming(Utc).next().unwrap()
+            );
+
             scheduler.add(CronJob::new_sync(cron, move || {
                 if SVM_TASKS.exclusive().push(id).is_err() {
                     warning!("sync: svm: tasks: failed to enqueue {}", id);

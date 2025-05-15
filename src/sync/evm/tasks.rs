@@ -8,37 +8,28 @@ use alloy::providers::Provider;
 use alloy::rpc::types::Log;
 
 use pgrx::bgworkers::BackgroundWorker;
-use pgrx::{log, warning};
+use pgrx::{log, warning, PgTryBuilder};
 
 use tokio::sync::{oneshot, Semaphore};
 use tokio::time::{sleep_until, Duration, Instant};
 use tokio_cron::{Job as CronJob, Scheduler};
 
+use chrono::Utc;
 use cron::Schedule;
 
+use crate::anyhow_pg_try;
 use crate::channel::Channel;
 use crate::sync::evm::logs;
 use crate::types::*;
-
 use crate::worker::{EVM_BLOCKTICK_RESET, EVM_TASKS, EVM_WS_PERMITS};
 
 pub async fn setup(scheduler: &mut Scheduler) {
-    let tasks = BackgroundWorker::transaction(|| Job::query_all());
-    if tasks.is_err() {
+    let Ok(jobs) = anyhow_pg_try!(|| Job::query_all()) else {
         warning!("sync: evm: tasks: failed to setup tasks");
         return;
-    }
+    };
 
-    // turn tasks to arc
-    // SAFETY: we checked error before, avoiding indent..
-    let tasks = tasks
-        .unwrap()
-        .evm_jobs()
-        .tasks()
-        .into_iter()
-        .map(Arc::new)
-        .collect::<Vec<_>>();
-
+    let tasks = jobs.evm_jobs().tasks().into_iter();
     for task in tasks {
         let id = task.id;
 
@@ -51,7 +42,7 @@ pub async fn setup(scheduler: &mut Scheduler) {
 
         // Cron tasks
         if let Some(cron) = &task.options.cron {
-            if Schedule::from_str(&cron).is_err() {
+            let Ok(schedule) = Schedule::from_str(&cron) else {
                 warning!(
                     "sync: evm: tasks: {}: has incorrect cron expression {}",
                     task.name,
@@ -59,9 +50,15 @@ pub async fn setup(scheduler: &mut Scheduler) {
                 );
 
                 continue;
-            }
+            };
 
-            log!("sync: evm: tasks: {}: scheduling {}", &task.name, &cron);
+            log!(
+                "sync: evm: tasks: {}: scheduling {}, next at {}",
+                &task.name,
+                &cron,
+                schedule.upcoming(Utc).next().unwrap()
+            );
+
             scheduler.add(CronJob::new_sync(cron, move || {
                 if EVM_TASKS.exclusive().push(id).is_err() {
                     warning!("sync: evm: tasks: failed to enqueue {}", id);
