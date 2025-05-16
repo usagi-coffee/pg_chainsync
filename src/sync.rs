@@ -312,26 +312,49 @@ async fn handle_message(mut stream: MessageStream) {
                 svm_txs.fetch_add(1, Ordering::Relaxed);
                 svm::transactions::handle_message(message)
             }
-            Message::TaskSuccess(job) => {
-                if let Some(handler) = job.options.success_handler.as_ref() {
-                    let id = job.id;
+            Message::Handler(job_id, handler, oneshot) => {
+                let success =
+                    match anyhow_pg_try!(|| Job::handler(&handler, job_id)) {
+                        Ok(_) => true,
+                        Err(error) => {
+                            warning!(
+                                "sync: messages: {}: {} failed with {}",
+                                job_id,
+                                handler,
+                                error
+                            );
+                            false
+                        }
+                    };
 
-                    if let Err(error) =
-                        anyhow_pg_try!(|| Job::handler(&handler, id))
-                    {
-                        warning!("sync: messages: {}: task success handler failed with {}", &job.name, error);
-                    }
+                if let Err(_) = oneshot.send(success) {
+                    warning!(
+                        "sync: messages: {}: {} failed to return, task is probably deadlocked!",
+                        job_id, handler
+                    );
                 }
             }
-            Message::TaskFailure(job) => {
-                if let Some(handler) = job.options.failure_handler.as_ref() {
-                    let id = job.id;
-
-                    if let Err(error) =
-                        anyhow_pg_try!(|| Job::handler(&handler, id))
-                    {
-                        warning!("sync: messages: {}: task failure handler failed with {}", &job.name, error);
+            Message::JsonHandler(job_id, handler, oneshot) => {
+                let result = match anyhow_pg_try!(|| Job::json_handler(
+                    &handler, job_id
+                )) {
+                    Ok(result) => Some(result),
+                    Err(error) => {
+                        warning!(
+                            "sync: messages: {}: {} failed with {}",
+                            job_id,
+                            handler,
+                            error
+                        );
+                        None
                     }
+                };
+
+                if let Err(_) = oneshot.send(result) {
+                    warning!(
+                        "sync: messages: {}: {} failed to return, task is probably deadlocked!",
+                        job_id, handler
+                    );
                 }
             }
             Message::CheckBlock(number, oneshot, job) => {

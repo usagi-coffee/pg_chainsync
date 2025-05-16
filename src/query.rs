@@ -1,5 +1,7 @@
 use pgrx::datum::{DatumWithOid, IntoDatum};
-use pgrx::prelude::*;
+use pgrx::{prelude::*, JsonB};
+
+use anyhow::anyhow;
 
 use tokio::sync::OnceCell;
 
@@ -88,13 +90,27 @@ impl Job {
         Spi::run_with_args(
             format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $1))", handler).as_str(),
             &vec![DatumWithOid::from(job as i32)],
-        ).map_err(|e| e.into())
+        )
+        .map_err(|e| e.into())
+    }
+
+    pub fn json_handler(
+        handler: &String,
+        job: i64,
+    ) -> Result<JsonB, anyhow::Error> {
+        Spi::get_one_with_args::<JsonB>(
+            format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $1))", handler).as_str(),
+            &vec![DatumWithOid::from(job as i32)],
+        )
+        .map_err(|e| e.into())
+        .and_then(|opt| opt.ok_or_else(|| anyhow!("did not return anything")))
     }
 }
 
 pub enum PgResult {
     None,
     Boolean(bool),
+    Json(JsonB),
 }
 
 pub trait PgHandler {

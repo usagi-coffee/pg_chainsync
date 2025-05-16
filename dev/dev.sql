@@ -62,11 +62,12 @@ AS $$
   ON CONFLICT (ev_chain, ev_contract, ev_txhash, ev_index) DO UPDATE SET ev_source = job->>'source';
 $$ LANGUAGE SQL;
 
--- Events added have source unverified, this function updates the source to verified once restore task executes
-CREATE FUNCTION verify_sweep_handler(job_id INTEGER, job JSONB) RETURNS VOID
+-- Handler that changes the options before the tasks starts
+CREATE FUNCTION sweep_reset(job_id INTEGER, job JSONB) RETURNS JSONB
 AS $$
 DECLARE
   cutoff_block BIGINT;
+  updated_options JSONB;
 BEGIN
   -- Fetch latest verified block
   SELECT ev_block FROM events
@@ -74,14 +75,23 @@ BEGIN
   ORDER BY ev_block DESC LIMIT 1
   INTO cutoff_block;
 
-  -- Update the source to verified
-  UPDATE chainsync.jobs SET options['from_block'] = TO_JSONB(COALESCE(cutoff_block, 0)) WHERE id = job_id;
+  RAISE LOG 'Setting from_block to %', COALESCE(cutoff_block, 0);
 
-  -- Remove events with unverified source below the cutoff to make sure no orphaned events are left
-  DELETE FROM events
-  WHERE ev_chain = job->>'chain' AND ev_contract = job->>'address' AND ev_source = 'unverified' AND ev_block >= COALESCE((job->>'from_block')::BIGINT, 0) AND ev_block <= cutoff_block;
+  -- Update the from_block
+  UPDATE chainsync.jobs SET options['from_block'] = TO_JSONB(COALESCE(cutoff_block, 0))
+  WHERE id = job_id
+  RETURNING options INTO updated_options;
+
+  RETURN updated_options;
 END;
 $$ LANGUAGE plpgsql;
+
+-- Remove events with unverified source below the cutoff to make sure no orphaned events are left
+CREATE FUNCTION sweep_unverified(job_id INTEGER, job JSONB) RETURNS VOID
+AS $$
+  DELETE FROM events
+  WHERE ev_chain = job->>'chain' AND ev_contract = job->>'address' AND ev_source = 'unverified' AND ev_block <= COALESCE((job->>'from_block')::BIGINT, 0)
+$$ LANGUAGE SQL;
 
 -- Task that gets all transfers in real-time
 
@@ -119,8 +129,11 @@ SELECT chainsync.register(
     "from_block": 0,
     "to_block": -15,
 
+
     "log_handler": "transfer_handler",
-    "success_handler": "verify_sweep_handler",
+
+    "setup_handler": "sweep_reset",
+    "success_handler": "sweep_unverified",
 
     "address": "5FbDB2315678afecb367f032d93F642f64180aa3",
     "event": "Transfer(address,address,uint256)",

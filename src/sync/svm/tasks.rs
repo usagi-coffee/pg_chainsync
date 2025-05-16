@@ -1,8 +1,10 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
+use anyhow::anyhow;
+
 use pgrx::bgworkers::BackgroundWorker;
-use pgrx::{log, warning, PgTryBuilder};
+use pgrx::{log, warning, JsonB, PgTryBuilder};
 
 use solana_sdk::commitment_config::CommitmentLevel;
 use solana_sdk::pubkey::Pubkey;
@@ -15,7 +17,8 @@ use tokio_cron::{Job as CronJob, Scheduler};
 use chrono::Utc;
 use cron::Schedule;
 
-use super::blocks::build_config;
+use super::blocks;
+use super::transactions;
 use crate::anyhow_pg_try;
 use crate::channel::Channel;
 use crate::types::*;
@@ -77,7 +80,7 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
             log!("sync: svm: tasks: got task {}", task);
 
             // FIXME: wait some time for commit when adding tasks
-            sleep_until(Instant::now() + Duration::from_millis(100)).await;
+            sleep_until(Instant::now() + Duration::from_millis(250)).await;
 
             let (tx, rx) = oneshot::channel::<Option<Job>>();
             channel.send(Message::Job(task, tx));
@@ -90,7 +93,7 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                 continue;
             };
 
-            let Some(job) = job else {
+            let Some(mut job) = job else {
                 warning!(
                     "sync: svm: tasks: failed to find job for task {}",
                     task
@@ -98,94 +101,179 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                 continue;
             };
 
-            if let Err(err) = job.connect_svm_rpc().await {
-                warning!(
-                    "sync: svm: tasks: failed to create provider for {}, {}",
+            if let Some(setup_handler) = job.options.setup_handler.as_ref() {
+                let (tx, rx) = oneshot::channel::<Option<JsonB>>();
+                channel.send(Message::JsonHandler(
                     task,
-                    err
+                    setup_handler.to_owned(),
+                    tx,
+                ));
+
+                // Update options
+                match rx.await {
+                    Ok(Some(json)) => match serde_json::from_value(json.0) {
+                        Ok(options) => job.options = options,
+                        Err(error) => {
+                            warning!("sync: svm: tasks: {}: failed to parse return handler options jsonb with {}", &job.name, &error);
+                            continue;
+                        }
+                    },
+                    Err(error) => {
+                        warning!(
+                        "sync: svm: tasks: {}: setup handler failed with {}",
+                        &job.name,
+                        error
+                    );
+                        continue;
+                    }
+                    _ => {
+                        warning!("sync: svm: tasks: {}: setup handler did not return options jsonb", &job.name);
+                        continue;
+                    }
+                }
+            }
+
+            if job.options.rpc.is_none() {
+                warning!(
+                    "sync: svm: tasks: {}: no rpc was provided",
+                    &job.name
                 );
                 continue;
             };
 
             let job = Arc::new(job);
 
-            if job.options.is_block_job() {
-                handle_blocks_task(Arc::clone(&job), &channel).await;
-            } else if job.options.is_log_job() {
-                warning!("sync: svm: tasks: unknown  task {}", task);
-            } else if job.options.is_transaction_job() {
-                handle_transactions_task(Arc::clone(&job), &channel).await;
-            } else {
-                warning!("sync: svm: tasks: unknown  task {}", task);
-            }
+            let task = {
+                if job.options.is_block_job() {
+                    handle_blocks_task(Arc::clone(&job), &channel).await
+                } else if job.options.is_log_job() {
+                    Err(anyhow!("log tasks are not supported yet"))
+                } else if job.options.is_transaction_job() {
+                    handle_transactions_task(Arc::clone(&job), &channel).await
+                } else {
+                    Err(anyhow!("unknown task"))
+                }
+            };
 
-            channel.send(Message::TaskSuccess(Arc::clone(&job)));
+            match task {
+                Ok(()) => {
+                    log!("sync: svm: tasks: {}: task completed", &job.name);
+
+                    if let Some(success_handler) = &job.options.success_handler
+                    {
+                        let (tx, rx) = oneshot::channel::<bool>();
+                        channel.send(Message::Handler(
+                            job.id,
+                            success_handler.to_owned(),
+                            tx,
+                        ));
+
+                        let _ = rx.await;
+                    }
+                }
+                Err(error) => {
+                    warning!(
+                        "sync: svm: tasks: {}: task failed with {}",
+                        &job.name,
+                        error
+                    );
+
+                    if let Some(failure_handler) = &job.options.failure_handler
+                    {
+                        let (tx, rx) = oneshot::channel::<bool>();
+                        channel.send(Message::Handler(
+                            job.id,
+                            failure_handler.to_owned(),
+                            tx,
+                        ));
+                        let _ = rx.await;
+                    }
+                }
+            };
         }
 
         sleep_until(Instant::now() + Duration::from_millis(250)).await;
     }
 }
 
-async fn handle_blocks_task(job: Arc<Job>, channel: &Arc<Channel>) {
+async fn handle_blocks_task(
+    job: Arc<Job>,
+    channel: &Arc<Channel>,
+) -> Result<(), anyhow::Error> {
     let options = &job.options;
 
-    let from_slot = options
-        .from_slot
-        .expect("sync: svm: tasks: from_slot is required for task");
+    let rpc = job.reconnect_svm_rpc().await;
 
-    let mut to_slot = options.to_slot.unwrap_or(0);
-    if options.to_slot.is_none() {
-        to_slot = job
-            .connect_svm_rpc()
-            .await
-            .unwrap()
-            .get_slot()
-            .await
-            .expect("Failed to get block height");
-    }
+    let Some(from) = options.from_slot else {
+        return Err(anyhow!("from_slot is required for block task"));
+    };
 
-    let rpc = job.connect_svm_rpc().await.unwrap();
-    for i in from_slot..to_slot {
-        match rpc
-            .get_block_with_config(i as u64, build_config(&options))
-            .await
-        {
-            Ok(block) => {
-                channel.send(Message::SvmBlock(block, Arc::clone(&job)));
-            }
-            Err(err) => {
-                warning!(
-                    "sync: svm: tasks: blocks: failed to get {}, {}",
-                    i,
-                    err
-                );
+    let to = {
+        if let Some(to_slot) = options.to_slot {
+            to_slot
+        } else {
+            rpc.get_slot().await?
+        }
+    };
+
+    let mut retries = 0;
+    'blocks: loop {
+        if retries >= 10 {
+            return Err(anyhow!(
+                "failed to get block after 10 retries, aborting..."
+            ));
+        }
+
+        for i in from..to {
+            match rpc
+                .get_block_with_config(i, blocks::build_config(&options))
+                .await
+            {
+                Ok(block) => {
+                    channel.send(Message::SvmBlock(block, Arc::clone(&job)));
+                }
+                Err(error) => {
+                    warning!(
+                      "sync: svm: blocks: {}: failed to get block with {}, reconnecting...",
+                      &job.name,
+                      error
+                    );
+                    retries += 1;
+
+                    sleep_until(Instant::now() + Duration::from_millis(250))
+                        .await;
+                    continue 'blocks;
+                }
             }
         }
+
+        break;
     }
+
+    Ok(())
 }
 
-async fn handle_transactions_task(job: Arc<Job>, channel: &Arc<Channel>) {
-    let rpc = job.connect_svm_rpc().await.unwrap();
+async fn handle_transactions_task(
+    job: Arc<Job>,
+    channel: &Arc<Channel>,
+) -> Result<(), anyhow::Error> {
+    let rpc = job.reconnect_svm_rpc().await;
 
-    let address =
-        Pubkey::from_str(job.options.mentions.as_ref().unwrap()[0].as_str())
-            .expect("Failed to parse signature");
+    let Some(mentions) = job.options.mentions.as_ref() else {
+        return Err(anyhow!("transaction task should include mentions field"));
+    };
+
+    let address = Pubkey::from_str(mentions[0].as_str())?;
 
     let mut before: Option<Signature> = None;
     let mut until: Option<Signature> = None;
 
     if let Some(before_signature) = job.options.before.as_ref() {
-        before = Some(
-            Signature::from_str(before_signature)
-                .expect("Failed to parse signature"),
-        );
+        before = Some(Signature::from_str(before_signature)?);
     }
 
     if let Some(until_signature) = job.options.until.as_ref() {
-        until = Some(
-            Signature::from_str(until_signature)
-                .expect("Failed to parse signature"),
-        );
+        until = Some(Signature::from_str(until_signature)?);
     }
 
     let mut signatures = Vec::new();
@@ -207,8 +295,7 @@ async fn handle_transactions_task(job: Arc<Job>, channel: &Arc<Channel>) {
             break 'fill;
           }
 
-          before = Signature::from_str(sigs[sigs.len() - 1].signature.as_str()).expect("Failed to parse signature").into();
-
+          before = Signature::from_str(sigs[sigs.len() - 1].signature.as_str())?.into();
           signatures.extend(sigs);
         },
         Err(_) => {
@@ -218,36 +305,61 @@ async fn handle_transactions_task(job: Arc<Job>, channel: &Arc<Channel>) {
       }
     }
 
-    for signature in signatures {
-        let signature = Signature::from_str(signature.signature.as_str())
-            .expect("Failed to parse signature");
+    let mut retries = 0;
+    'transactions: loop {
+        if retries >= 10 {
+            return Err(anyhow!(
+                "failed to get transaction after 10 retries, aborting..."
+            ));
+        }
 
-        let tx = job
-            .connect_svm_rpc()
-            .await
-            .expect("Failed retrieve rpc client")
-            .get_transaction_with_config(
-                &signature,
-                crate::sync::svm::transactions::build_config(&job.options),
-            )
-            .await;
+        for signature in &signatures {
+            let signature = Signature::from_str(signature.signature.as_str())?;
 
-        match tx {
-            Ok(tx) => {
-                let meta =
-                    tx.transaction.meta.as_ref().expect("Failed to get meta");
+            let tx = match rpc
+                .get_transaction_with_config(
+                    &signature,
+                    transactions::build_config(&job.options),
+                )
+                .await
+            {
+                Ok(tx) => tx,
+                Err(error) => {
+                    warning!(
+                        "sync: svm: tasks: {}: {}: failed to get transaction with {}, retrying",
+                        &job.name,
+                        &signature,
+                        error
+                    );
 
-                if meta.err.is_none() {
-                    channel.send(Message::SvmTransaction(tx, Arc::clone(&job)));
+                    retries += 1;
+                    sleep_until(Instant::now() + Duration::from_millis(250))
+                        .await;
+                    continue 'transactions;
+                }
+            };
+
+            retries = 0;
+
+            if let Some(meta) = tx.transaction.meta.as_ref() {
+                match &meta.err {
+                    None => {
+                        channel.send(Message::SvmTransaction(tx, job.clone()));
+                    }
+                    Some(error) => {
+                        log!(
+                            "sync: svm: tasks: {}: {}: had meta error {}, skipping",
+                            &job.name,
+                            &signature,
+                            error
+                      );
+                    }
                 }
             }
-            Err(err) => {
-                warning!(
-                    "sync: svm: logs: {}: failed to get transaction {}",
-                    &job.name,
-                    err
-                );
-            }
         }
+
+        break;
     }
+
+    Ok(())
 }

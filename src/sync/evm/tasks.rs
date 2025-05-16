@@ -8,7 +8,7 @@ use alloy::providers::Provider;
 use alloy::rpc::types::Log;
 
 use pgrx::bgworkers::BackgroundWorker;
-use pgrx::{log, warning, PgTryBuilder};
+use pgrx::{log, warning, JsonB, PgTryBuilder};
 
 use tokio::sync::{oneshot, Semaphore};
 use tokio::time::{sleep_until, Duration, Instant};
@@ -80,7 +80,7 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
             log!("sync: evm: tasks: got task {}", task);
 
             // FIXME: wait some time for commit when adding tasks
-            sleep_until(Instant::now() + Duration::from_millis(100)).await;
+            sleep_until(Instant::now() + Duration::from_millis(250)).await;
 
             let (tx, rx) = oneshot::channel::<Option<Job>>();
             channel.send(Message::Job(task, tx));
@@ -93,7 +93,7 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                 continue;
             };
 
-            let Some(job) = job else {
+            let Some(mut job) = job else {
                 warning!(
                     "sync: evm: tasks: failed to find job for task {}",
                     task
@@ -101,20 +101,40 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                 continue;
             };
 
+            if let Some(setup_handler) = job.options.setup_handler.as_ref() {
+                let (tx, rx) = oneshot::channel::<Option<JsonB>>();
+                channel.send(Message::JsonHandler(
+                    task,
+                    setup_handler.to_owned(),
+                    tx,
+                ));
+
+                match rx.await {
+                    Ok(Some(json)) => match serde_json::from_value(json.0) {
+                        // Update options
+                        Ok(options) => job.options = options,
+                        Err(error) => {
+                            warning!("sync: evm: tasks: {}: failed to parse return handler options jsonb with {}", &job.name, &error);
+                            continue;
+                        }
+                    },
+                    Err(error) => {
+                        warning!("sync: evm: tasks: {}: setup handler failed with {}", &job.name, error);
+                        continue;
+                    }
+                    _ => {
+                        warning!("sync: evm: tasks: {}: setup handler did not return options jsonb", &job.name);
+                        continue;
+                    }
+                }
+            }
+
             let Some(ws) = &job.options.ws else {
                 warning!("sync: evm: tasks: {}: no ws was provided", &job.name);
                 continue;
             };
 
-            if let Err(err) = job.connect_evm().await {
-                warning!(
-                    "sync: evm: tasks: {}: failed to create provider with {}",
-                    &job.name,
-                    err
-                );
-                continue;
-            };
-
+            let channel = channel.clone();
             let semaphore = semaphores
                 .entry(ws.into())
                 .or_insert(Arc::new(Semaphore::new(
@@ -123,7 +143,6 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                 .clone();
 
             let job = Arc::new(job);
-            let channel = channel.clone();
             tokio::spawn(async move {
                 let Ok(permit) = semaphore.acquire().await else {
                     warning!(
@@ -150,7 +169,19 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                 match task {
                     Ok(()) => {
                         log!("sync: evm: tasks: {}: task completed", &job.name);
-                        channel.send(Message::TaskSuccess(job.clone()))
+
+                        if let Some(success_handler) =
+                            &job.options.success_handler
+                        {
+                            let (tx, rx) = oneshot::channel::<bool>();
+                            channel.send(Message::Handler(
+                                job.id,
+                                success_handler.to_owned(),
+                                tx,
+                            ));
+
+                            let _ = rx.await;
+                        }
                     }
                     Err(error) => {
                         warning!(
@@ -158,7 +189,19 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                             &job.name,
                             error
                         );
-                        channel.send(Message::TaskFailure(job.clone()))
+
+                        if let Some(failure_handler) =
+                            &job.options.failure_handler
+                        {
+                            let (tx, rx) = oneshot::channel::<bool>();
+                            channel.send(Message::Handler(
+                                job.id,
+                                failure_handler.to_owned(),
+                                tx,
+                            ));
+
+                            let _ = rx.await;
+                        }
                     }
                 };
             });
@@ -213,6 +256,8 @@ async fn handle_blocks_task(
                     );
                     retries += 1;
 
+                    sleep_until(Instant::now() + Duration::from_millis(250))
+                        .await;
                     continue 'blocks;
                 }
             };

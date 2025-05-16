@@ -47,4 +47,15 @@ impl Job {
             .get_or_try_init(|| async { Ok(Arc::new(SvmRpc::new(url))) })
             .await
     }
+
+    pub async fn reconnect_svm_rpc(&self) -> SvmRpc {
+        let url = self
+            .options
+            .rpc
+            .as_ref()
+            .expect("RPC URL was not provided")
+            .clone();
+
+        SvmRpc::new(url)
+    }
 }

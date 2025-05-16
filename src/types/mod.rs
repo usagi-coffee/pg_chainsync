@@ -4,6 +4,7 @@ pub mod svm;
 use std::str;
 use std::sync::Arc;
 
+use pgrx::JsonB;
 use serde::{Deserialize, Serialize};
 
 use solana_sdk::pubkey::Pubkey;
@@ -46,9 +47,9 @@ pub enum Message {
     SvmLog(SvmLog, Arc<Job>),
     SvmTransaction(SvmTransaction, Arc<Job>),
 
-    // Tasks
-    TaskSuccess(Arc<Job>),
-    TaskFailure(Arc<Job>),
+    // Handlers
+    Handler(i64, String, oneshot::Sender<bool>),
+    JsonHandler(i64, String, oneshot::Sender<Option<JsonB>>),
 
     // Utility messages
     CheckBlock(u64, oneshot::Sender<bool>, Arc<Job>),
@@ -91,6 +92,7 @@ pub struct JobOptions {
     pub cron: Option<String>,
 
     // Handlers
+    pub setup_handler: Option<String>,
     pub success_handler: Option<String>,
     pub failure_handler: Option<String>,
 
