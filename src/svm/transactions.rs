@@ -5,10 +5,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use tokio::sync::oneshot;
-use tokio::time::{sleep, sleep_until, timeout, Duration, Instant};
-use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
-
-use bus::BusReader;
+use tokio::time::{sleep, Duration};
 
 use solana_client::rpc_client::SerializableTransaction;
 use solana_client::rpc_config::RpcTransactionConfig;
@@ -28,134 +25,9 @@ use crate::types::Job;
 use crate::channel::Channel;
 use crate::types::*;
 
-pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
-    'sync: loop {
-        let (tx, rx) = oneshot::channel::<Vec<Job>>();
-        if !channel.send(Message::Jobs(tx)) {
-            break;
-        }
-
-        if let Ok(jobs) = rx.await {
-            let mut jobs = jobs
-                .svm_jobs()
-                .transaction_jobs()
-                .into_iter()
-                .map(Arc::new)
-                .collect::<Vec<_>>();
-
-            let mut map = StreamMap::new();
-
-            for job in jobs.iter_mut() {
-                match job.connect_svm_ws().await {
-                    Ok(_) => {}
-                    Err(err) => {
-                        warning!(
-                            "sync: svm: transactions: {}: ws: {}",
-                            job.id,
-                            err
-                        );
-                        continue 'sync;
-                    }
-                }
-
-                match job.connect_svm_rpc().await {
-                    Ok(_) => {}
-                    Err(err) => {
-                        warning!(
-                            "sync: svm: transactions: {}: rpc: {}",
-                            job.id,
-                            err
-                        );
-                        continue 'sync;
-                    }
-                }
-            }
-
-            for i in 0..jobs.len() {
-                let job = &jobs[i];
-
-                match crate::svm::logs::build_stream(&job).await {
-                    Ok(stream) => {
-                        log!(
-                            "sync: svm: transactions: {} started listening",
-                            job.id
-                        );
-                        channel.send(Message::UpdateJob(
-                            job.id,
-                            JobStatus::Running,
-                        ));
-
-                        map.insert(i, StreamNotifyClose::new(stream));
-                    }
-                    Err(err) => {
-                        warning!(
-                            "sync: svm: transactions: {}: {}",
-                            job.id,
-                            err
-                        );
-                        continue 'sync;
-                    }
-                }
-            }
-
-            log!(
-                "sync: svm: transactions: started listening to {} jobs",
-                jobs.len()
-            );
-
-            let mut drain = false;
-            loop {
-                match signals.try_recv() {
-                    Ok(signal) => {
-                        if signal == Signal::RestartTransactions {
-                            drain = true;
-                        }
-                    }
-                    Err(..) => {}
-                }
-
-                if map.is_empty() {
-                    sleep_until(Instant::now() + Duration::from_millis(100))
-                        .await;
-
-                    if drain {
-                        continue 'sync;
-                    }
-                    continue;
-                }
-
-                match timeout(Duration::from_secs(1), map.next()).await {
-                    Ok(Some(tick)) => {
-                        let (i, log) = tick;
-                        let job = &jobs[i];
-
-                        if log.is_none() {
-                            warning!(
-                                "sync: svm: transactions: stream {} has ended, restarting providers",
-                                job.id
-                            );
-                            continue 'sync;
-                        }
-
-                        // SAFETY: unwrap is safe because we checked for None
-                        handle_log(job, log.unwrap(), &channel).await;
-                    }
-                    // If it took more than 1 second the stream is probably drained so we can "almost"
-                    // safely restart the providers
-                    _ => {
-                        if drain {
-                            continue 'sync;
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 pub async fn handle_log(
     job: &Arc<Job>,
-    log: Response<RpcLogsResponse>,
+    log: &Response<RpcLogsResponse>,
     channel: &Channel,
 ) {
     let number = log.context.slot;

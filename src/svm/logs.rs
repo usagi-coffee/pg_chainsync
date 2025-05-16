@@ -17,6 +17,7 @@ use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 
 use bus::BusReader;
 
+use crate::svm::transactions;
 use crate::types::Job;
 
 use crate::channel::Channel;
@@ -198,8 +199,16 @@ pub async fn handle_svm_log(
         }
     }
 
-    if !channel.send(Message::SvmLog(log, Arc::clone(job))) {
-        warning!("sync: svm: logs: {}: failed to send", &job.name)
+    if job.options.transaction_handler.is_some()
+        || job.options.instruction_handler.is_some()
+    {
+        transactions::handle_log(job, &log, channel).await;
+    }
+
+    if let Some(_) = &job.options.log_handler {
+        if !channel.send(Message::SvmLog(log, Arc::clone(job))) {
+            warning!("sync: svm: logs: {}: failed to send", &job.name)
+        }
     }
 }
 

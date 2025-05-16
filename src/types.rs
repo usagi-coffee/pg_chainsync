@@ -217,7 +217,7 @@ impl JobsUtils for Vec<Job> {
     fn log_jobs(&self) -> Vec<Job> {
         self.iter()
             .filter(|job| {
-                job.options.is_log_job()
+                (job.options.is_log_job() || job.options.is_transaction_job())
                     && matches!(job.options.oneshot, None | Some(false))
                     && matches!(job.options.cron, None)
                     && matches!(job.options.preload, None | Some(false))

@@ -82,9 +82,9 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
 
         let svm_blocks_rx = signal_bus.add_rx();
         let svm_logs_rx = signal_bus.add_rx();
-        let svm_transactions_rx = signal_bus.add_rx();
 
-        let handler = tokio::spawn(handle_message(MessageStream::new(receive_message)));
+        let handler =
+            tokio::spawn(handle_message(MessageStream::new(receive_message)));
 
         tokio::select! {
              _ = worker::handle_signals(Arc::clone(&channel), signal_bus) => {
@@ -102,9 +102,6 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
              _ = svm::logs::listen(Arc::clone(&channel), svm_logs_rx) => {
                  log!("sync: stopped listening to transactions... exiting");
              },
-             _ = svm::transactions::listen(Arc::clone(&channel), svm_transactions_rx) => {
-                 log!("sync: stopped listening to transactions... exiting");
-             },
              _ = evm::tasks::handle_tasks(Arc::clone(&channel)) => {
                  log!("sync: tasks: stopped tasks... exiting");
              },
@@ -114,9 +111,9 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
         }
 
         if channel.send(Message::Shutdown) {
-          if let Err(err) = handler.await {
-              log!("sync: messages: exited with error: {}", err);
-          }
+            if let Err(err) = handler.await {
+                log!("sync: messages: exited with error: {}", err);
+            }
         }
     });
 
