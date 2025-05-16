@@ -43,8 +43,19 @@ CREATE INDEX ev_idx_source ON events (ev_contract, ev_source, ev_block);
 CREATE FUNCTION custom_block_handler(block chainsync.EvmBlock, job JSONB) RETURNS VOID
 AS $$
   INSERT INTO blocks (bl_chain, bl_number, bl_timestamp)
-  VALUES (job->>'chain', block.number, TO_TIMESTAMP(block.timestamp) AT TIME ZONE 'UTC');
+  VALUES (job->>'chain', block.number, TO_TIMESTAMP(block.timestamp) AT TIME ZONE 'UTC')
+  ON CONFLICT DO NOTHING
 $$ LANGUAGE SQL;
+
+SELECT chainsync.register(
+  'gather-blocks',
+  '{
+    "evm": true,
+    "ws": "ws://pg-chainsync-foundry:8545",
+    "block_handler": "custom_block_handler",
+    "chain": 31337
+  }'::JSONB
+);
 
 -- Function to insert event logs
 CREATE FUNCTION transfer_handler(log chainsync.EvmLog, job JSONB) RETURNS VOID
