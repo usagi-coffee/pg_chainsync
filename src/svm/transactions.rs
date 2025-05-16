@@ -81,8 +81,8 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                             job.id
                         );
                         channel.send(Message::UpdateJob(
+                            job.id,
                             JobStatus::Running,
-                            Arc::clone(job),
                         ));
 
                         map.insert(i, StreamNotifyClose::new(stream));

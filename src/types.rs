@@ -35,7 +35,7 @@ pub enum JobStatus {
 pub enum Message {
     Job(i64, oneshot::Sender<Option<Job>>),
     Jobs(oneshot::Sender<Vec<Job>>),
-    UpdateJob(JobStatus, Arc<Job>),
+    UpdateJob(i64, JobStatus),
 
     EvmBlock(EvmBlock, Arc<Job>),
     EvmLog(EvmLog, Arc<Job>),

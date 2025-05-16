@@ -11,8 +11,8 @@ use solana_transaction_status_client_types::{
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use tokio::time::{sleep_until, timeout, Duration, Instant};
-use tokio_stream::{Stream, StreamExt, StreamMap, StreamNotifyClose};
+use tokio::time::Duration;
+use tokio_stream::{Stream, StreamExt, StreamNotifyClose};
 
 use solana_client::rpc_response::{Response, RpcBlockUpdate};
 use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
@@ -25,111 +25,121 @@ use crate::channel::Channel;
 use crate::types::*;
 
 pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
-    'sync: loop {
+    'blocks: loop {
+        let mut handles = vec![];
+
         let (tx, rx) = oneshot::channel::<Vec<Job>>();
-        if !channel.send(Message::Jobs(tx)) {
-            break;
+        channel.send(Message::Jobs(tx));
+
+        let Ok(jobs) = rx.await else {
+            warning!("sync: svm: blocks: failed to get jobs");
+            return;
+        };
+
+        let jobs = jobs
+            .svm_jobs()
+            .block_jobs()
+            .into_iter()
+            .map(Arc::new)
+            .collect::<Vec<_>>();
+
+        log!("sync: svm: blocks: found {} jobs", jobs.len());
+
+        for job in jobs {
+            let channel = channel.clone();
+            let handle = tokio::spawn(async move {
+                let mut retries = 0;
+                'job: loop {
+                    if retries >= 10 {
+                        warning!(
+                        "sync: svm: blocks: {}: too many retries, stopping job",
+                        &job.name
+                    );
+                        return;
+                    }
+
+                    if let Err(error) = job.connect_svm_ws().await {
+                        warning!(
+                            "sync: svm: blocks: {}: failed to connect with provider with {}",
+                            &job.name,
+                            error
+                        );
+
+                        retries += 1;
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        continue;
+                    };
+
+                    if let Err(error) = job.connect_svm_rpc().await {
+                        warning!(
+                            "sync: svm: blocks: {}: failed to connect with provider with {}",
+                            &job.name,
+                            error
+                        );
+
+                        retries += 1;
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        continue;
+                    };
+
+                    let mut stream = match build_stream(&job).await {
+                        Ok(stream) => StreamNotifyClose::new(stream),
+                        Err(error) => {
+                            warning!(
+                                "sync: svm: blocks: {}: failed to build stream with {}",
+                                &job.name,
+                                error
+                            );
+
+                            retries += 1;
+                            tokio::time::sleep(Duration::from_millis(200))
+                                .await;
+                            continue;
+                        }
+                    };
+
+                    channel
+                        .send(Message::UpdateJob(job.id, JobStatus::Running));
+
+                    log!("sync: svm: blocks: {}: started listening", &job.name);
+                    loop {
+                        match stream.next().await {
+                            Some(Some(block)) => {
+                                handle_block(&job, block, &channel).await
+                            }
+                            _ => {
+                                warning!(
+                                    "sync: svm: blocks: {}: stream has ended, restarting provider",
+                                    &job.name
+                                );
+
+                                continue 'job;
+                            }
+                        }
+                    }
+                }
+            });
+
+            handles.push(handle);
         }
 
-        if let Ok(jobs) = rx.await {
-            let mut jobs = jobs
-                .svm_jobs()
-                .block_jobs()
-                .into_iter()
-                .map(Arc::new)
-                .collect::<Vec<_>>();
-
-            let mut map = StreamMap::new();
-
-            for job in jobs.iter_mut() {
-                match job.connect_svm_ws().await {
-                    Ok(_) => {}
-                    Err(err) => {
-                        warning!("sync: svm: blocks: {}: ws: {}", job.id, err);
-                        continue 'sync;
-                    }
-                }
-
-                match job.connect_svm_rpc().await {
-                    Ok(_) => {}
-                    Err(err) => {
-                        warning!("sync: svm: blocks: {}: rpc: {}", job.id, err);
-                        continue 'sync;
-                    }
-                }
-            }
-
-            for i in 0..jobs.len() {
-                let job = &jobs[i];
-
-                match build_stream(&job).await {
-                    Ok(stream) => {
-                        log!("sync: svm: blocks: {} started listening", job.id);
-                        channel.send(Message::UpdateJob(
-                            JobStatus::Running,
-                            Arc::clone(job),
-                        ));
-
-                        map.insert(i, StreamNotifyClose::new(stream));
-                    }
-                    Err(err) => {
-                        warning!("sync: svm: blocks: {}: {}", job.id, err);
-                        continue 'sync;
-                    }
-                }
-            }
-
-            log!(
-                "sync: svm: blocks: started listening to {} jobs",
-                jobs.len()
-            );
-
-            let mut drain = false;
-            loop {
-                match signals.try_recv() {
-                    Ok(signal) => {
-                        if signal == Signal::RestartBlocks {
-                            drain = true;
-                        }
-                    }
-                    Err(..) => {}
-                }
-
-                if map.is_empty() {
-                    sleep_until(Instant::now() + Duration::from_millis(100))
-                        .await;
-
-                    if drain {
-                        continue 'sync;
-                    }
-                    continue;
-                }
-
-                match timeout(Duration::from_secs(1), map.next()).await {
-                    Ok(Some(tick)) => {
-                        let (i, block) = tick;
-                        let job = &jobs[i];
-
-                        if block.is_none() {
-                            warning!(
-                                "sync: svm: blocks: stream {} has ended, restarting providers",
-                                job.id
-                            );
-                            continue 'sync;
+        loop {
+            match signals.try_recv() {
+                Ok(signal) => match signal {
+                    Signal::RestartBlocks => {
+                        log!("sync: svm: blocks: restarting jobs");
+                        for handle in handles {
+                            handle.abort();
                         }
 
-                        // SAFETY: unwrap is safe because we checked for None
-                        handle_block(job, block.unwrap(), &channel).await;
+                        continue 'blocks;
                     }
-                    // If it took more than 1 second the stream is probably drained so we can "almost"
-                    // safely restart the providers
-                    _ => {
-                        if drain {
-                            continue 'sync;
-                        }
-                    }
-                }
+                    _ => {}
+                },
+                Err(_) => {}
             }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 }
@@ -194,8 +204,9 @@ pub fn build_subscribe_config(options: &JobOptions) -> RpcBlockSubscribeConfig {
 
 pub async fn build_stream<'a>(
     job: &'a Job,
-) -> anyhow::Result<Pin<Box<dyn Stream<Item = Response<RpcBlockUpdate>> + 'a>>>
-{
+) -> anyhow::Result<
+    Pin<Box<dyn Stream<Item = Response<RpcBlockUpdate>> + 'a + Send>>,
+> {
     let filter = build_filter(&job.options);
     let provider = job.connect_svm_ws().await.context("Invalid provider")?;
     let sub = provider

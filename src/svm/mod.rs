@@ -35,6 +35,18 @@ impl Job {
             .await
     }
 
+    pub async fn reconnect_svm_ws(
+        &self,
+    ) -> anyhow::Result<SvmPubSub, SvmPubSubError> {
+        let url = self
+            .options
+            .ws
+            .as_ref()
+            .expect("Websocket URL was not provided");
+
+        SvmPubSub::new(&url).await
+    }
+
     pub async fn connect_svm_rpc(&self) -> anyhow::Result<&Arc<SvmRpc>> {
         let url = self
             .options
