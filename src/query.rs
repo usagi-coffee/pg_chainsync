@@ -5,9 +5,9 @@ use anyhow::anyhow;
 
 use tokio::sync::OnceCell;
 
+use crate::evm::*;
 use crate::svm::transactions::{SolanaInnerInstruction, SolanaInstruction};
-use crate::types::evm::*;
-use crate::types::svm::*;
+use crate::svm::*;
 use crate::types::*;
 
 use alloy::core::hex;

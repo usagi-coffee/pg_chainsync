@@ -1,6 +1,3 @@
-pub mod evm;
-pub mod svm;
-
 use std::str;
 use std::sync::Arc;
 
@@ -11,8 +8,8 @@ use solana_sdk::pubkey::Pubkey;
 use tokio::sync::oneshot;
 use tokio::sync::OnceCell;
 
-use crate::types::evm::*;
-use crate::types::svm::*;
+use crate::evm::*;
+use crate::svm::*;
 
 pub const JOB_COMPOSITE_TYPE: &str = "chainsync.Job";
 
