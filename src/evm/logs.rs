@@ -9,8 +9,8 @@ use alloy::pubsub::SubscriptionStream;
 use alloy::rpc::types::{BlockNumberOrTag, Filter};
 
 use tokio::sync::oneshot;
-use tokio::time::{sleep, sleep_until, timeout, Duration, Instant};
-use tokio_stream::{StreamExt, StreamMap, StreamNotifyClose};
+use tokio::time::{sleep, Duration};
+use tokio_stream::{StreamExt, StreamNotifyClose};
 
 use bus::BusReader;
 
@@ -18,101 +18,110 @@ use crate::channel::Channel;
 use crate::types::*;
 
 pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
-    'sync: loop {
+    'logs: loop {
+        let mut handles = vec![];
+
         let (tx, rx) = oneshot::channel::<Vec<Job>>();
-        if !channel.send(Message::Jobs(tx)) {
-            break;
-        }
+        channel.send(Message::Jobs(tx));
 
-        if let Ok(jobs) = rx.await {
-            let mut jobs = jobs
-                .evm_jobs()
-                .log_jobs()
-                .into_iter()
-                .map(Arc::new)
-                .collect::<Vec<_>>();
+        let Ok(jobs) = rx.await else {
+            warning!("sync: evm: logs: failed to get jobs");
+            return;
+        };
 
-            let mut map = StreamMap::new();
+        let jobs = jobs
+            .evm_jobs()
+            .log_jobs()
+            .into_iter()
+            .map(Arc::new)
+            .collect::<Vec<_>>();
 
-            for job in jobs.iter_mut() {
-                if let Err(error) = job.connect_evm().await {
-                    warning!("sync: evm: logs: {}: listener failed to connect with {}", &job.name, error);
-                    continue 'sync;
-                }
-            }
+        log!("sync: evm: logs: found {} jobs", jobs.len());
 
-            for i in 0..jobs.len() {
-                let job = &jobs[i];
-
-                match build_stream(&job).await {
-                    Ok(stream) => {
-                        map.insert(i, StreamNotifyClose::new(stream));
-                        channel.send(Message::UpdateJob(
-                            job.id,
-                            JobStatus::Running,
-                        ));
-
-                        log!(
-                            "sync: evm: log: {}: started listening",
+        for job in jobs {
+            let channel = channel.clone();
+            let handle = tokio::spawn(async move {
+                let mut retries = 0;
+                'job: loop {
+                    if retries >= 10 {
+                        warning!(
+                            "sync: evm: logs: {}: too many retries, stopping job",
                             &job.name
                         );
+
+                        return;
                     }
-                    Err(error) => {
+
+                    if let Err(error) = job.connect_evm().await {
                         warning!(
-                            "sync: evm: log: {}: failed to build stream with {}",
-                            &job.name,
-                            error
-                        );
-                        continue 'sync;
+                          "sync: evm: logs: {}: failed to connect with provider with {}",
+                          &job.name,
+                          error
+                      );
+
+                        retries += 1;
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        continue;
+                    };
+
+                    let mut stream = match build_stream(&job).await {
+                        Ok(stream) => StreamNotifyClose::new(stream),
+                        Err(error) => {
+                            warning!(
+                                "sync: evm: logs: {}: failed to build stream with {}",
+                                &job.name,
+                                error
+                            );
+
+                            retries += 1;
+                            tokio::time::sleep(Duration::from_millis(200))
+                                .await;
+                            continue;
+                        }
+                    };
+
+                    channel
+                        .send(Message::UpdateJob(job.id, JobStatus::Running));
+
+                    log!("sync: evm: logs: {}: started listening", &job.name);
+                    loop {
+                        match stream.next().await {
+                            Some(Some(log)) => {
+                                handle_evm_log(&job, log, &channel).await
+                            }
+                            _ => {
+                                warning!(
+                                    "sync: evm: logs: {}: stream has ended, restarting provider",
+                                    &job.name
+                                );
+
+                                continue 'job;
+                            }
+                        }
                     }
                 }
+            });
+
+            handles.push(handle);
+        }
+
+        loop {
+            match signals.try_recv() {
+                Ok(signal) => match signal {
+                    Signal::RestartLogs => {
+                        log!("sync: evm: logs: restarting jobs");
+                        for handle in handles {
+                            handle.abort();
+                        }
+
+                        continue 'logs;
+                    }
+                    _ => {}
+                },
+                Err(_) => {}
             }
 
-            log!("sync: evm: log: started listening to {} jobs", jobs.len());
-
-            let mut drain = false;
-            loop {
-                match signals.try_recv() {
-                    Ok(signal) => {
-                        if signal == Signal::RestartLogs {
-                            drain = true;
-                        }
-                    }
-                    Err(..) => {}
-                }
-
-                if map.is_empty() {
-                    sleep_until(Instant::now() + Duration::from_millis(100))
-                        .await;
-
-                    if drain {
-                        continue 'sync;
-                    }
-                    continue;
-                }
-
-                match timeout(Duration::from_secs(1), map.next()).await {
-                    Ok(Some(tick)) => {
-                        let (i, log) = tick;
-                        let job = &jobs[i];
-
-                        if log.is_none() {
-                            warning!("sync: evm: log: {}: stream has ended, restarting providers", &job.name);
-                            continue 'sync;
-                        }
-
-                        // SAFETY: unwrap is safe because we checked for None
-                        handle_evm_log(&job, log.unwrap(), &channel).await;
-                    }
-                    // If it took more than 1 second the stream is probably drained so we can "almost"
-                    // safely restart the providers
-                    _ => {
-                        if drain {
-                            continue 'sync;
-                        }
-                    }
-                }
-            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 }

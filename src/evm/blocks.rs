@@ -4,7 +4,7 @@ use anyhow::Context;
 
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use tokio::time::{sleep_until, Duration, Instant};
+use tokio::time::Duration;
 use tokio_stream::{StreamExt, StreamNotifyClose};
 
 use bus::BusReader;
@@ -60,10 +60,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         );
 
                         retries += 1;
-                        sleep_until(
-                            Instant::now() + Duration::from_millis(250),
-                        )
-                        .await;
+                        tokio::time::sleep(Duration::from_millis(200)).await;
                         continue;
                     };
 
@@ -71,16 +68,14 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         Ok(stream) => StreamNotifyClose::new(stream),
                         Err(error) => {
                             warning!(
-                            "sync: evm: blocks: {}: failed to build stream with {}",
-                            &job.name,
-                            error
-                        );
+                                "sync: evm: blocks: {}: failed to build stream with {}",
+                                &job.name,
+                                error
+                            );
 
                             retries += 1;
-                            sleep_until(
-                                Instant::now() + Duration::from_millis(250),
-                            )
-                            .await;
+                            tokio::time::sleep(Duration::from_millis(200))
+                                .await;
                             continue;
                         }
                     };
