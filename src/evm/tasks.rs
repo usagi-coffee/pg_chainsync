@@ -19,7 +19,7 @@ use cron::Schedule;
 
 use crate::anyhow_pg_try;
 use crate::channel::Channel;
-use crate::sync::evm::logs;
+use crate::evm::logs;
 use crate::types::*;
 use crate::worker::{EVM_BLOCKTICK_RESET, EVM_TASKS, EVM_WS_PERMITS};
 

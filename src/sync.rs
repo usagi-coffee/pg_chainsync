@@ -15,13 +15,12 @@ use bus::Bus;
 
 use crate::anyhow_pg_try;
 use crate::channel::*;
+use crate::evm;
 use crate::query::{PgHandler, PgResult};
+use crate::svm;
 use crate::types::*;
 use crate::worker;
 use crate::worker::*;
-
-pub mod evm;
-pub mod svm;
 
 const DATABASE: &str = "postgres";
 

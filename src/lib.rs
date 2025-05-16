@@ -4,14 +4,17 @@ use pgrx::{
     PgSharedMemoryInitialization,
 };
 
-mod sync;
-
 #[macro_use]
 pub mod worker;
 
 pub mod channel;
 pub mod query;
 pub mod types;
+
+pub mod evm;
+pub mod svm;
+
+mod sync;
 
 ::pgrx::pg_module_magic!();
 

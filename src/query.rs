@@ -5,9 +5,7 @@ use anyhow::anyhow;
 
 use tokio::sync::OnceCell;
 
-use crate::sync::svm::transactions::{
-    SolanaInnerInstruction, SolanaInstruction,
-};
+use crate::svm::transactions::{SolanaInnerInstruction, SolanaInstruction};
 use crate::types::evm::*;
 use crate::types::svm::*;
 use crate::types::*;

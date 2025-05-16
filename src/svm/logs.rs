@@ -164,9 +164,7 @@ pub async fn handle_log(
                         .unwrap()
                         .get_block_with_config(
                             number,
-                            crate::sync::svm::blocks::build_config(
-                                &job.options,
-                            ),
+                            crate::svm::blocks::build_config(&job.options),
                         )
                         .await
                     {

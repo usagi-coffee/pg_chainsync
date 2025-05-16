@@ -74,7 +74,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
             for i in 0..jobs.len() {
                 let job = &jobs[i];
 
-                match crate::sync::svm::logs::build_stream(&job).await {
+                match crate::svm::logs::build_stream(&job).await {
                     Ok(stream) => {
                         log!(
                             "sync: svm: transactions: {} started listening",
@@ -188,9 +188,7 @@ pub async fn handle_log(
                         .expect("Failed to retrieve rpc client")
                         .get_block_with_config(
                             number,
-                            crate::sync::svm::blocks::build_config(
-                                &job.options,
-                            ),
+                            crate::svm::blocks::build_config(&job.options),
                         )
                         .await
                     {
