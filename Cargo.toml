@@ -22,7 +22,6 @@ tokio-stream = "0.1"
 serde_json = { version = "1.0" }
 heapless = "0.8"
 serde = { version = "1", features = ["rc"] }
-tokio-cron = "0.1"
 cron = "0.14"
 anyhow = "1"
 bus = "2.4"

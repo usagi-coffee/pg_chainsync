@@ -3,8 +3,7 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 
-use pgrx::bgworkers::BackgroundWorker;
-use pgrx::{log, warning, JsonB, PgTryBuilder};
+use pgrx::{log, warning, JsonB};
 
 use solana_sdk::commitment_config::CommitmentLevel;
 use solana_sdk::pubkey::Pubkey;
@@ -12,65 +11,12 @@ use solana_sdk::signature::Signature;
 
 use tokio::sync::oneshot;
 use tokio::time::{sleep_until, Duration, Instant};
-use tokio_cron::{Job as CronJob, Scheduler};
-
-use chrono::Utc;
-use cron::Schedule;
 
 use super::blocks;
 use super::transactions;
-use crate::anyhow_pg_try;
 use crate::channel::Channel;
 use crate::types::*;
 use crate::worker::SVM_TASKS;
-
-pub async fn setup(scheduler: &mut Scheduler) {
-    let Ok(jobs) = anyhow_pg_try!(|| Job::query_all()) else {
-        warning!("sync: svm: tasks: failed to setup tasks");
-        return;
-    };
-
-    let tasks = jobs.svm_jobs().tasks().into_iter();
-    log!("sync: svm: tasks: {} tasks found", tasks.len());
-
-    for task in tasks {
-        let id = task.id;
-        // Enqueue preloaded tasks
-        if matches!(task.options.preload, Some(true)) {
-            if let Ok(_) = SVM_TASKS.exclusive().push(task.id) {
-                log!("sync: svm: svm: tasks: enqueued {}", task.id);
-            } else {
-                warning!("sync: svm: tasks: failed to enqueue {}", task.id);
-            }
-        }
-
-        // Cron
-        if let Some(cron) = &task.options.cron {
-            let Ok(schedule) = Schedule::from_str(&cron) else {
-                warning!(
-                    "sync: svm: tasks: task {} has incorrect cron expression {}",
-                    task.id,
-                    cron
-                );
-
-                continue;
-            };
-
-            log!(
-                "sync: tasks: {}: scheduling {}, next at {}",
-                id,
-                cron,
-                schedule.upcoming(Utc).next().unwrap()
-            );
-
-            scheduler.add(CronJob::new_sync(cron, move || {
-                if SVM_TASKS.exclusive().push(id).is_err() {
-                    warning!("sync: svm: tasks: failed to enqueue {}", id);
-                }
-            }));
-        }
-    }
-}
 
 pub async fn handle_tasks(channel: Arc<Channel>) {
     loop {
@@ -190,6 +136,10 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                     }
                 }
             };
+
+            if let Some(upcoming) = job.options.next_cron() {
+                log!("sync: svm: tasks: {}: next at {}", &job.name, upcoming);
+            }
         }
 
         sleep_until(Instant::now() + Duration::from_millis(250)).await;

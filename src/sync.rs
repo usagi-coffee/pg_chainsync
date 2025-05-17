@@ -1,15 +1,19 @@
+use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use pgrx::prelude::*;
-
 use pgrx::bgworkers::*;
 use pgrx::log;
+use pgrx::prelude::*;
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
 use tokio::time::Duration;
-use tokio_cron::Scheduler;
 use tokio_stream::StreamExt;
+
+use chrono::Utc;
+use cron::Schedule;
 
 use bus::Bus;
 
@@ -78,19 +82,17 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
     let channel = Arc::new(Channel::new(send_message));
 
     runtime.block_on(async {
-        let mut scheduler = Scheduler::utc();
-        evm::tasks::setup(&mut scheduler).await;
-        svm::tasks::setup(&mut scheduler).await;
-
         let evm_blocks_rx = signal_bus.add_rx();
         let evm_logs_rx = signal_bus.add_rx();
 
         let svm_blocks_rx = signal_bus.add_rx();
         let svm_logs_rx = signal_bus.add_rx();
 
+        let scheduler = tokio::spawn(schedule_tasks(Arc::clone(&channel)));
         let handler =
             tokio::spawn(handle_message(MessageStream::new(receive_message)));
 
+        preload_tasks(jobs.tasks());
         tokio::select! {
              _ = worker::handle_signals(Arc::clone(&channel), signal_bus) => {
                  log!("sync: received exit signal... exiting");
@@ -115,6 +117,7 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
              },
         }
 
+        scheduler.abort();
         if channel.send(Message::Shutdown) {
             if let Err(err) = handler.await {
                 log!("sync: messages: exited with error: {}", err);
@@ -133,6 +136,84 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
 
     *WORKER_STATUS.exclusive() = WorkerStatus::STOPPED;
     log!("sync: worker has exited");
+}
+
+pub fn preload_tasks(tasks: Vec<Job>) {
+    for task in tasks {
+        if matches!(task.options.preload, Some(true)) {
+            if EVM_TASKS.exclusive().push(task.id).is_err() {
+                warning!("sync: tasks: {}: failed to enqueue", &task.name);
+            }
+        }
+    }
+}
+
+pub async fn schedule_tasks(channel: Arc<Channel>) {
+    let mut handles: HashMap<i64, JoinHandle<()>> = HashMap::new();
+
+    loop {
+        let (tx, rx) = oneshot::channel::<Vec<Job>>();
+        channel.send(Message::Jobs(tx));
+
+        let Ok(jobs) = rx.await else {
+            warning!("sync: tasks: failed to get jobs, retrying...");
+            continue;
+        };
+
+        let tasks = jobs.tasks();
+        handles.retain(|id, handle| {
+            match tasks.iter().find(|job| &job.id == id) {
+                Some(_) => true,
+                None => {
+                    handle.abort();
+                    log!("sync: tasks: {}: task was removed", id);
+                    false
+                }
+            }
+        });
+
+        for task in tasks {
+            if let Some(cron) = &task.options.cron {
+                let Ok(schedule) = Schedule::from_str(&cron) else {
+                    warning!(
+                        "sync: tasks: {}: has incorrect cron expression {}",
+                        task.name,
+                        &cron
+                    );
+
+                    continue;
+                };
+
+                // Register cron task
+                handles.entry(task.id).or_insert_with(|| {
+                    log!(
+                        "sync: tasks: {}: scheduled with {}",
+                        &task.name,
+                        cron
+                    );
+
+                    tokio::spawn(async move {
+                        loop {
+                            let upcoming =
+                                schedule.upcoming(Utc).next().unwrap();
+                            let duration = upcoming - Utc::now();
+
+                            tokio::time::sleep(duration.to_std().unwrap())
+                                .await;
+
+                            if matches!(task.options.evm, Some(true)) {
+                                EVM_TASKS.exclusive().push(task.id).unwrap();
+                            } else if matches!(task.options.svm, Some(true)) {
+                                SVM_TASKS.exclusive().push(task.id).unwrap();
+                            }
+                        }
+                    })
+                });
+            }
+        }
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
 }
 
 async fn handle_message(mut stream: MessageStream) {

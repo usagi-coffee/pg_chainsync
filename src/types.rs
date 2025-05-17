@@ -1,12 +1,17 @@
 use std::str;
+use std::str::FromStr;
 use std::sync::Arc;
 
+use chrono::DateTime;
 use pgrx::JsonB;
 use serde::{Deserialize, Serialize};
 
 use solana_sdk::pubkey::Pubkey;
 use tokio::sync::oneshot;
 use tokio::sync::OnceCell;
+
+use chrono::Utc;
+use cron::Schedule;
 
 use crate::evm::*;
 use crate::svm::*;
@@ -148,6 +153,17 @@ impl JobOptions {
         matches!(self.transaction_handler, Some(_))
             || matches!(self.instruction_handler, Some(_))
     }
+
+    pub fn next_cron(&self) -> Option<DateTime<Utc>> {
+        if let Some(cron) = &self.cron {
+            let schedule = Schedule::from_str(cron).ok()?;
+            let now = Utc::now();
+            let mut iter = schedule.after(&now);
+            iter.next()
+        } else {
+            None
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -257,7 +273,6 @@ impl JobsUtils for Vec<Job> {
 }
 
 use serde::{Deserializer, Serializer};
-use std::str::FromStr;
 
 mod custom_pubkey {
     use super::*;

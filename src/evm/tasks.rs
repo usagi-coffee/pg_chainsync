@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -7,68 +6,15 @@ use anyhow::anyhow;
 use alloy::providers::Provider;
 use alloy::rpc::types::Log;
 
-use pgrx::bgworkers::BackgroundWorker;
-use pgrx::{log, warning, JsonB, PgTryBuilder};
+use pgrx::{log, warning, JsonB};
 
 use tokio::sync::{oneshot, Semaphore};
 use tokio::time::{sleep_until, Duration, Instant};
-use tokio_cron::{Job as CronJob, Scheduler};
 
-use chrono::Utc;
-use cron::Schedule;
-
-use crate::anyhow_pg_try;
 use crate::channel::Channel;
 use crate::evm::logs;
 use crate::types::*;
 use crate::worker::{EVM_BLOCKTICK_RESET, EVM_TASKS, EVM_WS_PERMITS};
-
-pub async fn setup(scheduler: &mut Scheduler) {
-    let Ok(jobs) = anyhow_pg_try!(|| Job::query_all()) else {
-        warning!("sync: evm: tasks: failed to setup tasks");
-        return;
-    };
-
-    let tasks = jobs.evm_jobs().tasks().into_iter();
-    log!("sync: evm: tasks: {} tasks found", tasks.len());
-
-    for task in tasks {
-        let id = task.id;
-
-        // Enqueue preloaded tasks
-        if matches!(task.options.preload, Some(true)) {
-            if EVM_TASKS.exclusive().push(task.id).is_err() {
-                warning!("sync: evm: tasks: {}: failed to enqueue", &task.name);
-            }
-        }
-
-        // Cron tasks
-        if let Some(cron) = &task.options.cron {
-            let Ok(schedule) = Schedule::from_str(&cron) else {
-                warning!(
-                    "sync: evm: tasks: {}: has incorrect cron expression {}",
-                    task.name,
-                    &cron
-                );
-
-                continue;
-            };
-
-            log!(
-                "sync: evm: tasks: {}: scheduling {}, next at {}",
-                &task.name,
-                &cron,
-                schedule.upcoming(Utc).next().unwrap()
-            );
-
-            scheduler.add(CronJob::new_sync(cron, move || {
-                if EVM_TASKS.exclusive().push(id).is_err() {
-                    warning!("sync: evm: tasks: failed to enqueue {}", id);
-                }
-            }));
-        }
-    }
-}
 
 pub async fn handle_tasks(channel: Arc<Channel>) {
     let mut semaphores: HashMap<String, Arc<Semaphore>> = HashMap::new();
@@ -204,6 +150,14 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                         }
                     }
                 };
+
+                if let Some(upcoming) = job.options.next_cron() {
+                    log!(
+                        "sync: evm: tasks: {}: next at {}",
+                        &job.name,
+                        upcoming
+                    );
+                }
             });
         }
 
