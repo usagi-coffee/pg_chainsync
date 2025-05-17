@@ -179,8 +179,6 @@ SELECT chainsync.register(
 
 ## Installation
 
-> **_IMPORTANT_**: the extension runs on `postgres` database by default, if you are using different database name please modify the `chainsync.database` string in your postgresql.conf file.
-
 ```bash
 # Install pgrx
 cargo install --locked cargo-pgrx
@@ -188,26 +186,24 @@ cargo install --locked cargo-pgrx
 # Build the extension
 cargo build --release
 
-# Packaging process should create pg_chainsync-pg15 under target/release
+# Packaging process should create pg_chainsync-pg.. under target/release
 cargo pgrx package
 
-# NOTICE: your built extension and database paths may be different due to how pg_config works on the machine that builds the extension
+# NOTICE: your paths may be different because of pg_config... adjust them accordingly to your host/target machine
 cp target/release/pg_chainsync-.../.../pg_chainsync.so /usr/lib/postgresql/
 cp target/release/pg_chainsync-.../.../pg_chainsync--....sql /usr/share/postgresql/extension/
 cp target/release/pg_chainsync-.../.../pg_chainsync.control /usr/share/postgresql/extension/
 ```
 
-This should be enough to be able to use `CREATE EXTENSION pg_chainsync` but we also need to preload our library because this extension uses background worker so it needs to be run along with the database.
-
-To preload the library you need to modify `postgresql.conf` and alter `shared_preload_libraries` like that:
+This should be enough to be able to use `CREATE EXTENSION pg_chainsync` but we also need to preload our extension because it uses background worker, to preload the extension you need to modify the `postgresql.conf` file and alter `shared_preload_libraries`
 
 ```
 shared_preload_libraries = 'pg_chainsync.so' # (change requires restart)
 ```
 
-After altering the config restart your database and you can check postgres logs to check if it worked!
+After adjusting the config, restart your database and you can check postgres logs to check if it worked!
 
-> Please refer to pgrx documentation for full details on how to install background worker extension if it does not work for you
+> Please refer to the pgrx documentation for full details on how to install background worker extension if it does not work for you
 
 ## Examples
 
