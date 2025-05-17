@@ -7,3 +7,4 @@ Cargo.lock
 install.sh
 *.install.sh
 dev/dev.sql
+examples/test.sql
