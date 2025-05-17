@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "description": "> Proof of Concept - expect bugs and breaking changes.",
   "scripts": {
-    "dev": "sh dev.sh",
+    "demo": "sh dev.sh examples/demo.sql",
     "psql": "psql -p 5432 -U postgres -h 0.0.0.0"
   },
   "repository": {

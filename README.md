@@ -209,6 +209,26 @@ After altering the config restart your database and you can check postgres logs 
 
 > Please refer to pgrx documentation for full details on how to install background worker extension if it does not work for you
 
+## Examples
+
+You can check out how the extension works in action with `podman compose` (podman) or `docker compose` (docker), you can run the examples using the `dev.sh` script e.g `./dev.sh examples/demo.sql`.
+
+```bash
+bun run demo # Runs examples/demo.sql
+```
+
+Currently the extension is built on the host machine so keep in mind your paths may vary depending on your `pg_config`, make sure the extension gets built into the correct path, if it's different you need to adjust the volumes in `docker-compose.yml` file, here is how you need to adjust them.
+
+```yaml
+- ./target/release/pg_chainsync-pg17/usr/lib64/pgsql/pg_chainsync.so:/usr/lib/postgresql/17/lib/pg_chainsync.so:z
+- ./target/release/pg_chainsync-pg17/usr/share/pgsql/extension/pg_chainsync.control:/usr/share/postgresql/17/extension/pg_chainsync.control:z
+- ./target/release/pg_chainsync-pg17/usr/share/pgsql/extension/pg_chainsync--0.0.0.sql:/usr/share/postgresql/17/extension/pg_chainsync--0.0.0.sql:z
+```
+
+```bash
+bun run demo
+```
+
 ## Configuration
 
 The extension is configurable through `postgresql.conf` file, here are the supported keys that you can modify.
@@ -216,22 +236,8 @@ The extension is configurable through `postgresql.conf` file, here are the suppo
 | GUC Variable                  | Description                                                     | Default  |
 | ----------------------------- | --------------------------------------------------------------- | -------- |
 | chainsync.database            | Database name the extension will run on                         | postgres |
-| chainsync.evm_ws_permits      | Number of concurrent connections to the EVM provider            | 1        |
+| chainsync.evm_ws_permits      | Number of concurrent tasks that can run using the same provider | 1        |
 | chainsync.evm_blocktick_reset | Number of range fetches before trying to reset after reductions | 1        |
-
-## Demo
-
-You can check out how the extension work in action by running the development docker-compose file with `docker compose` or `podman compose`, you can find the example in `dev/dev.sql` file.
-
-First build the extension with `cargo pgrx package` then run the docker compose command, it will run the database, run the extension and listen for blocks and some events that get sent by erc20 container.
-
-Volumes to adjust in `docker-compose.yml` if compiled paths are different, your `pg_config` should point to your Postgres 17, keep in mind these paths will vary depending on your `pg_config`
-
-```
-- ./target/release/pg_chainsync-pg17/usr/lib64/pgsql/pg_chainsync.so:/usr/lib/postgresql/17/lib/pg_chainsync.so:z
-- ./target/release/pg_chainsync-pg17/usr/share/pgsql/extension/pg_chainsync.control:/usr/share/postgresql/17/extension/pg_chainsync.control:z
-- ./target/release/pg_chainsync-pg17/usr/share/pgsql/extension/pg_chainsync--0.0.0.sql:/usr/share/postgresql/17/extension/pg_chainsync--0.0.0.sql:z
-```
 
 ## License
 
