@@ -1,7 +1,7 @@
 CREATE TABLE logs (
-  bl_slot BIGINT NOT NULL,
-  bl_number BIGINT PRIMARY KEY,
-  bl_timestamp TIMESTAMPTZ NOT NULL
+  slot BIGINT NOT NULL,
+  number BIGINT PRIMARY KEY,
+  timestamp TIMESTAMPTZ NOT NULL
 );
 
 CREATE FUNCTION svm_log_handler(log chainsync.SvmLog, job JSONB) RETURNS VOID

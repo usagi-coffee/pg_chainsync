@@ -9,7 +9,7 @@ CREATE TABLE logs (
 
 CREATE FUNCTION simple_log_handler(log chainsync.EvmLog, job JSONB) RETURNS VOID
 AS $$
-  INSERT INTO events (ev_txhash, ev_index, ev_address, ev_topics, ev_data)
+  INSERT INTO logs (txhash, index, address, topics, data)
   VALUES (log.transaction_hash, log.log_index, log.address, log.topics, log.data)
   ON CONFLICT DO NOTHING
 $$ LANGUAGE SQL;

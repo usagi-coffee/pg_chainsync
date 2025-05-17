@@ -22,8 +22,8 @@ const client = createWalletClient({
 
 console.log("Transferring tokens every second!");
 
-// Make sure anvil is up
-await new Promise((resolve) => setTimeout(resolve, 2500));
+// Make sure anvil and the database is up
+await new Promise((resolve) => setTimeout(resolve, 4000));
 
 // Transfer tokens every second
 setInterval(async () => {

@@ -1,12 +1,12 @@
 CREATE TABLE blocks (
-  bl_slot BIGINT NOT NULL,
-  bl_number BIGINT PRIMARY KEY,
-  bl_timestamp TIMESTAMPTZ NOT NULL
+  slot BIGINT NOT NULL,
+  number BIGINT PRIMARY KEY,
+  timestamp TIMESTAMPTZ NOT NULL
 );
 
 CREATE FUNCTION svm_block_handler(block chainsync.SvmBlock, job JSONB) RETURNS VOID
 AS $$
-  INSERT INTO blocks (bl_slot, bl_number, bl_timestamp)
+  INSERT INTO blocks (slot, number, timestamp)
   VALUES (block.parent_slot, block.block_height, TO_TIMESTAMP(block.block_time) AT TIME ZONE 'UTC');
 $$ LANGUAGE SQL;
 

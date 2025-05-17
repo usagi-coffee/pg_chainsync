@@ -1,11 +1,11 @@
 CREATE TABLE blocks (
-  bl_number BIGINT PRIMARY KEY,
-  bl_timestamp TIMESTAMPTZ NOT NULL,
+  number BIGINT PRIMARY KEY,
+  timestamp TIMESTAMPTZ NOT NUll
 );
 
 CREATE FUNCTION simple_block_handler(block chainsync.EvmBlock, job JSONB) RETURNS VOID
 AS $$
-  INSERT INTO blocks (bl_number, bl_timestamp)
+  INSERT INTO blocks (number, timestamp)
   VALUES (block.number, TO_TIMESTAMP(block.timestamp) AT TIME ZONE 'UTC')
 $$ LANGUAGE SQL;
 
