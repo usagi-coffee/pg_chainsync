@@ -209,6 +209,16 @@ After altering the config restart your database and you can check postgres logs 
 
 > Please refer to pgrx documentation for full details on how to install background worker extension if it does not work for you
 
+## Configuration
+
+The extension is configurable through `postgresql.conf` file, here are the supported keys that you can modify.
+
+| GUC Variable                  | Description                                                     | Default  |
+| ----------------------------- | --------------------------------------------------------------- | -------- |
+| chainsync.database            | Database name the extension will run on                         | postgres |
+| chainsync.evm_ws_permits      | Number of concurrent connections to the EVM provider            | 1        |
+| chainsync.evm_blocktick_reset | Number of range fetches before trying to reset after reductions | 1        |
+
 ## Demo
 
 You can check out how the extension work in action by running the development docker-compose file with `docker compose` or `podman compose`, you can find the example in `dev/dev.sql` file.
