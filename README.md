@@ -179,7 +179,7 @@ SELECT chainsync.register(
 
 ## Installation
 
-> **_IMPORTANT_**: currently the database that the worker uses is hard-coded to `postgres` if you are using different database name please modify the `DATABASE` constant inside `src/sync.rs` before building.
+> **_IMPORTANT_**: the extension runs on `postgres` database by default, if you are using different database name please modify the `chainsync.database` string in your postgresql.conf file.
 
 ```bash
 # Install pgrx
@@ -213,7 +213,7 @@ After altering the config restart your database and you can check postgres logs 
 
 You can check out how the extension work in action by running the development docker-compose file with `docker compose` or `podman compose`, you can find the example in `dev/dev.sql` file.
 
-First build the extension with `cargo pgrx package` then run the docker compose command, it will run the database, run the extension and listen for some events that get sent by erc20 container.
+First build the extension with `cargo pgrx package` then run the docker compose command, it will run the database, run the extension and listen for blocks and some events that get sent by erc20 container.
 
 Volumes to adjust in `docker-compose.yml` if compiled paths are different, your `pg_config` should point to your Postgres 17, keep in mind these paths will vary depending on your `pg_config`
 

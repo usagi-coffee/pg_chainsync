@@ -143,8 +143,8 @@ mod chainsync {
 extension_sql_file!("../sql/types.sql", name = "types_schema");
 
 use worker::{
-    EVM_BLOCKTICK_RESET, EVM_TASKS, EVM_WS_PERMITS, RESTART_COUNT, SIGNALS,
-    SVM_TASKS, WORKER_STATUS,
+    DATABASE, EVM_BLOCKTICK_RESET, EVM_TASKS, EVM_WS_PERMITS, RESTART_COUNT,
+    SIGNALS, SVM_TASKS, WORKER_STATUS,
 };
 
 #[pg_guard]
@@ -154,6 +154,15 @@ pub extern "C-unwind" fn _PG_init() {
     pg_shmem_init!(EVM_TASKS);
     pg_shmem_init!(SVM_TASKS);
     pg_shmem_init!(SIGNALS);
+
+    GucRegistry::define_string_guc(
+        "chainsync.database",
+        "database where the chainsync schema is",
+        "database where the chainsync schema is",
+        &DATABASE,
+        GucContext::Postmaster,
+        GucFlags::default(),
+    );
 
     GucRegistry::define_int_guc(
         "chainsync.evm_ws_permits",

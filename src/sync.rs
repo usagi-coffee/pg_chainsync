@@ -22,8 +22,6 @@ use crate::types::*;
 use crate::worker;
 use crate::worker::*;
 
-const DATABASE: &str = "postgres";
-
 #[pg_guard]
 #[no_mangle]
 pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
@@ -38,7 +36,14 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
         SignalWakeFlags::SIGHUP | SignalWakeFlags::SIGTERM,
     );
 
-    BackgroundWorker::connect_worker_to_spi(Some(DATABASE), None);
+    if let Some(database) = DATABASE.get() {
+        BackgroundWorker::connect_worker_to_spi(
+            Some(database.to_str().expect("database name to be valid utf8")),
+            None,
+        );
+    } else {
+        error!("sync: database name was not provided");
+    }
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
