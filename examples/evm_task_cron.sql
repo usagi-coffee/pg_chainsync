@@ -18,7 +18,7 @@ AS $$
   UPDATE chainsync.jobs SET options['count'] = TO_JSONB((options->>'count')::INTEGER + 1) WHERE id = job_id
 $$ LANGUAGE SQL;
 
--- Let's fetch all logs every 5 seconds
+-- Let's fetch all logs every 1 minute
 -- There is no ws key in the options, we are setting it up in the setup handler!
 SELECT chainsync.register(
   'frequent-logs',
@@ -26,7 +26,7 @@ SELECT chainsync.register(
     "evm": true,
 
     "oneshot": true,
-    "cron": "*/5 * * * * *",
+    "cron": "0 * * * * *",
 
     "from_block": 0,
 
