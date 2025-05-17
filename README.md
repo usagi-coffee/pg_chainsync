@@ -225,10 +225,6 @@ Currently the extension is built on the host machine so keep in mind your paths 
 - ./target/release/pg_chainsync-pg17/usr/share/pgsql/extension/pg_chainsync--0.0.0.sql:/usr/share/postgresql/17/extension/pg_chainsync--0.0.0.sql:z
 ```
 
-```bash
-bun run demo
-```
-
 ## Configuration
 
 The extension is configurable through `postgresql.conf` file, here are the supported keys that you can modify.
