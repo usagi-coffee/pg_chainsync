@@ -4,6 +4,7 @@ use pgrx::{log, warning};
 use std::sync::Arc;
 
 use alloy::core::primitives::{Address, B256};
+use alloy::primitives::keccak256;
 use alloy::providers::Provider;
 use alloy::pubsub::SubscriptionStream;
 use alloy::rpc::types::{BlockNumberOrTag, Filter};
@@ -131,21 +132,45 @@ pub async fn handle_evm_log(
     log: alloy::rpc::types::Log,
     channel: &Channel,
 ) {
-    let block = log.block_number.unwrap();
-
-    if log.log_index.is_none() {
-        log!("sync: evm: logs: found pending {}", block);
+    let Some(transaction) = log.transaction_hash else {
+        warning!("sync: evm: logs: {}: found pending, skipping", &job.name);
         return;
-    }
+    };
 
-    let transaction = log.transaction_hash.unwrap();
-    let index = log.log_index.unwrap();
+    let Some(block) = log.block_number else {
+        warning!("sync: evm: logs: {}: found pending, skipping", &job.name);
+        return;
+    };
+
+    let Some(log_index) = log.log_index else {
+        warning!("sync: evm: logs: {}: found pending, skipping", &job.name);
+        return;
+    };
+
+    if let Some(event) = &job.options.event {
+        let _ = keccak256(event.as_bytes());
+        if !matches!(log.topic0(), Some(_)) {
+            warning!(
+                "sync: evm: logs: {}: {}<{}>: topic0 does not match",
+                &job.name,
+                transaction,
+                log_index
+            );
+            return;
+        }
+    } else if let Some(topic0) = &job.options.topic0 {
+        let _ = topic0.parse::<B256>().unwrap();
+        if !matches!(log.topic0(), Some(_)) {
+            warning!("sync: evm: logs: {}: topic0 does not match", &job.name);
+            return;
+        }
+    }
 
     log!(
         "sync: evm: logs: {}: found {}<{}> at {}",
         &job.name,
         transaction,
-        index,
+        log_index,
         block
     );
 
@@ -206,7 +231,7 @@ pub async fn handle_evm_log(
             "sync: evm: logs: {}: failed to send {}<{}>",
             &job.name,
             transaction,
-            index
+            log_index
         )
     }
 }
