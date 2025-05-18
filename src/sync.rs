@@ -140,10 +140,10 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
 
 pub fn preload_tasks(tasks: Vec<Job>) {
     for task in tasks {
-        if matches!(task.options.preload, Some(true)) {
-            if EVM_TASKS.exclusive().push(task.id).is_err() {
-                warning!("sync: tasks: {}: failed to enqueue", &task.name);
-            }
+        if matches!(task.options.evm, Some(true)) {
+            EVM_TASKS.exclusive().push(task.id).unwrap();
+        } else if matches!(task.options.svm, Some(true)) {
+            SVM_TASKS.exclusive().push(task.id).unwrap();
         }
     }
 }
