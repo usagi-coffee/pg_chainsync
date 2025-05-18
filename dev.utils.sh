@@ -4,7 +4,7 @@ shopt -s huponexit # make sure children get SIGHUP when the script exits
 
 # Cleanup function to stop and remove containers
 cleanup () {
-  (podman-compose down -t 0 || true)
+  (podman-compose -f docker-compose.utils.yml down -t 0 || true)
 }
 
 # run cleanup on Ctrl-C (INT), kill/TERM, any error (ERR) or a normal EXIT
@@ -22,8 +22,8 @@ cargo pgrx package -d
 # Copy the example script to the dev directory so it gets mounted
 cp "$1" dev/dev.sql
 
-podman-compose build
+podman-compose -f docker-compose.utils.yml build
 sleep 1
-podman-compose up
+podman-compose -f docker-compose.utils.yml up
 
 # Ctrl+C to stop the containers, should cleanup

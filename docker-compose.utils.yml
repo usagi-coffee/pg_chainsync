@@ -1,0 +1,45 @@
+services:
+  foundry:
+    container_name: pg-chainsync-foundry
+    build:
+      context: .
+      dockerfile: ./dev/Dockerfile.foundry
+    volumes:
+      - ./dev/state.anvil:/root/foundry/state.anvil:z
+    ports:
+      - 8545:8545
+    networks:
+      - net-chainsync
+  database:
+    container_name: pg-chainsync
+    build:
+      context: .
+      dockerfile: ./dev/Dockerfile.utils
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./dev/dev.sql:/docker-entrypoint-initdb.d/99_dev.sql:z
+      - ./target/debug/pg_chainsync-pg17/opt/postgres/pgrx-install/lib/postgresql/pg_chainsync.so:/usr/lib/postgresql/17/lib/pg_chainsync.so:z
+      - ./target/debug/pg_chainsync-pg17/opt/postgres/pgrx-install/share/postgresql/extension/pg_chainsync.control:/usr/share/postgresql/17/extension/pg_chainsync.control:z
+      - ./target/debug/pg_chainsync-pg17/opt/postgres/pgrx-install/share/postgresql/extension/pg_chainsync--0.0.0.sql:/usr/share/postgresql/17/extension/pg_chainsync--0.0.0.sql:z
+      - ../pg_chainutils/target/release/pg_chainutils-pg17/opt/postgres/pgrx-install/lib/postgresql/pg_chainutils.so:/usr/lib/postgresql/17/lib/pg_chainutils.so:z
+      - ../pg_chainutils/target/release/pg_chainutils-pg17/opt/postgres/pgrx-install/share/postgresql/extension/pg_chainutils.control:/usr/share/postgresql/17/extension/pg_chainutils.control:z
+      - ../pg_chainutils/target/release/pg_chainutils-pg17/opt/postgres/pgrx-install/share/postgresql/extension/pg_chainutils--0.2.1.sql:/usr/share/postgresql/17/extension/pg_chainutils--0.2.1.sql:z
+    ports:
+      - 5432:5432
+    networks:
+      - net-chainsync
+    depends_on:
+      - foundry
+  erc20:
+    container_name: pg-chainsync-erc20
+    build:
+      context: ./dev/erc20
+      dockerfile: Dockerfile
+    networks:
+      - net-chainsync
+    depends_on:
+      - foundry
+networks:
+  net-chainsync:
+    driver: bridge
