@@ -177,6 +177,19 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                             }
                         }
 
+                        // Filter out instruction discriminator if specified
+                        if let Some(discriminator) =
+                            job.options.instruction_discriminator
+                        {
+                            if let Ok(slice) =
+                                bs58::decode(&inner_instruction.data).into_vec()
+                            {
+                                if slice[0] != discriminator {
+                                    continue;
+                                }
+                            }
+                        }
+
                         let bundled = SolanaInnerInstruction {
                             _tx: &tx,
                             _instruction: inner_instruction,
@@ -210,6 +223,15 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
 
                 if inner_program.unwrap() != program_id {
                     continue;
+                }
+            }
+
+            // Filter out instruction discriminator if specified
+            if let Some(discriminator) = job.options.instruction_discriminator {
+                if let Ok(slice) = bs58::decode(&instruction.data).into_vec() {
+                    if slice[0] != discriminator {
+                        continue;
+                    }
                 }
             }
 
