@@ -181,9 +181,9 @@ impl From<u8> for Signal {
     }
 }
 
-impl Into<String> for JobStatus {
-    fn into(self) -> String {
-        match self {
+impl From<JobStatus> for String {
+    fn from(orig: JobStatus) -> Self {
+        match orig {
             JobStatus::Stopped => "STOPPED",
             JobStatus::Waiting => "WAITING",
             JobStatus::Running => "RUNNING",

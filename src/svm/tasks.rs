@@ -47,6 +47,18 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                 continue;
             };
 
+            if job.status == String::from(JobStatus::Running) {
+                log!("sync: svm: tasks: {}: job is already running", &job.name);
+                if let Some(upcoming) = job.options.next_cron() {
+                    log!(
+                        "sync: svm: tasks: {}: next at {}",
+                        &job.name,
+                        upcoming
+                    );
+                }
+                continue;
+            }
+
             if let Some(setup_handler) = job.options.setup_handler.as_ref() {
                 let (tx, rx) = oneshot::channel::<Option<JsonB>>();
                 channel.send(Message::JsonHandler(
