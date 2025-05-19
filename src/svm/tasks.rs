@@ -308,13 +308,8 @@ async fn handle_transactions_task(
                     None => {
                         channel.send(Message::SvmTransaction(tx, job.clone()));
                     }
-                    Some(error) => {
-                        log!(
-                            "sync: svm: tasks: {}: {}: had meta error {}, skipping",
-                            &job.name,
-                            &signature,
-                            error
-                      );
+                    Some(_) => {
+                        // TODO: Transcation had meta error if anyone cares we can implement
                     }
                 }
             }

@@ -40,6 +40,7 @@ CREATE TYPE chainsync.SvmInstruction AS (
   slot NUMERIC,
   signature TEXT,
   accounts TEXT[],
+  accounts_owners TEXT[],
   program_id TEXT,
   index SMALLINT,
   inner_index SMALLINT,
