@@ -12,8 +12,8 @@ use solana_sdk::signature::Signature;
 use tokio::sync::oneshot;
 use tokio::time::{sleep_until, Duration, Instant};
 
-use super::blocks;
 use super::transactions;
+use super::{blocks, SvmTransaction};
 use crate::channel::Channel;
 use crate::types::*;
 use crate::worker::SVM_TASKS;
@@ -303,14 +303,19 @@ async fn handle_transactions_task(
 
             retries = 0;
 
-            if let Some(meta) = tx.transaction.meta.as_ref() {
-                match &meta.err {
-                    None => {
+            match tx.try_into() as Result<SvmTransaction, anyhow::Error> {
+                Ok(tx) => {
+                    if !tx.failed {
                         channel.send(Message::SvmTransaction(tx, job.clone()));
                     }
-                    Some(_) => {
-                        // TODO: Transcation had meta error if anyone cares we can implement
-                    }
+                }
+                Err(error) => {
+                    warning!(
+                        "sync: svm: tasks: {}: {}: transaction validation failed with {}",
+                        &job.name,
+                        &signature,
+                        error
+                    );
                 }
             }
         }

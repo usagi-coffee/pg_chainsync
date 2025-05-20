@@ -390,9 +390,9 @@ async fn handle_message(mut stream: MessageStream) {
                     );
                 }
             }
-            Message::SvmTransaction(..) => {
+            Message::SvmTransaction(message, job) => {
                 svm_txs.fetch_add(1, Ordering::Relaxed);
-                svm::transactions::handle_message(message)
+                svm::transactions::handle_transaction_message(message, job);
             }
             Message::Handler(job_id, handler, oneshot) => {
                 let success =

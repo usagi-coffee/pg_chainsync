@@ -3,7 +3,6 @@ use pgrx::{prelude::*, JsonB};
 
 use anyhow::anyhow;
 
-use solana_transaction_status_client_types::option_serializer::OptionSerializer;
 use tokio::sync::OnceCell;
 
 use crate::evm::*;
@@ -13,7 +12,6 @@ use crate::types::*;
 
 use alloy::core::hex;
 
-use solana_client::rpc_client::SerializableTransaction;
 use solana_sdk::bs58;
 
 pub const EVM_BLOCK_COMPOSITE_TYPE: &str = "chainsync.EvmBlock";
@@ -340,28 +338,18 @@ impl PgHandler for SvmTransaction {
             PgHeapTuple::new_composite_type(SVM_TRANSACTION_COMPOSITE_TYPE)
                 .unwrap();
 
-        let decoded = self.transaction.transaction.decode().unwrap();
-
-        data.set_by_name("signature", decoded.get_signature().to_string())?;
+        data.set_by_name("signature", self.signature.to_string())?;
         data.set_by_name("slot", pgrx::AnyNumeric::try_from(self.slot))?;
-        data.set_by_name(
-            "block_time",
-            self.block_time.expect("block time to be in transaction"),
-        )?;
+        data.set_by_name("block_time", self.block_time)?;
+        data.set_by_name("accounts", self.accounts.clone())?;
 
-        let accounts: Vec<String> = decoded
-            .message
-            .static_account_keys()
-            .iter()
-            .map(|&key| key.to_string())
-            .collect();
-        data.set_by_name("accounts", accounts)?;
-
-        let signatures: Vec<String> = decoded
+        let signatures: Vec<String> = self
             .signatures
+            .clone()
             .into_iter()
             .map(|sig| sig.to_string())
-            .collect();
+            .collect::<Vec<String>>();
+
         data.set_by_name("signatures", signatures)?;
 
         let oid = data.composite_type_oid().unwrap();
@@ -383,91 +371,33 @@ impl PgHandler for SolanaInstruction<'_> {
         handler: &String,
         job: i64,
     ) -> Result<PgResult, anyhow::Error> {
-        let Some(decoded) = self._tx.transaction.transaction.decode() else {
-            return Err(anyhow!("failed to decode the transaction"));
-        };
-
-        let Some(meta) = self._tx.transaction.meta.as_ref() else {
-            return Err(anyhow!("transaction meta is not available"));
-        };
-
-        let post_balances = meta.post_token_balances.as_ref().unwrap();
-        let pre_balances = meta.pre_token_balances.as_ref().unwrap();
-        let loaded_addresses = meta.loaded_addresses.as_ref().unwrap();
-
         let mut data =
             PgHeapTuple::new_composite_type(SVM_INSTRUCTION_COMPOSITE_TYPE)
                 .unwrap();
 
-        let mut accounts = decoded
-            .message
-            .static_account_keys()
-            .iter()
-            .map(|&key| key.to_string())
-            .collect::<Vec<String>>();
-
-        accounts.extend(loaded_addresses.writable.clone());
-        accounts.extend(loaded_addresses.readonly.clone());
-
-        let accounts_owners = self
-            ._instruction
-            .accounts
-            .iter()
-            .map(|&acc| {
-                if let Some(balance) = post_balances
-                    .iter()
-                    .find(|balance| balance.account_index == acc)
-                {
-                    if let OptionSerializer::Some(owner) =
-                        balance.owner.as_ref()
-                    {
-                        return Some(owner);
-                    }
-                }
-
-                if let Some(balance) = pre_balances
-                    .iter()
-                    .find(|balance| balance.account_index == acc)
-                {
-                    if let OptionSerializer::Some(owner) =
-                        balance.owner.as_ref()
-                    {
-                        return Some(owner);
-                    }
-                }
-
-                None
-            })
-            .collect::<Vec<Option<&String>>>();
-
-        data.set_by_name("signature", decoded.get_signature().to_string())?;
-        data.set_by_name("slot", pgrx::AnyNumeric::try_from(self._tx.slot))?;
-        data.set_by_name(
-            "block_time",
-            self._tx
-                .block_time
-                .expect("block time to be in instruction's transaction"),
-        )?;
+        data.set_by_name("signature", self.tx.signature.to_string())?;
+        data.set_by_name("slot", pgrx::AnyNumeric::try_from(self.tx.slot))?;
+        data.set_by_name("block_time", self.tx.block_time)?;
 
         data.set_by_name(
             "data",
-            bs58::encode(&self._instruction.data).into_string(),
+            bs58::encode(&self.instruction.data).into_string(),
         )?;
 
         data.set_by_name(
             "program_id",
-            &accounts[self._instruction.program_id_index as usize],
+            &self.tx.accounts[self.instruction.program_id_index as usize],
         )?;
 
         data.set_by_name(
             "accounts",
-            self._instruction
+            self.instruction
                 .accounts
                 .iter()
-                .map(|&acc| &accounts[acc as usize])
+                .map(|&acc| &self.tx.accounts[acc as usize])
                 .collect::<Vec<&String>>(),
         )?;
-        data.set_by_name("accounts_owners", accounts_owners)?;
+        data.set_by_name("accounts_owners", self.accounts_owners.clone())?;
 
         data.set_by_name("index", self.index)?;
         data.set_by_name("inner_index", 0)?;
@@ -491,88 +421,30 @@ impl PgHandler for SolanaInnerInstruction<'_> {
         handler: &String,
         job: i64,
     ) -> Result<PgResult, anyhow::Error> {
-        let Some(decoded) = self._tx.transaction.transaction.decode() else {
-            return Err(anyhow!("failed to decode the transaction"));
-        };
-
-        let Some(meta) = self._tx.transaction.meta.as_ref() else {
-            return Err(anyhow!("transaction meta is not available"));
-        };
-
-        let post_balances = meta.post_token_balances.as_ref().unwrap();
-        let pre_balances = meta.pre_token_balances.as_ref().unwrap();
-        let loaded_addresses = meta.loaded_addresses.as_ref().unwrap();
-
         let mut data =
             PgHeapTuple::new_composite_type(SVM_INSTRUCTION_COMPOSITE_TYPE)
                 .unwrap();
 
-        let mut accounts = decoded
-            .message
-            .static_account_keys()
-            .iter()
-            .map(|&key| key.to_string())
-            .collect::<Vec<String>>();
+        data.set_by_name("signature", self.tx.signature.to_string())?;
+        data.set_by_name("slot", pgrx::AnyNumeric::try_from(self.tx.slot))?;
+        data.set_by_name("block_time", self.tx.block_time)?;
 
-        accounts.extend(loaded_addresses.writable.clone());
-        accounts.extend(loaded_addresses.readonly.clone());
-
-        let accounts_owners = self
-            ._instruction
-            .accounts
-            .iter()
-            .map(|&acc| {
-                if let Some(balance) = post_balances
-                    .iter()
-                    .find(|balance| balance.account_index == acc)
-                {
-                    if let OptionSerializer::Some(owner) =
-                        balance.owner.as_ref()
-                    {
-                        return Some(owner);
-                    }
-                }
-
-                if let Some(balance) = pre_balances
-                    .iter()
-                    .find(|balance| balance.account_index == acc)
-                {
-                    if let OptionSerializer::Some(owner) =
-                        balance.owner.as_ref()
-                    {
-                        return Some(owner);
-                    }
-                }
-
-                None
-            })
-            .collect::<Vec<Option<&String>>>();
-
-        data.set_by_name("signature", decoded.get_signature().to_string())?;
-        data.set_by_name("slot", pgrx::AnyNumeric::try_from(self._tx.slot))?;
-        data.set_by_name(
-            "block_time",
-            self._tx
-                .block_time
-                .expect("block time to be in instruction's transaction"),
-        )?;
-
-        data.set_by_name("data", &self._instruction.data)?;
+        data.set_by_name("data", &self.instruction.data)?;
 
         data.set_by_name(
             "program_id",
-            &accounts[self._instruction.program_id_index as usize],
+            &self.tx.accounts[self.instruction.program_id_index as usize],
         )?;
 
         data.set_by_name(
             "accounts",
-            self._instruction
+            self.instruction
                 .accounts
                 .iter()
-                .map(|&acc| &accounts[acc as usize])
+                .map(|&acc| &self.tx.accounts[acc as usize])
                 .collect::<Vec<&String>>(),
         )?;
-        data.set_by_name("accounts_owners", accounts_owners)?;
+        data.set_by_name("accounts_owners", self.accounts_owners.clone())?;
 
         data.set_by_name("index", self.index)?;
         data.set_by_name("inner_index", self.inner_index)?;
