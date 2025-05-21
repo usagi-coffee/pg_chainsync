@@ -5,6 +5,8 @@ pub mod transactions;
 
 use std::sync::Arc;
 
+use anyhow::bail;
+
 use solana_client::rpc_client::SerializableTransaction;
 use solana_sdk::message::VersionedMessage;
 use solana_sdk::signature::Signature;
@@ -103,22 +105,26 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
 
     fn try_into(self) -> Result<SvmTransaction, Self::Error> {
         let Some(block_time) = self.block_time else {
-            return Err(anyhow::anyhow!("block time was not in transaction"));
+            bail!("block time was not in transaction");
         };
 
         let Some(transaction) = self.transaction.transaction.decode() else {
-            return Err(anyhow::anyhow!("transaction could not be decoded"));
+            bail!("transaction could not be decoded");
         };
 
         let Some(meta) = self.transaction.meta else {
-            return Err(anyhow::anyhow!("meta was not in transaction"));
+            bail!("meta was not in transaction");
         };
 
         let OptionSerializer::Some(loaded_addresses) = meta.loaded_addresses
         else {
-            return Err(anyhow::anyhow!(
-                "loaded addresses was not in transaction"
-            ));
+            bail!("loaded addresses was not in transaction");
+        };
+
+        let OptionSerializer::Some(inner_instructions) =
+            meta.inner_instructions
+        else {
+            bail!("inner instructions were not in transaction");
         };
 
         let mut accounts = transaction
@@ -130,14 +136,6 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
 
         accounts.extend(loaded_addresses.writable.clone());
         accounts.extend(loaded_addresses.readonly.clone());
-
-        let OptionSerializer::Some(inner_instructions) =
-            meta.inner_instructions
-        else {
-            return Err(anyhow::anyhow!(
-                "inner instructions was not in transaction"
-            ));
-        };
 
         Ok(SvmTransaction {
             signature: *transaction.get_signature(),

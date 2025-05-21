@@ -1,7 +1,7 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail, ensure};
 
 use pgrx::{log, warning, JsonB};
 
@@ -167,7 +167,7 @@ async fn handle_blocks_task(
     let rpc = job.reconnect_svm_rpc().await;
 
     let Some(from) = options.from_slot else {
-        return Err(anyhow!("from_slot is required for block task"));
+        bail!("from_slot is required for block task");
     };
 
     let to = {
@@ -180,11 +180,10 @@ async fn handle_blocks_task(
 
     let mut retries = 0;
     'blocks: loop {
-        if retries >= 10 {
-            return Err(anyhow!(
-                "failed to get block after 10 retries, aborting..."
-            ));
-        }
+        ensure!(
+            retries < 10,
+            "failed to get block after 10 retries, aborting..."
+        );
 
         for i in from..to {
             match rpc
@@ -222,7 +221,7 @@ async fn handle_transactions_task(
     let rpc = job.reconnect_svm_rpc().await;
 
     let Some(mentions) = job.options.mentions.as_ref() else {
-        return Err(anyhow!("transaction task should include mentions field"));
+        bail!("mentions field is required for transaction task");
     };
 
     let address = Pubkey::from_str(mentions[0].as_str())?;
@@ -269,11 +268,10 @@ async fn handle_transactions_task(
 
     let mut retries = 0;
     'transactions: loop {
-        if retries >= 10 {
-            return Err(anyhow!(
-                "failed to get transaction after 10 retries, aborting..."
-            ));
-        }
+        ensure!(
+            retries < 10,
+            "failed to get transaction after 10 retries, aborting..."
+        );
 
         for signature in &signatures {
             let signature = Signature::from_str(signature.signature.as_str())?;

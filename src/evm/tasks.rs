@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail, ensure};
 
 use alloy::providers::Provider;
 use alloy::rpc::types::Log;
@@ -196,11 +196,7 @@ async fn handle_blocks_task(
 
     let mut retries = 0;
     'blocks: loop {
-        if retries >= 10 {
-            return Err(anyhow!(
-                "failed to get block after 10 retries, aborting..."
-            ));
-        }
+        ensure!(retries <= 10, "failed to get block after 10 retries");
 
         client = job.reconnect_evm().await?;
 
@@ -379,7 +375,7 @@ async fn handle_log_task(
 
             // Do 10 second timeout to ensure we don't block forever and force-reduce blocktick
             let logs: Result<Vec<Log>, anyhow::Error> = tokio::select! {
-                _ = tokio::time::sleep(Duration::from_secs(10)) => Err(anyhow!("logs request took too long")),
+                _ = tokio::time::sleep(Duration::from_secs(10)) => bail!("logs request took too long"),
                 logs = request => logs.map_err(|e| e.into())
             };
 
@@ -402,12 +398,12 @@ async fn handle_log_task(
 
                     // Once we hit blocktick of 1 this is too slow at this point
                     if state.blocktick <= 1 {
-                        return Err(anyhow!("blocktick was reduced too much"));
+                        bail!("blocktick was reduced too much");
                     }
 
                     // Somethings wrong if we hit 20 retries in a row....
                     if retries >= 20 {
-                        return Err(anyhow!("too many retries"));
+                        bail!("too many retries");
                     }
 
                     // Reconnect loop
