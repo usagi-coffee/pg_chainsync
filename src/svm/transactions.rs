@@ -11,7 +11,6 @@ use solana_client::rpc_config::RpcTransactionConfig;
 use solana_client::rpc_response::{Response, RpcLogsResponse};
 use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::instruction::CompiledInstruction;
-use solana_sdk::pubkey;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use solana_transaction_status_client_types::{
@@ -118,26 +117,6 @@ use pgrx::bgworkers::BackgroundWorker;
 
 use crate::anyhow_pg_try;
 
-const ATA_PROGRAM_ID: Pubkey =
-    pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
-const TOKEN_PROGRAM_ID: Pubkey =
-    pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-
-fn spl_owner(mint: &str, address: &str) -> Result<String, anyhow::Error> {
-    let mint = Pubkey::from_str(mint)?;
-    let address = Pubkey::from_str(address)?;
-
-    let seeds = [
-        &address.to_bytes()[..],
-        &TOKEN_PROGRAM_ID.to_bytes()[..],
-        &mint.to_bytes()[..],
-    ];
-
-    Ok(Pubkey::find_program_address(&seeds, &ATA_PROGRAM_ID)
-        .0
-        .to_string())
-}
-
 pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
     let id = job.id;
 
@@ -175,58 +154,57 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
 
     if let Some(instruction_handler) = &job.options.instruction_handler {
         for (i, instruction) in tx.message.instructions().iter().enumerate() {
-            for inner in &tx.inner_instructions {
-                if inner.index as usize != i {
-                    break;
-                }
-
-                for (j, inner_instruction) in
-                    inner.instructions.iter().enumerate()
+            for (j, inner_instruction) in tx
+                .inner_instructions
+                .iter()
+                .find(|inner| inner.index == i as u8)
+                .into_iter()
+                .flat_map(|inner| inner.instructions.iter().enumerate())
+            {
+                if let UiInstruction::Compiled(inner_instruction) =
+                    inner_instruction
                 {
-                    if let UiInstruction::Compiled(inner_instruction) =
-                        inner_instruction
+                    // Filter out program id if specified
+                    if let Some(program_id) = job.options.program {
+                        let inner_program = Pubkey::from_str(
+                            &tx.accounts
+                                [inner_instruction.program_id_index as usize],
+                        );
+
+                        if inner_program.unwrap() != program_id {
+                            continue;
+                        }
+                    }
+
+                    // Filter out instruction discriminator if specified
+                    if let Some(discriminator) =
+                        job.options.instruction_discriminator
                     {
-                        // Filter out program id if specified
-                        if let Some(program_id) = job.options.program {
-                            let inner_program = Pubkey::from_str(
-                                &tx.accounts[inner_instruction.program_id_index
-                                    as usize],
-                            );
+                        let slice = bs58::decode(&inner_instruction.data)
+                            .into_vec()
+                            .unwrap();
 
-                            if inner_program.unwrap() != program_id {
-                                continue;
-                            }
+                        if slice[0] != discriminator {
+                            continue;
                         }
+                    }
 
-                        // Filter out instruction discriminator if specified
-                        if let Some(discriminator) =
-                            job.options.instruction_discriminator
-                        {
-                            let slice = bs58::decode(&inner_instruction.data)
-                                .into_vec()
-                                .unwrap();
-
-                            if slice[0] != discriminator {
-                                continue;
-                            }
-                        }
-
-                        // Find a balance for each account if possible
-                        let balances = inner_instruction
-                            .accounts
-                            .iter()
-                            .map(|index| {
-                                if let Some(balance) = get_balance(*index) {
-                                    if balance.owner.is_some() {
-                                        return Some(balance);
-                                    }
+                    // Find a balance for each account if possible
+                    let balances = inner_instruction
+                        .accounts
+                        .iter()
+                        .map(|index| {
+                            if let Some(balance) = get_balance(*index) {
+                                if balance.owner.is_some() {
+                                    return Some(balance);
                                 }
+                            }
 
-                                None
-                            })
-                            .collect::<Vec<_>>();
+                            None
+                        })
+                        .collect::<Vec<_>>();
 
-                        let accounts_owners = inner_instruction
+                    let accounts_owners = inner_instruction
                             .accounts
                             .iter()
                             .enumerate()
@@ -243,51 +221,64 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                                     warning!("sync: svm: transactins: balance does not have an owner!");
                                 }
 
-                                // Search for the mint by looking at adjacent account balances
-                                if let Some(mint) = balances
+                                // Lookup transient owners
+                                if let Some(transient) = tx
+                                    .transient_accounts
                                     .iter()
-                                    .flatten()
-                                    .map(|balance| &balance.mint)
-                                    .next()
+                                    .find(|transient| transient.account == tx.accounts[index])
                                 {
-                                    // Brute force the owner by writable
-                                    for account in &tx.accounts {
-                                        if let Ok(owner) =
-                                            spl_owner(mint.as_str(), &account)
-                                        {
-                                            if owner == tx.accounts[index] {
-                                                return Some(&account);
-                                            }
-                                        }
-                                    }
+                                    return Some(&transient.owner);
                                 }
 
                                 None
                             })
                             .collect::<Vec<_>>();
 
-                        let bundled = SolanaInnerInstruction {
-                            tx: &tx,
-                            instruction: inner_instruction,
-                            accounts_owners,
-                            index: i as i16 + 1,
-                            inner_index: j as i16 + 1,
-                        };
+                    let accounts_mints = inner_instruction
+                        .accounts
+                        .iter()
+                        .enumerate()
+                        .map(|(i, index)| {
+                            let index = *index as usize;
 
-                        log!(
-                            "sync: svm: transactions: {}: adding {}<{}.{}>",
-                            &job.name,
-                            &tx.signature,
-                            bundled.index,
-                            bundled.inner_index
-                        );
+                            if let Some(balance) = balances[i] {
+                                return Some(&balance.mint);
+                            }
 
-                        if let Err(error) =
-                            anyhow_pg_try!(|| bundled
-                                .call_handler(&instruction_handler, id))
-                        {
-                            warning!("sync: svm: transactions: {}: instruction handler failed with {}", &id, error);
-                        }
+                            // Lookup transient mints
+                            if let Some(transient) =
+                                tx.transient_accounts.iter().find(|transient| {
+                                    transient.account == tx.accounts[index]
+                                })
+                            {
+                                return Some(&transient.mint);
+                            }
+
+                            None
+                        })
+                        .collect::<Vec<_>>();
+
+                    let bundled = SolanaInnerInstruction {
+                        tx: &tx,
+                        instruction: inner_instruction,
+                        accounts_owners,
+                        accounts_mints,
+                        index: i as i16 + 1,
+                        inner_index: j as i16 + 1,
+                    };
+
+                    log!(
+                        "sync: svm: transactions: {}: adding {}<{}.{}>",
+                        &job.name,
+                        &tx.signature,
+                        bundled.index,
+                        bundled.inner_index
+                    );
+
+                    if let Err(error) = anyhow_pg_try!(
+                        || bundled.call_handler(&instruction_handler, id)
+                    ) {
+                        warning!("sync: svm: transactions: {}: instruction handler failed with {}", &id, error);
                     }
                 }
             }
@@ -339,18 +330,36 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                         warning!("sync: svm: transactins: balance does not have an owner!");
                     }
 
-                    // Search for the mint by looking at adjacent account balances
-                    if let Some(mint) = balances.iter().flatten().map(|balance| &balance.mint).next() {
-                        // Brute force the owner by writable
-                        for account in &tx.accounts {
-                            if let Ok(owner) =
-                                spl_owner(mint.as_str(), &account)
-                            {
-                                if owner == tx.accounts[index] {
-                                    return Some(&account);
-                                }
-                            }
-                        }
+                    // Lookup transient owners
+                    if let Some(transient) = tx
+                        .transient_accounts
+                        .iter()
+                        .find(|transient| transient.account == tx.accounts[index])
+                    {
+                        return Some(&transient.owner);
+                    }
+
+                    None
+                })
+                .collect::<Vec<_>>();
+
+            let accounts_mints = instruction
+                .accounts
+                .iter()
+                .enumerate()
+                .map(|(i, index)| {
+                    let index = *index as usize;
+                    if let Some(balance) = balances[i] {
+                        return Some(&balance.mint);
+                    }
+
+                    // Lookup transient mints
+                    if let Some(transient) =
+                        tx.transient_accounts.iter().find(|transient| {
+                            transient.account == tx.accounts[index]
+                        })
+                    {
+                        return Some(&transient.mint);
                     }
 
                     None
@@ -361,6 +370,7 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                 tx: &tx,
                 instruction: instruction,
                 accounts_owners,
+                accounts_mints,
                 index: i as i16 + 1,
             };
 
@@ -405,6 +415,7 @@ pub struct SolanaInstruction<'a> {
     pub tx: &'a SvmTransaction,
     pub instruction: &'a CompiledInstruction,
     pub accounts_owners: Vec<Option<&'a String>>,
+    pub accounts_mints: Vec<Option<&'a String>>,
     pub index: i16,
 }
 
@@ -412,6 +423,7 @@ pub struct SolanaInnerInstruction<'a> {
     pub tx: &'a SvmTransaction,
     pub instruction: &'a UiCompiledInstruction,
     pub accounts_owners: Vec<Option<&'a String>>,
+    pub accounts_mints: Vec<Option<&'a String>>,
     pub index: i16,
     pub inner_index: i16,
 }

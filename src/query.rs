@@ -398,6 +398,7 @@ impl PgHandler for SolanaInstruction<'_> {
                 .collect::<Vec<&String>>(),
         )?;
         data.set_by_name("accounts_owners", self.accounts_owners.clone())?;
+        data.set_by_name("accounts_mints", self.accounts_mints.clone())?;
 
         data.set_by_name("index", self.index)?;
         data.set_by_name("inner_index", 0)?;
@@ -445,6 +446,7 @@ impl PgHandler for SolanaInnerInstruction<'_> {
                 .collect::<Vec<&String>>(),
         )?;
         data.set_by_name("accounts_owners", self.accounts_owners.clone())?;
+        data.set_by_name("accounts_mints", self.accounts_mints.clone())?;
 
         data.set_by_name("index", self.index)?;
         data.set_by_name("inner_index", self.inner_index)?;

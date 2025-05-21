@@ -3,18 +3,22 @@ pub mod logs;
 pub mod tasks;
 pub mod transactions;
 
+use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::bail;
 
 use solana_client::rpc_client::SerializableTransaction;
 use solana_sdk::message::VersionedMessage;
+use solana_sdk::pubkey;
+use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use solana_transaction_status_client_types::option_serializer::OptionSerializer;
 use solana_transaction_status_client_types::EncodedConfirmedTransactionWithStatusMeta;
 use solana_transaction_status_client_types::TransactionDetails;
 use solana_transaction_status_client_types::UiConfirmedBlock;
 use solana_transaction_status_client_types::UiInnerInstructions;
+use solana_transaction_status_client_types::UiInstruction;
 use solana_transaction_status_client_types::UiTransactionTokenBalance;
 
 use crate::types::Job;
@@ -31,14 +35,21 @@ pub type SvmLog = solana_client::rpc_response::Response<
 pub type SvmTransactionDetails = TransactionDetails;
 pub type RawSvmTransaction = EncodedConfirmedTransactionWithStatusMeta;
 
+const SPL_TOKEN_PROGRAM: Pubkey =
+    pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+
+const SPL_INITIALIZE_ACCOUNT: u8 = 1;
+const SPL_INITIALIZE_ACCOUNT3: u8 = 18;
+
 pub struct SvmTransaction {
     pub signature: Signature,
     pub slot: u64,
     pub block_time: i64,
     pub signatures: Vec<Signature>,
     pub message: VersionedMessage,
-    pub writable_accounts: Vec<String>,
     pub accounts: Vec<String>,
+    pub writable_accounts: Vec<String>,
+    pub transient_accounts: Vec<TransientAccount>,
     pub inner_instructions: Vec<UiInnerInstructions>,
     pub pre_token_balances: Vec<UiTransactionTokenBalance>,
     pub post_token_balances: Vec<UiTransactionTokenBalance>,
@@ -100,6 +111,13 @@ impl Job {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct TransientAccount {
+    pub account: String,
+    pub owner: String,
+    pub mint: String,
+}
+
 impl TryInto<SvmTransaction> for RawSvmTransaction {
     type Error = anyhow::Error;
 
@@ -137,6 +155,92 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
         accounts.extend(loaded_addresses.writable.clone());
         accounts.extend(loaded_addresses.readonly.clone());
 
+        let mut transient_accounts = vec![];
+
+        for (i, instruction) in
+            transaction.message.instructions().iter().enumerate()
+        {
+            for inner_instruction in inner_instructions
+                .iter()
+                .find(|inner| inner.index == i as u8)
+                .into_iter()
+                .flat_map(|inner| inner.instructions.iter())
+            {
+                if let UiInstruction::Compiled(inner_instruction) =
+                    inner_instruction
+                {
+                    let inner_program = Pubkey::from_str(
+                        &accounts[inner_instruction.program_id_index as usize],
+                    )
+                    .expect("account index out of bounds");
+
+                    if inner_program != SPL_TOKEN_PROGRAM {
+                        continue;
+                    }
+
+                    let slice = bs58::decode(&inner_instruction.data)
+                        .into_vec()
+                        .expect("failed to decode data");
+
+                    if slice[0] == SPL_INITIALIZE_ACCOUNT {
+                        transient_accounts.push(TransientAccount {
+                            account: accounts
+                                [inner_instruction.accounts[0] as usize]
+                                .to_owned(),
+                            mint: accounts
+                                [inner_instruction.accounts[1] as usize]
+                                .to_owned(),
+                            owner: accounts
+                                [inner_instruction.accounts[2] as usize]
+                                .to_owned(),
+                        });
+                    } else if slice[0] == SPL_INITIALIZE_ACCOUNT3 {
+                        transient_accounts.push(TransientAccount {
+                            account: accounts
+                                [inner_instruction.accounts[0] as usize]
+                                .to_owned(),
+                            mint: accounts
+                                [inner_instruction.accounts[1] as usize]
+                                .to_owned(),
+                            owner: bs58::encode(&slice[1..33]).into_string(),
+                        });
+                    }
+                }
+            }
+
+            // We care only about SPL Token program
+            let program = Pubkey::from_str(
+                &accounts[instruction.program_id_index as usize],
+            )
+            .expect("account index out of bounds");
+
+            if program != SPL_TOKEN_PROGRAM {
+                continue;
+            }
+
+            if let Some(discriminator) = instruction.data.get(0) {
+                if discriminator == &SPL_INITIALIZE_ACCOUNT {
+                    transient_accounts.push(TransientAccount {
+                        account: accounts[instruction.accounts[0] as usize]
+                            .to_owned(),
+                        mint: accounts[instruction.accounts[1] as usize]
+                            .to_owned(),
+                        owner: accounts[instruction.accounts[2] as usize]
+                            .to_owned(),
+                    });
+                } else if discriminator == &SPL_INITIALIZE_ACCOUNT3 {
+                    transient_accounts.push(TransientAccount {
+                        account: accounts[instruction.accounts[0] as usize]
+                            .to_owned(),
+                        mint: accounts[instruction.accounts[1] as usize]
+                            .to_owned(),
+                        owner: bs58::encode(&instruction.data[1..33])
+                            .into_string(),
+                    });
+                }
+            }
+        }
+
         Ok(SvmTransaction {
             signature: *transaction.get_signature(),
             slot: self.slot,
@@ -144,6 +248,7 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
             signatures: transaction.signatures,
             message: transaction.message,
             writable_accounts: loaded_addresses.writable,
+            transient_accounts,
             accounts,
             inner_instructions,
             pre_token_balances: meta.pre_token_balances.unwrap_or(vec![]),
