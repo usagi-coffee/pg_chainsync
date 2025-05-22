@@ -177,14 +177,22 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                     }
 
                     // Filter out instruction discriminator if specified
-                    if let Some(discriminator) =
-                        job.options.instruction_discriminator
+                    if let Some(discriminators) =
+                        &job.options.instruction_discriminators
                     {
                         let slice = bs58::decode(&inner_instruction.data)
                             .into_vec()
                             .unwrap();
 
-                        if slice[0] != discriminator {
+                        let mut found = false;
+                        for discriminator in discriminators {
+                            if &slice[0] == discriminator {
+                                found = true;
+                                break;
+                            }
+                        }
+
+                        if !found {
                             continue;
                         }
                     }
@@ -297,8 +305,18 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
             }
 
             // Filter out instruction discriminator if specified
-            if let Some(discriminator) = job.options.instruction_discriminator {
-                if instruction.data[0] != discriminator {
+            if let Some(discriminators) =
+                &job.options.instruction_discriminators
+            {
+                let mut found = false;
+                for discriminator in discriminators {
+                    if &instruction.data[0] == discriminator {
+                        found = true;
+                        break;
+                    }
+                }
+
+                if !found {
                     continue;
                 }
             }

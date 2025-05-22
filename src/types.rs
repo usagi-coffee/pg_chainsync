@@ -113,8 +113,8 @@ pub struct JobOptions {
     // Transaction job
     pub transaction_handler: Option<String>,
     pub instruction_handler: Option<String>,
-    // Filters instructions by the specific discriminator
-    pub instruction_discriminator: Option<u8>,
+    // Filters instructions by the specific discriminators
+    pub instruction_discriminators: Option<Vec<u8>>,
 
     // EVM: Filter options
     pub evm: Option<bool>,
