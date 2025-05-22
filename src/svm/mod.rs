@@ -49,7 +49,7 @@ pub struct SvmTransaction {
     pub message: VersionedMessage,
     pub accounts: Vec<String>,
     pub writable_accounts: Vec<String>,
-    pub transient_accounts: Vec<TransientAccount>,
+    pub initialized_accounts: Vec<InitializedAccount>,
     pub inner_instructions: Vec<UiInnerInstructions>,
     pub pre_token_balances: Vec<UiTransactionTokenBalance>,
     pub post_token_balances: Vec<UiTransactionTokenBalance>,
@@ -112,7 +112,7 @@ impl Job {
 }
 
 #[derive(Debug, Clone)]
-pub struct TransientAccount {
+pub struct InitializedAccount {
     pub account: String,
     pub owner: String,
     pub mint: String,
@@ -155,7 +155,7 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
         accounts.extend(loaded_addresses.writable.clone());
         accounts.extend(loaded_addresses.readonly.clone());
 
-        let mut transient_accounts = vec![];
+        let mut initialized_accounts = vec![];
 
         for (i, instruction) in
             transaction.message.instructions().iter().enumerate()
@@ -183,7 +183,7 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
                         .expect("failed to decode data");
 
                     if slice[0] == SPL_INITIALIZE_ACCOUNT {
-                        transient_accounts.push(TransientAccount {
+                        initialized_accounts.push(InitializedAccount {
                             account: accounts
                                 [inner_instruction.accounts[0] as usize]
                                 .to_owned(),
@@ -195,7 +195,7 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
                                 .to_owned(),
                         });
                     } else if slice[0] == SPL_INITIALIZE_ACCOUNT3 {
-                        transient_accounts.push(TransientAccount {
+                        initialized_accounts.push(InitializedAccount {
                             account: accounts
                                 [inner_instruction.accounts[0] as usize]
                                 .to_owned(),
@@ -220,7 +220,7 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
 
             if let Some(discriminator) = instruction.data.get(0) {
                 if discriminator == &SPL_INITIALIZE_ACCOUNT {
-                    transient_accounts.push(TransientAccount {
+                    initialized_accounts.push(InitializedAccount {
                         account: accounts[instruction.accounts[0] as usize]
                             .to_owned(),
                         mint: accounts[instruction.accounts[1] as usize]
@@ -229,7 +229,7 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
                             .to_owned(),
                     });
                 } else if discriminator == &SPL_INITIALIZE_ACCOUNT3 {
-                    transient_accounts.push(TransientAccount {
+                    initialized_accounts.push(InitializedAccount {
                         account: accounts[instruction.accounts[0] as usize]
                             .to_owned(),
                         mint: accounts[instruction.accounts[1] as usize]
@@ -248,7 +248,7 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
             signatures: transaction.signatures,
             message: transaction.message,
             writable_accounts: loaded_addresses.writable,
-            transient_accounts,
+            initialized_accounts,
             accounts,
             inner_instructions,
             pre_token_balances: meta.pre_token_balances.unwrap_or(vec![]),

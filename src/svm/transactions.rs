@@ -221,13 +221,13 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                                     warning!("sync: svm: transactins: balance does not have an owner!");
                                 }
 
-                                // Lookup transient owners
-                                if let Some(transient) = tx
-                                    .transient_accounts
+                                // Lookup initialized owners
+                                if let Some(initialized) = tx
+                                    .initialized_accounts
                                     .iter()
-                                    .find(|transient| transient.account == tx.accounts[index])
+                                    .find(|initialized| initialized.account == tx.accounts[index])
                                 {
-                                    return Some(&transient.owner);
+                                    return Some(&initialized.owner);
                                 }
 
                                 None
@@ -245,13 +245,15 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                                 return Some(&balance.mint);
                             }
 
-                            // Lookup transient mints
-                            if let Some(transient) =
-                                tx.transient_accounts.iter().find(|transient| {
-                                    transient.account == tx.accounts[index]
+                            // Lookup initialized mints
+                            if let Some(initialized) = tx
+                                .initialized_accounts
+                                .iter()
+                                .find(|initialized| {
+                                    initialized.account == tx.accounts[index]
                                 })
                             {
-                                return Some(&transient.mint);
+                                return Some(&initialized.mint);
                             }
 
                             None
@@ -330,13 +332,13 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                         warning!("sync: svm: transactins: balance does not have an owner!");
                     }
 
-                    // Lookup transient owners
-                    if let Some(transient) = tx
-                        .transient_accounts
+                    // Lookup initialized owners
+                    if let Some(initialized) = tx
+                        .initialized_accounts
                         .iter()
-                        .find(|transient| transient.account == tx.accounts[index])
+                        .find(|initialized| initialized.account == tx.accounts[index])
                     {
-                        return Some(&transient.owner);
+                        return Some(&initialized.owner);
                     }
 
                     None
@@ -353,13 +355,13 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                         return Some(&balance.mint);
                     }
 
-                    // Lookup transient mints
-                    if let Some(transient) =
-                        tx.transient_accounts.iter().find(|transient| {
-                            transient.account == tx.accounts[index]
+                    // Lookup initialized mints
+                    if let Some(initialized) =
+                        tx.initialized_accounts.iter().find(|initialized| {
+                            initialized.account == tx.accounts[index]
                         })
                     {
-                        return Some(&transient.mint);
+                        return Some(&initialized.mint);
                     }
 
                     None
