@@ -18,11 +18,20 @@ fi
 
 # Build extension
 cargo pgrx package -d
+if [ $? -ne 0 ]; then
+  echo "Failed to build the extension"
+  exit 1
+fi
 
 # Copy the example script to the dev directory so it gets mounted
 cp "$1" dev/dev.sql
 
 podman-compose build
+if [ $? -ne 0 ]; then
+  echo "Failed to build the containers"
+  exit 1
+fi
+
 sleep 1
 podman-compose up
 
