@@ -20,6 +20,8 @@ BEGIN
     RETURN;
   END IF;
 
+  bytes := base58.decode(inst.data);
+
   discriminator := get_byte(bytes, 0);
   IF discriminator = 3 THEN
     source := inst.accounts[1]; -- or accounts_owners[1]
@@ -29,7 +31,6 @@ BEGIN
     destination := inst.accounts[3]; -- or accounts_owners[3]
   END IF;
 
-  bytes := base58.decode(inst.data);
   SELECT
     get_byte(bytes, 1) +
     get_byte(bytes, 2) * 256 +
