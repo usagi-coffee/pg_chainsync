@@ -72,7 +72,7 @@ SELECT chainsync.register(
     "program": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
     "mentions": ["<your_token>"],
     "instruction_handler": "svm_transfer_handler",
-    "instruction_discriminators": [3, 12, 7, 8],
+    "instruction_discriminators": [3, 7, 8, 12],
 
     "decimals": 6
   }'::JSONB

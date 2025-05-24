@@ -230,6 +230,7 @@ The extension is configurable through `postgresql.conf` file, here are the suppo
 | chainsync.database            | Database name the extension will run on                         | postgres |
 | chainsync.evm_ws_permits      | Number of concurrent tasks that can run using the same provider | 1        |
 | chainsync.evm_blocktick_reset | Number of range fetches before trying to reset after reductions | 1        |
+| chainsync.svm_rpc_permits     | Number of rpc fetches that can run concurrently in a task       | 1        |
 
 ## License
 

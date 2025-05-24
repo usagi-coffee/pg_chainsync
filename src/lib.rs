@@ -144,7 +144,7 @@ extension_sql_file!("../sql/types.sql", name = "types_schema");
 
 use worker::{
     DATABASE, EVM_BLOCKTICK_RESET, EVM_TASKS, EVM_WS_PERMITS, RESTART_COUNT,
-    SIGNALS, SVM_TASKS, WORKER_STATUS,
+    SIGNALS, SVM_RPC_PERMITS, SVM_TASKS, WORKER_STATUS,
 };
 
 #[pg_guard]
@@ -182,6 +182,17 @@ pub extern "C-unwind" fn _PG_init() {
         &EVM_BLOCKTICK_RESET,
         1,
         999999,
+        GucContext::Postmaster,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_int_guc(
+        "chainsync.svm_ws_permits",
+        "number of permits per rpc key in a single task",
+        "number of permits per rpc ket in a single task",
+        &SVM_RPC_PERMITS,
+        1,
+        999,
         GucContext::Postmaster,
         GucFlags::default(),
     );

@@ -8,15 +8,16 @@ use pgrx::{log, warning, JsonB};
 use solana_sdk::commitment_config::CommitmentLevel;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
+use solana_transaction_status_client_types::EncodedConfirmedTransactionWithStatusMeta;
 
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Semaphore};
 use tokio::time::{sleep_until, Duration, Instant};
 
 use super::transactions;
 use super::{blocks, SvmTransaction};
 use crate::channel::Channel;
 use crate::types::*;
-use crate::worker::SVM_TASKS;
+use crate::worker::{SVM_RPC_PERMITS, SVM_TASKS};
 
 pub async fn handle_tasks(channel: Arc<Channel>) {
     loop {
@@ -218,7 +219,7 @@ async fn handle_transactions_task(
     job: Arc<Job>,
     channel: &Arc<Channel>,
 ) -> Result<(), anyhow::Error> {
-    let rpc = job.reconnect_svm_rpc().await;
+    let rpc = Arc::new(job.reconnect_svm_rpc().await);
 
     let Some(mentions) = job.options.mentions.as_ref() else {
         bail!("mentions field is required for transaction task");
@@ -266,59 +267,76 @@ async fn handle_transactions_task(
       }
     }
 
-    let mut retries = 0;
-    'transactions: loop {
-        ensure!(
-            retries < 10,
-            "failed to get transaction after 10 retries, aborting..."
-        );
+    let mut queue: Vec<
+        oneshot::Receiver<EncodedConfirmedTransactionWithStatusMeta>,
+    > = Vec::new();
+    queue.reserve_exact(signatures.len());
 
-        for signature in &signatures {
-            let signature = Signature::from_str(signature.signature.as_str())?;
+    let config = transactions::build_config(&job.options);
 
-            let tx = match rpc
-                .get_transaction_with_config(
-                    &signature,
-                    transactions::build_config(&job.options),
-                )
-                .await
-            {
-                Ok(tx) => tx,
-                Err(error) => {
-                    warning!(
-                        "sync: svm: tasks: {}: {}: failed to get transaction with {}, retrying",
-                        &job.name,
-                        &signature,
-                        error
-                    );
+    let semaphore = Arc::new(Semaphore::new(SVM_RPC_PERMITS.get() as usize));
+    for signature in &signatures {
+        let signature = Signature::from_str(signature.signature.as_str())?;
 
-                    retries += 1;
-                    sleep_until(Instant::now() + Duration::from_millis(250))
-                        .await;
-                    continue 'transactions;
-                }
-            };
+        let (tx, rx) = oneshot::channel();
+        queue.push(rx);
 
-            retries = 0;
+        let semaphore = Arc::clone(&semaphore);
+        let rpc = Arc::clone(&rpc);
+        let job = Arc::clone(&job);
+        tokio::spawn(async move {
+            let permit = semaphore.acquire().await;
 
-            match tx.try_into() as Result<SvmTransaction, anyhow::Error> {
-                Ok(tx) => {
-                    if !tx.failed {
-                        channel.send(Message::SvmTransaction(tx, job.clone()));
+            loop {
+                match rpc.get_transaction_with_config(&signature, config).await
+                {
+                    Ok(transaction) => {
+                        tx.send(transaction).expect("sender got dropped")
                     }
-                }
-                Err(error) => {
-                    warning!(
-                        "sync: svm: tasks: {}: {}: transaction validation failed with {}",
-                        &job.name,
-                        &signature,
-                        error
-                    );
+                    Err(error) => {
+                        warning!(
+                            "sync: svm: tasks: {}: {}: failed to get transaction with {}, retrying",
+                            &job.name,
+                            &signature,
+                            error
+                        );
+
+                        sleep_until(
+                            Instant::now() + Duration::from_millis(1000),
+                        )
+                        .await;
+                        continue;
+                    }
+                };
+
+                break;
+            }
+
+            drop(permit);
+        });
+    }
+
+    for (index, rx) in queue.iter_mut().enumerate() {
+        let signature = &signatures[index].signature;
+        let Ok(tx) = rx.await else {
+            bail!("failed to receive transaction");
+        };
+
+        match tx.try_into() as Result<SvmTransaction, anyhow::Error> {
+            Ok(tx) => {
+                if !tx.failed {
+                    channel.send(Message::SvmTransaction(tx, job.clone()));
                 }
             }
-        }
-
-        break;
+            Err(error) => {
+                bail!(
+                  "sync: svm: tasks: {}: {}: transaction validation failed with {}",
+                  &job.name,
+                  &signature,
+                  error
+                );
+            }
+        };
     }
 
     Ok(())
