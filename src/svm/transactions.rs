@@ -108,7 +108,7 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
     };
 
     // Owners from the database
-    let lookedup_owners = match &job.options.account_owner_fetcher {
+    let lookedup_owners = match &job.options.account_owner_lookup {
         Some(handler) => tx
             .accounts
             .iter()
@@ -123,7 +123,7 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
     };
 
     // Mints from the database
-    let lookedup_mints = match &job.options.account_mint_fetcher {
+    let lookedup_mints = match &job.options.account_mint_lookup {
         Some(handler) => tx
             .accounts
             .iter()

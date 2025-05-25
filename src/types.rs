@@ -163,9 +163,9 @@ pub struct JobOptions {
     // Filters instructions by the specific discriminators
     pub instruction_discriminators: Option<Vec<u8>>,
     /// If defined it will fetch account owner from the database before inserting instruction/transaction
-    pub account_owner_fetcher: Option<Arc<str>>,
+    pub account_owner_lookup: Option<Arc<str>>,
     /// If defined it will fetch account mint from the database before inserting instruction/transaction
-    pub account_mint_fetcher: Option<Arc<str>>,
+    pub account_mint_lookup: Option<Arc<str>>,
 
     // EVM: Filter options
     pub evm: Option<bool>,
