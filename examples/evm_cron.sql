@@ -23,9 +23,8 @@ $$ LANGUAGE SQL;
 SELECT chainsync.register(
   'frequent-logs',
   '{
-    "ws": "ws://pg-chainsync-foundry:8545",
-    "cron": "0 * * * * *",
     "oneshot": true,
+    "cron": "0 * * * * *",
 
     "setup_handler": "cron_setup_handler",
     "success_handler": "cron_success_handler",
@@ -35,7 +34,7 @@ SELECT chainsync.register(
 
       "event": "Transfer(address,address,uint256)",
       "address": "5FbDB2315678afecb367f032d93F642f64180aa3",
-      "log_handler": "cron_log_handler",
+      "log_handler": "cron_log_handler"
     },
 
     "count": 0

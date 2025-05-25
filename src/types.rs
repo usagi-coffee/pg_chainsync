@@ -199,10 +199,12 @@ pub struct JobOptions {
 impl JobOptions {
     pub fn is_block_job(&self) -> bool {
         if let Some(options) = &self.evm {
-            return matches!(options.block_handler, Some(_));
+            return options.block_handler.is_some()
+                && options.log_handler.is_none();
         } else if let Some(options) = &self.svm {
-            return matches!(options.block_handler, Some(_))
-                || matches!(options.block_handler, Some(_));
+            return options.block_handler.is_some()
+                && options.log_handler.is_none()
+                && options.transaction_handler.is_none();
         }
 
         false
@@ -210,9 +212,9 @@ impl JobOptions {
 
     pub fn is_log_job(&self) -> bool {
         if let Some(options) = &self.evm {
-            return matches!(options.log_handler, Some(_));
+            return options.log_handler.is_some();
         } else if let Some(options) = &self.svm {
-            return matches!(options.log_handler, Some(_));
+            return options.log_handler.is_some();
         }
 
         false
@@ -220,8 +222,8 @@ impl JobOptions {
 
     pub fn is_transaction_job(&self) -> bool {
         if let Some(options) = &self.svm {
-            return matches!(options.transaction_handler, Some(_))
-                || matches!(options.instruction_handler, Some(_));
+            return options.log_handler.is_some()
+                || options.transaction_handler.is_some();
         }
 
         false
