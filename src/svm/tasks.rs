@@ -98,11 +98,11 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
 
             let task = {
                 if job.options.is_block_job() {
-                    handle_blocks_task(Arc::clone(&job), &channel).await
+                    handle_blocks_task(job.clone(), &channel).await
                 } else if job.options.is_log_job() {
                     Err(anyhow!("log tasks are not supported yet"))
                 } else if job.options.is_transaction_job() {
-                    handle_transactions_task(Arc::clone(&job), &channel).await
+                    handle_transactions_task(job.clone(), &channel).await
                 } else {
                     Err(anyhow!("unknown task"))
                 }
@@ -186,7 +186,7 @@ async fn handle_blocks_task(
                 .await
             {
                 Ok(block) => {
-                    channel.send(Message::SvmBlock(block, Arc::clone(&job)));
+                    channel.send(Message::SvmBlock(block, job.clone()));
                 }
                 Err(error) => {
                     warning!(

@@ -193,9 +193,9 @@ pub async fn handle_evm_log(
 
             if !channel.send(Message::ReturnHandlerWithArg(
                 PostgresReturn::BigInt(block as i64),
-                check_block_handler.to_owned(),
+                check_block_handler.clone(),
                 PostgresSender::BigInt(tx),
-                Arc::clone(job),
+                job.clone(),
             )) {
                 bail!(
                     "sync: evm: logs: {}, failed to send check block message",
@@ -203,13 +203,23 @@ pub async fn handle_evm_log(
                 );
             }
 
-            if let Err(_) = rx.await {
-                match try_block(block, &job).await {
+            match rx.await {
+                Ok(found) => {
+                    if found != block as i64 {
+                        bail!(
+                            "sync: evm: logs: {}, block check handler returned {} instead of {}",
+                            &job.name,
+                            found,
+                            block
+                        );
+                    }
+                }
+                Err(_) => match try_block(block, &job).await {
                     Ok(block) => {
                         ensure!(
                             channel.send(Message::EvmBlock(
                                 block.header,
-                                Arc::clone(job),
+                                job.clone(),
                             )),
                             "sync: evm: logs: {}, failed to send block {}<{}>",
                             &job.name,
@@ -225,8 +235,8 @@ pub async fn handle_evm_log(
                             error
                         );
                     }
-                }
-            }
+                },
+            };
         } else {
             bail!(
                 "sync: evm: logs: {}, no block check handler provided",
@@ -236,7 +246,7 @@ pub async fn handle_evm_log(
     }
 
     ensure!(
-        channel.send(Message::EvmLog(log, Arc::clone(job))),
+        channel.send(Message::EvmLog(log, job.clone())),
         "sync: evm: logs: {}: failed to send {}<{}>",
         &job.name,
         transaction,

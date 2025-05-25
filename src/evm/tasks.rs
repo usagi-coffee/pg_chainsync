@@ -193,7 +193,7 @@ async fn handle_blocks_task(
     for number in from..to {
         let block = try_block(number as u64, &job).await?;
         ensure!(
-            channel.send(Message::EvmBlock(block.header, Arc::clone(&job))),
+            channel.send(Message::EvmBlock(block.header, job.clone())),
             "failed to send block to channel",
         );
     }

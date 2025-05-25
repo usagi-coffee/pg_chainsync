@@ -151,7 +151,7 @@ pub struct JobOptions {
     pub log_handler: Option<Arc<str>>,
     /// If defined it awaits for block before calling the handler
     pub await_block: Option<bool>,
-    /// If defined it awaits for block before calling the handler
+    /// If defined it will skip the log from processing
     pub block_check_handler: Option<Arc<str>>,
 
     // Transaction job
@@ -162,6 +162,10 @@ pub struct JobOptions {
     pub instruction_handler: Option<Arc<str>>,
     // Filters instructions by the specific discriminators
     pub instruction_discriminators: Option<Vec<u8>>,
+    /// If defined it will fetch account owner from the database before inserting instruction/transaction
+    pub account_owner_fetcher: Option<Arc<str>>,
+    /// If defined it will fetch account mint from the database before inserting instruction/transaction
+    pub account_mint_fetcher: Option<Arc<str>>,
 
     // EVM: Filter options
     pub evm: Option<bool>,

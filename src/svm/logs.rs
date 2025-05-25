@@ -172,7 +172,7 @@ pub async fn handle_svm_log(
 
     if let Some(_) = &job.options.log_handler {
         ensure!(
-            channel.send(Message::SvmLog(log, Arc::clone(job))),
+            channel.send(Message::SvmLog(log, job.clone())),
             "sync: svm: logs: {}: failed to send log",
             &job.name
         );

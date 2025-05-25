@@ -141,7 +141,7 @@ pub async fn handle_block(
     log!("sync: evm: blocks: {}: found {}", &job.name, number);
 
     ensure!(
-        channel.send(Message::EvmBlock(block, Arc::clone(job))),
+        channel.send(Message::EvmBlock(block, job.clone())),
         "sync: evm: blocks: {}: failed to send block to channel",
         &job.name
     );

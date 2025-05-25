@@ -3,9 +3,9 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use pgrx::bgworkers::*;
 use pgrx::log;
 use pgrx::prelude::*;
-use pgrx::{bgworkers::*, JsonB};
 
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -393,26 +393,13 @@ async fn handle_message(mut stream: MessageStream) {
                 svm_txs.fetch_add(1, Ordering::Relaxed);
                 svm::transactions::handle_transaction_message(message, job);
             }
-            Message::Handler(handler, oneshot, job) => {
+            Message::Handler(handler, sender, job) => {
                 let id = job.id as i32;
                 match anyhow_pg_try!(|| Job::handler(&handler, id)) {
                     Ok(_) => {
-                        if let Err(_) = oneshot.send(true) {
-                            warning!(
-                                "sync: messages: {}: {} failed to return, task is probably deadlocked!",
-                                job.id, handler
-                            );
-                        }
+                        let _ = sender.send(true);
                     }
-                    Err(error) => {
-                        warning!(
-                            "sync: messages: {}: {} failed with {}",
-                            job.id,
-                            handler,
-                            error
-                        );
-                        drop(oneshot);
-                    }
+                    Err(_) => {}
                 };
             }
             Message::ReturnHandler(handler, sender, job) => {
@@ -420,61 +407,34 @@ async fn handle_message(mut stream: MessageStream) {
 
                 let result: Result<PostgresReturn, _> = match &sender {
                     PostgresSender::Void(_) => {
-                        anyhow_pg_try!(|| Job::return_handler::<()>(
-                            &handler, id
-                        ))
-                        .map(|_| PostgresReturn::Void)
+                        anyhow_pg_try!(|| Job::return_handler(&handler, id))
+                            .map(|_: ()| PostgresReturn::Void)
                     }
                     PostgresSender::Integer(_) => {
-                        anyhow_pg_try!(|| Job::return_handler::<i32>(
-                            &handler, id
-                        ))
-                        .map(|r| PostgresReturn::Integer(r))
+                        anyhow_pg_try!(|| Job::return_handler(&handler, id))
+                            .map(|r| PostgresReturn::Integer(r))
                     }
                     PostgresSender::BigInt(_) => {
-                        anyhow_pg_try!(|| Job::return_handler::<i64>(
-                            &handler, id
-                        ))
-                        .map(|r| PostgresReturn::BigInt(r))
+                        anyhow_pg_try!(|| Job::return_handler(&handler, id))
+                            .map(|r| PostgresReturn::BigInt(r))
                     }
                     PostgresSender::String(_) => {
-                        anyhow_pg_try!(|| Job::return_handler::<String>(
-                            &handler, id
-                        ))
-                        .map(|r| PostgresReturn::String(r))
+                        anyhow_pg_try!(|| Job::return_handler(&handler, id))
+                            .map(|r| PostgresReturn::String(r))
                     }
                     PostgresSender::Boolean(_) => {
-                        anyhow_pg_try!(|| Job::return_handler::<bool>(
-                            &handler, id
-                        ))
-                        .map(|r| PostgresReturn::Boolean(r))
+                        anyhow_pg_try!(|| Job::return_handler(&handler, id))
+                            .map(|r| PostgresReturn::Boolean(r))
                     }
                     PostgresSender::Json(_) => {
-                        anyhow_pg_try!(|| Job::return_handler::<JsonB>(
-                            &handler, id
-                        ))
-                        .map(|r| PostgresReturn::Json(r))
+                        anyhow_pg_try!(|| Job::return_handler(&handler, id))
+                            .map(|r| PostgresReturn::Json(r))
                     }
                 };
 
-                match result {
-                    Ok(arg) => {
-                        if !sender.send(arg) {
-                            warning!(
-                              "sync: messages: {}: {} failed to return, task is probably deadlocked!",
-                              job.id, handler
-                          );
-                        }
-                    }
-                    Err(error) => {
-                        warning!(
-                            "sync: messages: {}: {} failed with {}",
-                            job.id,
-                            handler,
-                            error
-                        );
-                    }
-                };
+                if let Ok(arg) = result {
+                    sender.send(arg);
+                }
             }
             Message::ReturnHandlerWithArg(arg, handler, sender, job) => {
                 let id = job.id as i32;
@@ -511,24 +471,9 @@ async fn handle_message(mut stream: MessageStream) {
                     _ => continue,
                 };
 
-                match result {
-                    Ok(result) => {
-                        if !sender.send(result) {
-                            warning!(
-                              "sync: messages: {}: {} failed to return, task is probably deadlocked!",
-                              job.id, handler
-                          );
-                        }
-                    }
-                    Err(error) => {
-                        warning!(
-                            "sync: messages: {}: {} failed with {}",
-                            job.id,
-                            handler,
-                            error
-                        );
-                    }
-                };
+                if let Ok(result) = result {
+                    sender.send(result);
+                }
             }
             Message::Shutdown => {
                 break;

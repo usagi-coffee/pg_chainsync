@@ -94,8 +94,8 @@ impl Job {
         .map_err(|e| e.into())
     }
 
-    pub fn return_handler<R: FromDatum + IntoDatum>(
-        handler: &Arc<str>,
+    pub fn return_handler<R: FromDatum + IntoDatum, S: std::fmt::Display>(
+        handler: S,
         job: i32,
     ) -> Result<R, anyhow::Error> {
         Spi::get_one_with_args::<R>(
@@ -107,11 +107,12 @@ impl Job {
     }
 
     pub fn return_handler_with_arg<
-        T: IntoDatum + FromDatum + UnwindSafe + RefUnwindSafe,
+        T: IntoDatum + UnwindSafe + RefUnwindSafe,
         R: FromDatum + IntoDatum,
+        S: std::fmt::Display,
     >(
         arg: T,
-        handler: &Arc<str>,
+        handler: S,
         job: i32,
     ) -> Result<R, anyhow::Error> {
         Spi::get_one_with_args::<R>(

@@ -167,7 +167,7 @@ pub async fn handle_block(
 
     log!("sync: svm: blocks: {}: found {}", &job.name, block_height);
     ensure!(
-        channel.send(Message::SvmBlock(block, Arc::clone(job))),
+        channel.send(Message::SvmBlock(block, job.clone())),
         "sync: svm: blocks: {}: failed to send",
         &job.name
     );

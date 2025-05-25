@@ -107,6 +107,36 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
         found
     };
 
+    // Owners from the database
+    let lookedup_owners = match &job.options.account_owner_fetcher {
+        Some(handler) => tx
+            .accounts
+            .iter()
+            .map(|account| {
+                anyhow_pg_try!(|| {
+                    Job::return_handler_with_arg(account, handler, id as i32)
+                })
+                .ok()
+            })
+            .collect::<Vec<_>>(),
+        None => tx.accounts.iter().map(|_| None).collect::<Vec<_>>(),
+    };
+
+    // Mints from the database
+    let lookedup_mints = match &job.options.account_mint_fetcher {
+        Some(handler) => tx
+            .accounts
+            .iter()
+            .map(|account| {
+                anyhow_pg_try!(|| {
+                    Job::return_handler_with_arg(account, handler, id as i32)
+                })
+                .ok()
+            })
+            .collect::<Vec<_>>(),
+        None => tx.accounts.iter().map(|_| None).collect::<Vec<_>>(),
+    };
+
     if let Some(instruction_handler) = &job.options.instruction_handler {
         for (i, instruction) in tx.message.instructions().iter().enumerate() {
             for (j, inner_instruction) in tx
@@ -188,9 +218,13 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                                 if let Some(initialized) = tx
                                     .initialized_accounts
                                     .iter()
-                                    .find(|initialized| initialized.account == tx.accounts[index])
+                                    .find(|initialized| initialized.address == tx.accounts[index])
                                 {
                                     return Some(&initialized.owner);
+                                }
+
+                                if let Some(owner) = &lookedup_owners[index] {
+                                    return Some(&owner);
                                 }
 
                                 None
@@ -213,10 +247,14 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                                 .initialized_accounts
                                 .iter()
                                 .find(|initialized| {
-                                    initialized.account == tx.accounts[index]
+                                    initialized.address == tx.accounts[index]
                                 })
                             {
                                 return Some(&initialized.mint);
+                            }
+
+                            if let Some(owner) = &lookedup_mints[index] {
+                                return Some(&owner);
                             }
 
                             None
@@ -309,9 +347,14 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                     if let Some(initialized) = tx
                         .initialized_accounts
                         .iter()
-                        .find(|initialized| initialized.account == tx.accounts[index])
+                        .find(|initialized| initialized.address == tx.accounts[index])
                     {
                         return Some(&initialized.owner);
+
+                    }
+
+                    if let Some(owner) = &lookedup_owners[index] {
+                        return Some(&owner);
                     }
 
                     None
@@ -331,10 +374,14 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                     // Lookup initialized mints
                     if let Some(initialized) =
                         tx.initialized_accounts.iter().find(|initialized| {
-                            initialized.account == tx.accounts[index]
+                            initialized.address == tx.accounts[index]
                         })
                     {
                         return Some(&initialized.mint);
+                    }
+
+                    if let Some(mint) = &lookedup_owners[index] {
+                        return Some(&mint);
                     }
 
                     None
