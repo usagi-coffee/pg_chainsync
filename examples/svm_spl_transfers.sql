@@ -6,6 +6,7 @@ CREATE TABLE transfers (
   PRIMARY KEY (source, destination, timestamp)
 );
 
+-- NOTICE: This is a very naive version because it does not handle the transactions where token mint was not mentioned but transfer happened
 CREATE FUNCTION svm_transfer_handler(inst chainsync.SvmInstruction, job JSONB) RETURNS VOID
 AS $$
 DECLARE
