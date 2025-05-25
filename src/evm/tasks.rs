@@ -179,7 +179,9 @@ async fn handle_blocks_task(
     job: Arc<Job>,
     channel: &Arc<Channel>,
 ) -> Result<(), anyhow::Error> {
-    let options = &job.options;
+    let Some(options) = &job.options.evm else {
+        bail!("sync: evm: tasks: {}: no evm options provided", &job.name);
+    };
 
     let from = options.from_block.unwrap_or(0);
     let to = {
@@ -268,7 +270,10 @@ async fn handle_log_task(
     job: Arc<Job>,
     channel: &Arc<Channel>,
 ) -> Result<(), anyhow::Error> {
-    let options = &job.options;
+    let Some(options) = &job.options.evm else {
+        bail!("sync: evm: tasks: {}: no evm options provided", &job.name);
+    };
+
     let mut client = job.reconnect_evm().await?;
 
     let latest = client.get_block_number().await?;

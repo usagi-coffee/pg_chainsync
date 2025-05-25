@@ -16,11 +16,12 @@ $$ LANGUAGE plpgsql;
 SELECT chainsync.register(
   'svm-simple-logs',
   '{
-    "svm": true,
     "ws": "...",
 
-    "mentions": ["..."],
-    "program": "...",
-    "log_handler": "svm_log_handler",
+    "svm": {
+      "mentions": ["..."],
+      "program": "...",
+      "log_handler": "svm_log_handler"
+    }
   }'::JSONB
 );

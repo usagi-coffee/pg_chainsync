@@ -18,12 +18,11 @@ $$ LANGUAGE SQL;
 SELECT chainsync.register(
   'simple-logs',
   '{
-    "evm": true,
     "ws": "ws://pg-chainsync-foundry:8545",
-
-    "event": "Transfer(address,address,uint256)",
-    "address": "5FbDB2315678afecb367f032d93F642f64180aa3",
-
-    "log_handler": "simple_log_handler"
+    "evm": {
+      "event": "Transfer(address,address,uint256)",
+      "address": "5FbDB2315678afecb367f032d93F642f64180aa3",
+      "log_handler": "simple_log_handler"
+    }
   }'::JSONB
 );

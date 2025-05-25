@@ -66,17 +66,17 @@ $$ LANGUAGE SQL;
 SELECT chainsync.register(
   'logs',
   '{
-    "evm": true,
     "ws": "ws://pg-chainsync-foundry:8545",
 
-    "log_handler": "log_handler",
+    "evm": {
+      "log_handler": "log_handler",
+      "address": "5FbDB2315678afecb367f032d93F642f64180aa3",
+      "event": "Transfer(address,address,uint256)",
 
-    "address": "5FbDB2315678afecb367f032d93F642f64180aa3",
-    "event": "Transfer(address,address,uint256)",
-
-    "await_block": true,
-    "block_handler": "block_handler",
-    "block_check_handler": "find_block",
+      "await_block": true,
+      "block_handler": "block_handler",
+      "block_skip_lookup": "find_block"
+    },
 
     "source": "unverified"
   }'::JSONB
@@ -94,14 +94,14 @@ DECLARE
 BEGIN
   -- Fetch latest verified block
   SELECT lo_block FROM logs
-  WHERE lo_address = (job->>'address')::TEXT AND lo_source = 'verified'
+  WHERE lo_address = (job->'evm'->>'address')::TEXT AND lo_source = 'verified'
   ORDER BY lo_block DESC LIMIT 1
   INTO from_block;
 
   RAISE LOG 'Setting from_block to the latest verified event at %', COALESCE(from_block, 0);
 
   -- Update the from_block
-  UPDATE chainsync.jobs SET options['from_block'] = TO_JSONB(COALESCE(from_block, 0))
+  UPDATE chainsync.jobs SET options = JSONB_SET(options, '{evm,from_block}', TO_JSONB(COALESCE(from_block, 0)))
   WHERE id = job_id
   RETURNING options INTO updated;
 
@@ -119,14 +119,14 @@ DECLARE
 BEGIN
   -- Fetch latest verified block
   SELECT lo_block FROM logs
-  WHERE lo_address = (job->>'address')::TEXT AND lo_source = 'verified'
+  WHERE lo_address = (job->'evm'->>'address')::TEXT AND lo_source = 'verified'
   ORDER BY lo_block DESC LIMIT 1
   INTO verified_block;
 
   -- Delete logs with unverified source below the cutoff - these should be orphaned
   DELETE FROM logs
   WHERE
-    lo_address = (job->>'address')::TEXT AND
+    lo_address = (job->'evm'->>'address')::TEXT AND
     lo_source = 'unverified' AND
     lo_block <= COALESCE(verified_block, 0);
 
@@ -143,24 +143,24 @@ $$ LANGUAGE plpgsql;
 SELECT chainsync.register(
   'verify-logs',
   '{
-    "evm": true,
     "ws": "ws://pg-chainsync-foundry:8545",
-
     "cron": "0 * * * * *",
-    "from_block": 0,
-    "to_block": -15,
-
-    "log_handler": "log_handler",
 
     "setup_handler": "sweep_reset",
     "success_handler": "sweep_unverified",
 
-    "address": "5FbDB2315678afecb367f032d93F642f64180aa3",
-    "event": "Transfer(address,address,uint256)",
+    "evm": {
+      "from_block": 0,
+      "to_block": -15,
 
-    "await_block": true,
-    "block_handler": "custom_block_handler",
-    "block_check_handler": "find_block",
+      "log_handler": "log_handler",
+      "address": "5FbDB2315678afecb367f032d93F642f64180aa3",
+      "event": "Transfer(address,address,uint256)",
+
+      "await_block": true,
+      "block_handler": "custom_block_handler",
+      "block_skip_lookup": "find_block"
+    },
 
     "source": "verified"
   }'::JSONB

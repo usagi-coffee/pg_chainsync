@@ -1,6 +1,6 @@
 use pgrx::{log, warning};
 
-use anyhow::{ensure, Context};
+use anyhow::{bail, ensure, Context};
 use solana_client::rpc_config::{
     RpcTransactionLogsConfig, RpcTransactionLogsFilter,
 };
@@ -157,6 +157,10 @@ pub async fn handle_svm_log(
     log: Response<RpcLogsResponse>,
     channel: &Channel,
 ) -> Result<(), anyhow::Error> {
+    let Some(options) = &job.options.svm else {
+        bail!("sync: svm: logs: {}: job options are not set", &job.name);
+    };
+
     log!(
         "sync: svm: logs: {}: found {} at {}",
         &job.name,
@@ -164,13 +168,13 @@ pub async fn handle_svm_log(
         &log.context.slot
     );
 
-    if job.options.transaction_handler.is_some()
-        || job.options.instruction_handler.is_some()
+    if options.transaction_handler.is_some()
+        || options.instruction_handler.is_some()
     {
         transactions::handle_log(job, &log, channel).await?;
     }
 
-    if let Some(_) = &job.options.log_handler {
+    if let Some(_) = &options.log_handler {
         ensure!(
             channel.send(Message::SvmLog(log, job.clone())),
             "sync: svm: logs: {}: failed to send log",
@@ -181,7 +185,7 @@ pub async fn handle_svm_log(
     Ok(())
 }
 
-pub fn build_config(_: &JobOptions) -> RpcTransactionLogsConfig {
+pub fn build_config(_: &SvmOptions) -> RpcTransactionLogsConfig {
     RpcTransactionLogsConfig {
         commitment: Some(CommitmentConfig {
             commitment: CommitmentLevel::Finalized,
@@ -189,7 +193,7 @@ pub fn build_config(_: &JobOptions) -> RpcTransactionLogsConfig {
     }
 }
 
-pub fn build_filter(options: &JobOptions) -> RpcTransactionLogsFilter {
+pub fn build_filter(options: &SvmOptions) -> RpcTransactionLogsFilter {
     if let Some(mentions) = &options.mentions {
         return RpcTransactionLogsFilter::Mentions(mentions.clone());
     }
@@ -202,10 +206,11 @@ pub async fn build_stream<'a>(
 ) -> anyhow::Result<
     Pin<Box<dyn Stream<Item = Response<RpcLogsResponse>> + 'a + Send>>,
 > {
-    let filter = build_filter(&job.options);
+    let options = job.options.svm.as_ref().expect("SVM options are not set");
+    let filter = build_filter(options);
     let provider = job.connect_svm_ws().await.context("Invalid provider")?;
     let sub = provider
-        .logs_subscribe(filter, build_config(&job.options))
+        .logs_subscribe(filter, build_config(options))
         .await?;
     Ok(sub.0)
 }

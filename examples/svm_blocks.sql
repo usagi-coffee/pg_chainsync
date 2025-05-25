@@ -15,8 +15,9 @@ $$ LANGUAGE SQL;
 SELECT chainsync.register(
   'svm-simple-blocks',
   '{
-    "svm": true,
     "ws": "...",
-    "block_handler": "svm_block_handler"
+    "svm": {
+      "block_handler": "svm_block_handler"
+    }
   }'::JSONB
 );

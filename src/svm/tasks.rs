@@ -157,7 +157,9 @@ async fn handle_blocks_task(
     job: Arc<Job>,
     channel: &Arc<Channel>,
 ) -> Result<(), anyhow::Error> {
-    let options = &job.options;
+    let Some(options) = &job.options.svm else {
+        bail!("sync: svm: tasks: {}: job options are not set", &job.name);
+    };
 
     let rpc = job.reconnect_svm_rpc().await;
 
@@ -213,9 +215,13 @@ async fn handle_transactions_task(
     job: Arc<Job>,
     channel: &Arc<Channel>,
 ) -> Result<(), anyhow::Error> {
+    let Some(options) = &job.options.svm else {
+        bail!("sync: svm: tasks: {}: job options are not set", &job.name);
+    };
+
     let rpc = Arc::new(job.reconnect_svm_rpc().await);
 
-    let Some(mentions) = job.options.mentions.as_ref() else {
+    let Some(mentions) = &options.mentions else {
         bail!("mentions field is required for transaction task");
     };
 
@@ -224,11 +230,11 @@ async fn handle_transactions_task(
     let mut before: Option<Signature> = None;
     let mut until: Option<Signature> = None;
 
-    if let Some(before_signature) = job.options.before.as_ref() {
+    if let Some(before_signature) = &options.before {
         before = Some(Signature::from_str(before_signature)?);
     }
 
-    if let Some(until_signature) = job.options.until.as_ref() {
+    if let Some(until_signature) = &options.until {
         until = Some(Signature::from_str(until_signature)?);
     }
 
@@ -295,7 +301,7 @@ async fn handle_transactions_task(
         oneshot::Receiver<EncodedConfirmedTransactionWithStatusMeta>,
     > = Vec::new();
 
-    if let Some(handler) = &job.options.transaction_check_handler {
+    if let Some(handler) = &options.transaction_check_handler {
         for signature in std::mem::take(&mut signatures) {
             let (tx, rx) = oneshot::channel::<String>();
             ensure!(

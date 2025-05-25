@@ -1,4 +1,5 @@
 use pgrx::{log, warning};
+use tokio::task::yield_now;
 
 use std::sync::Arc;
 
@@ -144,6 +145,10 @@ pub async fn handle_evm_log(
     log: alloy::rpc::types::Log,
     channel: &Channel,
 ) -> Result<(), anyhow::Error> {
+    let Some(options) = &job.options.evm else {
+        bail!("sync: evm: logs: {}, no evm options provided", &job.name);
+    };
+
     let Some(transaction) = log.transaction_hash else {
         warning!("sync: evm: logs: {}: found pending, skipping", &job.name);
         return Ok(());
@@ -159,7 +164,7 @@ pub async fn handle_evm_log(
         return Ok(());
     };
 
-    if let Some(event) = &job.options.event {
+    if let Some(event) = &options.event {
         let _ = keccak256(event.as_bytes());
         if !matches!(log.topic0(), Some(_)) {
             warning!(
@@ -170,7 +175,7 @@ pub async fn handle_evm_log(
             );
             return Ok(());
         }
-    } else if let Some(topic0) = &job.options.topic0 {
+    } else if let Some(topic0) = &options.topic0 {
         let _ = topic0.parse::<B256>().unwrap();
         if !matches!(log.topic0(), Some(_)) {
             warning!("sync: evm: logs: {}: topic0 does not match", &job.name);
@@ -187,13 +192,16 @@ pub async fn handle_evm_log(
     );
 
     // Await for block logic
-    if matches!(job.options.await_block, Some(true)) {
-        if let Some(check_block_handler) = &job.options.block_check_handler {
+    if matches!(options.await_block, Some(true)) {
+        if let Some(handler) = &options.block_skip_lookup {
+            // Let's yield in case the block listener does our work for us
+            yield_now().await;
+
             let (tx, rx) = oneshot::channel::<i64>();
 
             if !channel.send(Message::ReturnHandlerWithArg(
                 PostgresReturn::BigInt(block as i64),
-                check_block_handler.clone(),
+                handler.clone(),
                 PostgresSender::BigInt(tx),
                 job.clone(),
             )) {
@@ -256,7 +264,7 @@ pub async fn handle_evm_log(
     Ok(())
 }
 
-pub fn build_filter(options: &JobOptions, block: u64) -> Filter {
+pub fn build_filter(options: &EvmOptions, block: u64) -> Filter {
     let mut filter = Filter::new();
     filter = filter.from_block(BlockNumberOrTag::Latest);
 
@@ -313,7 +321,11 @@ pub async fn build_stream(
         .await
         .expect("failed to retrieve latest block") as u64;
 
-    let filter = build_filter(&job.options, block);
+    let filter = build_filter(
+        job.options.evm.as_ref().expect("evm options to be set"),
+        block,
+    );
+
     let sub = job
         .connect_evm()
         .await

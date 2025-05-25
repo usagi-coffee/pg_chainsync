@@ -73,6 +73,14 @@ use pgrx::bgworkers::BackgroundWorker;
 use crate::anyhow_pg_try;
 
 pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
+    let Some(options) = &job.options.svm else {
+        warning!(
+            "sync: svm: transactions: {}: job options are not set",
+            &job.name
+        );
+        return;
+    };
+
     let id = job.id;
 
     let get_balance = |index: u8| {
@@ -108,7 +116,7 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
     };
 
     // Owners from the database
-    let lookedup_owners = match &job.options.account_owner_lookup {
+    let lookedup_owners = match &options.account_owner_lookup {
         Some(handler) => tx
             .accounts
             .iter()
@@ -123,7 +131,7 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
     };
 
     // Mints from the database
-    let lookedup_mints = match &job.options.account_mint_lookup {
+    let lookedup_mints = match &options.account_mint_lookup {
         Some(handler) => tx
             .accounts
             .iter()
@@ -137,7 +145,7 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
         None => tx.accounts.iter().map(|_| None).collect::<Vec<_>>(),
     };
 
-    if let Some(instruction_handler) = &job.options.instruction_handler {
+    if let Some(instruction_handler) = &options.instruction_handler {
         for (i, instruction) in tx.message.instructions().iter().enumerate() {
             for (j, inner_instruction) in tx
                 .inner_instructions
@@ -150,7 +158,7 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                     inner_instruction
                 {
                     // Filter out program id if specified
-                    if let Some(program_id) = job.options.program {
+                    if let Some(program_id) = options.program {
                         let inner_program = Pubkey::from_str(
                             &tx.accounts
                                 [inner_instruction.program_id_index as usize],
@@ -163,7 +171,7 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
 
                     // Filter out instruction discriminator if specified
                     if let Some(discriminators) =
-                        &job.options.instruction_discriminators
+                        &options.instruction_discriminators
                     {
                         let slice = bs58::decode(&inner_instruction.data)
                             .into_vec()
@@ -287,7 +295,7 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
             }
 
             // Filter out program id if specified
-            if let Some(program_id) = job.options.program {
+            if let Some(program_id) = options.program {
                 if let Ok(program) = Pubkey::from_str(
                     &tx.accounts[instruction.program_id_index as usize],
                 ) {
@@ -298,9 +306,7 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
             }
 
             // Filter out instruction discriminator if specified
-            if let Some(discriminators) =
-                &job.options.instruction_discriminators
-            {
+            if let Some(discriminators) = &options.instruction_discriminators {
                 let mut found = false;
                 for discriminator in discriminators {
                     if &instruction.data[0] == discriminator {
@@ -404,7 +410,7 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
         }
     }
 
-    if let Some(transaction_handler) = &job.options.transaction_handler {
+    if let Some(transaction_handler) = &options.transaction_handler {
         log!(
             "sync: svm: transactions: {}: adding {}",
             &job.name,

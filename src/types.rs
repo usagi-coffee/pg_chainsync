@@ -120,40 +120,32 @@ pub struct Job {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct JobOptions {
-    /// RPC url to use for this job
-    pub rpc: Option<String>,
-    /// Websocket ws url to use for this job
-    pub ws: Option<String>,
+pub struct EvmOptions {
+    pub block_handler: Option<Arc<str>>,
+    pub log_handler: Option<Arc<str>>,
 
-    /// If defined it will start during immediately after database startup
-    pub preload: Option<bool>,
+    pub from_block: Option<i64>,
+    pub to_block: Option<i64>,
+    pub address: Option<String>,
+    pub event: Option<String>,
+    pub topic0: Option<String>,
+    pub topic1: Option<String>,
+    pub topic2: Option<String>,
+    pub topic3: Option<String>,
+
     /// If defined it will split the rpc calls by the value, use when rpc limits number of blocks per call
     pub blocktick: Option<i64>,
-
-    // Tasks
-    /// This modifies the job to not restart
-    pub oneshot: Option<bool>,
-    /// If defined will start the job on the given cron expression
-    pub cron: Option<String>,
-
-    // Handlers
-    pub setup_handler: Option<Arc<str>>,
-    pub success_handler: Option<Arc<str>>,
-    pub failure_handler: Option<Arc<str>>,
-
-    /// Block job
-    pub block_handler: Option<Arc<str>>,
-    // TODO: hashes vs full blocks?
-
-    // Log job
-    /// Function to call when handling events
-    pub log_handler: Option<Arc<str>>,
     /// If defined it awaits for block before calling the handler
     pub await_block: Option<bool>,
     /// If defined it will skip the log from processing
-    pub block_check_handler: Option<Arc<str>>,
+    pub block_skip_lookup: Option<Arc<str>>,
+}
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SvmOptions {
+    pub block_handler: Option<Arc<str>>,
+    /// Function to call when handling events
+    pub log_handler: Option<Arc<str>>,
     // Transaction job
     pub transaction_handler: Option<Arc<str>>,
     // If defined it will skip the transaction from processing
@@ -167,44 +159,72 @@ pub struct JobOptions {
     /// If defined it will fetch account mint from the database before inserting instruction/transaction
     pub account_mint_lookup: Option<Arc<str>>,
 
-    // EVM: Filter options
-    pub evm: Option<bool>,
-    pub from_block: Option<i64>,
-    pub to_block: Option<i64>,
-    pub address: Option<String>,
-    pub event: Option<String>,
-    pub topic0: Option<String>,
-    pub topic1: Option<String>,
-    pub topic2: Option<String>,
-    pub topic3: Option<String>,
-
-    // SVM: Filter options
-    pub svm: Option<bool>,
     pub from_slot: Option<u64>,
     pub to_slot: Option<u64>,
     pub mentions: Option<Vec<String>>,
+
     #[serde(default, with = "custom_pubkey")]
     pub program: Option<Pubkey>,
     pub before: Option<String>,
     pub until: Option<String>,
 
-    // SVM: Block Config
     pub transaction_details: Option<SvmTransactionDetails>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct JobOptions {
+    /// RPC url to use for this job
+    pub rpc: Option<String>,
+    /// Websocket ws url to use for this job
+    pub ws: Option<String>,
+
+    /// If defined it will start during immediately after database startup
+    pub preload: Option<bool>,
+
+    // Tasks
+    /// This modifies the job to not restart
+    pub oneshot: Option<bool>,
+    /// If defined will start the job on the given cron expression
+    pub cron: Option<String>,
+
+    // Handlers
+    pub setup_handler: Option<Arc<str>>,
+    pub success_handler: Option<Arc<str>>,
+    pub failure_handler: Option<Arc<str>>,
+
+    pub evm: Option<EvmOptions>,
+    pub svm: Option<SvmOptions>,
 }
 
 impl JobOptions {
     pub fn is_block_job(&self) -> bool {
-        matches!(self.log_handler, None)
-            && matches!(self.block_handler, Some(_))
+        if let Some(options) = &self.evm {
+            return matches!(options.block_handler, Some(_));
+        } else if let Some(options) = &self.svm {
+            return matches!(options.block_handler, Some(_))
+                || matches!(options.block_handler, Some(_));
+        }
+
+        false
     }
 
     pub fn is_log_job(&self) -> bool {
-        matches!(self.log_handler, Some(_))
+        if let Some(options) = &self.evm {
+            return matches!(options.log_handler, Some(_));
+        } else if let Some(options) = &self.svm {
+            return matches!(options.log_handler, Some(_));
+        }
+
+        false
     }
 
     pub fn is_transaction_job(&self) -> bool {
-        matches!(self.transaction_handler, Some(_))
-            || matches!(self.instruction_handler, Some(_))
+        if let Some(options) = &self.svm {
+            return matches!(options.transaction_handler, Some(_))
+                || matches!(options.instruction_handler, Some(_));
+        }
+
+        false
     }
 
     pub fn next_cron(&self) -> Option<DateTime<Utc>> {
@@ -259,14 +279,14 @@ pub trait JobsUtils {
 impl JobsUtils for Vec<Job> {
     fn evm_jobs(&self) -> Vec<Job> {
         self.iter()
-            .filter(|job| matches!(job.options.evm, Some(true)))
+            .filter(|job| matches!(job.options.evm, Some(_)))
             .cloned()
             .collect()
     }
 
     fn svm_jobs(&self) -> Vec<Job> {
         self.iter()
-            .filter(|job| matches!(job.options.svm, Some(true)))
+            .filter(|job| matches!(job.options.svm, Some(_)))
             .cloned()
             .collect()
     }

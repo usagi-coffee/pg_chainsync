@@ -99,7 +99,7 @@ mod chainsync {
 
         let id = Job::register(name.into(), options);
 
-        if matches!(configuration.evm, Some(true)) {
+        if matches!(configuration.evm, Some(_)) {
             if let Some(oneshot) = configuration.oneshot {
                 if oneshot {
                     if let Err(_) = EVM_TASKS.exclusive().push(id) {
@@ -107,7 +107,7 @@ mod chainsync {
                     }
                 }
             }
-        } else if matches!(configuration.svm, Some(true)) {
+        } else if matches!(configuration.svm, Some(_)) {
             if let Some(oneshot) = configuration.oneshot {
                 if oneshot {
                     if let Err(_) = SVM_TASKS.exclusive().push(id) {

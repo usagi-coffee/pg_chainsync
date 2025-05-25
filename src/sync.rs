@@ -139,9 +139,9 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
 
 pub fn preload_tasks(tasks: Vec<Job>) {
     for task in tasks {
-        if matches!(task.options.evm, Some(true)) {
+        if matches!(task.options.evm, Some(_)) {
             EVM_TASKS.exclusive().push(task.id).unwrap();
-        } else if matches!(task.options.svm, Some(true)) {
+        } else if matches!(task.options.svm, Some(_)) {
             SVM_TASKS.exclusive().push(task.id).unwrap();
         }
     }
@@ -200,9 +200,9 @@ pub async fn schedule_tasks(channel: Arc<Channel>) {
                             tokio::time::sleep(duration.to_std().unwrap())
                                 .await;
 
-                            if matches!(task.options.evm, Some(true)) {
+                            if matches!(task.options.evm, Some(_)) {
                                 EVM_TASKS.exclusive().push(task.id).unwrap();
-                            } else if matches!(task.options.svm, Some(true)) {
+                            } else if matches!(task.options.svm, Some(_)) {
                                 SVM_TASKS.exclusive().push(task.id).unwrap();
                             }
                         }
@@ -296,6 +296,10 @@ async fn handle_message(mut stream: MessageStream) {
                 }
             }
             Message::EvmBlock(block, job) => {
+                let Some(options) = &job.options.evm else {
+                    error!("sync: evm: blocks: {}: job is not EVM", job.name);
+                };
+
                 evm_blocks.fetch_add(1, Ordering::Relaxed);
                 log!(
                     "sync: evm: blocks: {}: adding {}",
@@ -303,7 +307,7 @@ async fn handle_message(mut stream: MessageStream) {
                     &block.number
                 );
 
-                let Some(handler) = job.options.block_handler.as_ref() else {
+                let Some(handler) = &options.block_handler else {
                     error!("sync: evm: blocks: {}: missing handler", job.name);
                 };
 
@@ -319,6 +323,10 @@ async fn handle_message(mut stream: MessageStream) {
                 }
             }
             Message::EvmLog(log, job) => {
+                let Some(options) = &job.options.evm else {
+                    error!("sync: evm: blocks: {}: job is not EVM", job.name);
+                };
+
                 evm_logs.fetch_add(1, Ordering::Relaxed);
                 log!(
                     "sync: evm: logs: {}: adding {}<{}>",
@@ -327,7 +335,7 @@ async fn handle_message(mut stream: MessageStream) {
                     log.log_index.as_ref().unwrap()
                 );
 
-                let Some(handler) = job.options.log_handler.as_ref() else {
+                let Some(handler) = &options.log_handler else {
                     error!("sync: evm: logs: {}: missing handler", job.name);
                 };
 
@@ -343,6 +351,10 @@ async fn handle_message(mut stream: MessageStream) {
                 }
             }
             Message::SvmBlock(block, job) => {
+                let Some(options) = &job.options.svm else {
+                    error!("sync: evm: blocks: {}: job is not SVM", job.name);
+                };
+
                 svm_blocks.fetch_add(1, Ordering::Relaxed);
                 log!(
                     "sync: svm: blocks: {}: adding {}",
@@ -350,7 +362,7 @@ async fn handle_message(mut stream: MessageStream) {
                     block.block_height.as_ref().unwrap()
                 );
 
-                let Some(handler) = job.options.block_handler.as_ref() else {
+                let Some(handler) = &options.block_handler else {
                     error!("sync: svm: blocks: {}: missing handler", job.name);
                 };
 
@@ -366,6 +378,10 @@ async fn handle_message(mut stream: MessageStream) {
                 }
             }
             Message::SvmLog(log, job) => {
+                let Some(options) = &job.options.svm else {
+                    error!("sync: evm: logs: {}: job is not SVM", job.name);
+                };
+
                 svm_logs.fetch_add(1, Ordering::Relaxed);
                 svm_blocks.fetch_add(1, Ordering::Relaxed);
                 log!(
@@ -374,7 +390,7 @@ async fn handle_message(mut stream: MessageStream) {
                     log.context.slot
                 );
 
-                let Some(handler) = job.options.log_handler.as_ref() else {
+                let Some(handler) = &options.log_handler else {
                     error!("sync: svm: blocks: {}: missing handler", job.name);
                 };
 
@@ -390,6 +406,10 @@ async fn handle_message(mut stream: MessageStream) {
                 }
             }
             Message::SvmTransaction(message, job) => {
+                if job.options.svm.is_none() {
+                    error!("sync: evm: logs: {}: job is not SVM", job.name);
+                };
+
                 svm_txs.fetch_add(1, Ordering::Relaxed);
                 svm::transactions::handle_transaction_message(message, job);
             }

@@ -40,9 +40,10 @@ LANGUAGE SQL;
 SELECT chainsync.register(
   'simple-blocks',
   '{
-    "evm": true,
     "ws": "wss://provider-url",
-    "block_handler": "custom_block_handler"
+    "evm": {
+      "block_handler": "custom_block_handler"
+    }
   }'::JSONB);
 ```
 
@@ -68,11 +69,12 @@ LANGUAGE SQL;
 SELECT chainsync.register(
   'custom-events',
   '{
-    "evm": true,
     "ws": "ws://provider-url",
-    "log_handler": "custom_log_handler",
-    "address": "0x....",
-    "event": "Transfer(address,address,uint256)"
+    "evm": {
+      "log_handler": "custom_log_handler",
+      "address": "0x....",
+      "event": "Transfer(address,address,uint256)"
+    }
   }'::JSONB
 );
 
@@ -92,14 +94,15 @@ Running this query will add a task that will fetch all transfer events for speci
 SELECT chainsync.register(
   'oneshot-task',
   '{
-    "evm": true,
     "ws": "ws://provider-url",
-    "log_handler": "custom_log_handler",
-    "address": "0x....",
-    "event": "Transfer(address,address,uint256)",
     "oneshot": true,
-    "from_block": 12345,
-    "blocktick": 10000
+    "evm": {
+      "log_handler": "custom_log_handler",
+      "address": "0x....",
+      "event": "Transfer(address,address,uint256)",
+      "from_block": 12345,
+      "blocktick": 10000
+    }
   }'::JSONB
 );
 
@@ -115,13 +118,14 @@ Cron tasks are supported, simply add `cron` key to your configuration json.
 SELECT chainsync.register(
   'transfers-every-minute',
   '{
-    "evm": true,
     "ws": "wss://provider-url",
-    "log_handler": "transfer_handler",
-    "address": "0x....",
-    "event": "Transfer(address,address,uint256)",
     "cron": "0 * * * * *",
-    "from_block": 0
+    "evm": {
+      "log_handler": "transfer_handler",
+      "address": "0x....",
+      "event": "Transfer(address,address,uint256)",
+      "from_block": 0
+    }
   }'::JSONB
 );
 ```
@@ -134,13 +138,14 @@ Some tasks need to be run when the database starts, for that you can use `preloa
 SELECT chainsync.register(
   'transfers-on-restart',
   '{
-    "evm": true,
     "ws": "wss://provider-url",
-    "log_handler": "transfer_handler",
-    "address": "0x....",
-    "event": "Transfer(address,address,uint256)",
     "preload": true,
-    "from_block": 0
+    "evm": {
+      "log_handler": "transfer_handler",
+      "address": "0x....",
+      "event": "Transfer(address,address,uint256)",
+      "from_block": 0
+    }
   }'::JSONB
 );
 ```
@@ -149,7 +154,7 @@ SELECT chainsync.register(
 
 `await_block` is a feature that allows you to fetch and handle event's block before handling the event. This is helpful when you want to e.g join block inside your event handler, this ensures there is always block available for your specific event when you call your event handler.
 
-You can optionally skip block fetching and handling if you specify `block_check_handler` property which is the name of the function that takes `(block BIGINT, job JSONB)` and returns any value - if it returns any value then it will skip handling this block.
+You can optionally skip block fetching and handling if you specify `block_lookup` property which is the name of the function that takes `(block BIGINT, job JSONB)` and returns any value - if it returns any value then it will skip handling this block.
 
 ```sql
 -- Look for block in your schemas and return e.g block number
@@ -161,16 +166,18 @@ LIMIT 1
 $$ LANGUAGE SQL;
 
 SELECT chainsync.register(
-  'transfers-every-minute',
+  'ensure-blocks',
   '{
-    "evm": true,
     "ws": "wss://provider-url",
-    "log_handler": "transfer_handler",
-    "address": "0x....",
-    "event": "Transfer(address,address,uint256)",
-    "await_block": true,
-    "block_handler": "insert_block",
-    "block_check_handler": "find_block",
+    "evm": {
+      "log_handler": "transfer_handler",
+      "address": "0x....",
+      "event": "Transfer(address,address,uint256)",
+
+      "await_block": true,
+      "block_skip_lookup": "find_block",
+      "block_handler": "insert_block",
+    },
     "your_custom_property": 31337
   }'::JSONB
 );

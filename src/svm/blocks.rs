@@ -175,7 +175,7 @@ pub async fn handle_block(
     Ok(())
 }
 
-pub fn build_filter(options: &JobOptions) -> RpcBlockSubscribeFilter {
+pub fn build_filter(options: &SvmOptions) -> RpcBlockSubscribeFilter {
     if let Some(mentions) = &options.mentions {
         return RpcBlockSubscribeFilter::MentionsAccountOrProgram(
             mentions[0].clone(),
@@ -185,7 +185,7 @@ pub fn build_filter(options: &JobOptions) -> RpcBlockSubscribeFilter {
     RpcBlockSubscribeFilter::All
 }
 
-pub fn build_config(options: &JobOptions) -> RpcBlockConfig {
+pub fn build_config(options: &SvmOptions) -> RpcBlockConfig {
     let mut config = RpcBlockConfig {
         commitment: Some(CommitmentConfig {
             commitment: CommitmentLevel::Finalized,
@@ -200,7 +200,7 @@ pub fn build_config(options: &JobOptions) -> RpcBlockConfig {
     config
 }
 
-pub fn build_subscribe_config(options: &JobOptions) -> RpcBlockSubscribeConfig {
+pub fn build_subscribe_config(options: &SvmOptions) -> RpcBlockSubscribeConfig {
     let mut config = RpcBlockSubscribeConfig {
         encoding: Some(UiTransactionEncoding::Base58),
         commitment: Some(CommitmentConfig {
@@ -221,10 +221,11 @@ pub async fn build_stream<'a>(
 ) -> anyhow::Result<
     Pin<Box<dyn Stream<Item = Response<RpcBlockUpdate>> + 'a + Send>>,
 > {
-    let filter = build_filter(&job.options);
+    let options = job.options.svm.as_ref().expect("SVM options are required");
+    let filter = build_filter(options);
     let provider = job.connect_svm_ws().await.context("Invalid provider")?;
     let sub = provider
-        .block_subscribe(filter, Some(build_subscribe_config(&job.options)))
+        .block_subscribe(filter, Some(build_subscribe_config(options)))
         .await?;
 
     Ok(sub.0)

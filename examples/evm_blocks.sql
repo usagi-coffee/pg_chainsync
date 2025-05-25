@@ -13,8 +13,9 @@ $$ LANGUAGE SQL;
 SELECT chainsync.register(
   'simple-blocks',
   '{
-    "evm": true,
     "ws": "ws://pg-chainsync-foundry:8545",
-    "block_handler": "simple_block_handler"
+    "evm": {
+      "block_handler": "simple_block_handler"
+    }
   }'::JSONB
 );

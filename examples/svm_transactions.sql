@@ -17,15 +17,16 @@ $$ LANGUAGE plpgsql;
 -- Listen for transactions
 -- Provide your own ws key...
 SELECT chainsync.register(
-  'svm-simple-transactions',
+  'svm-listen-transactions',
   '{
-    "svm": true,
     "rpc": "...",
     "ws": "...",
 
-    "mentions": ["..."],
-    "program": "...",
-    "transaction_handler": "svm_transaction_handler",
-    "instruction_handler": "svm_instruction_handler",
+    "svm": {
+      "mentions": ["..."],
+      "program": "...",
+      "transaction_handler": "svm_transaction_handler",
+      "instruction_handler": "svm_instruction_handler"
+    }
   }'::JSONB
 );
