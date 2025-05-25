@@ -4,9 +4,6 @@ use pgrx::{log, warning};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use tokio::sync::oneshot;
-use tokio::time::{sleep, Duration};
-
 use solana_client::rpc_config::RpcTransactionConfig;
 use solana_client::rpc_response::{Response, RpcLogsResponse};
 use solana_sdk::commitment_config::CommitmentConfig;
@@ -27,56 +24,12 @@ pub async fn handle_log(
     job: &Arc<Job>,
     log: &Response<RpcLogsResponse>,
     channel: &Channel,
-) {
-    let number = log.context.slot;
+) -> anyhow::Result<()> {
     log!(
         "sync: svm: transactions: {}: found {}",
         &job.name,
         &log.value.signature
     );
-
-    // Await for block logic
-    if matches!(job.options.await_block, Some(true)) {
-        let (tx, rx) = oneshot::channel::<bool>();
-
-        if channel.send(Message::CheckBlock(number, tx, Arc::clone(job))) {
-            let found = rx.await;
-
-            if found.unwrap() == false {
-                // Retry finding block until available
-                let mut retries = 0;
-                loop {
-                    if retries > 20 {
-                        panic!(
-                            "sync: svm: transactions: too many retries to get the block..."
-                        );
-                    }
-
-                    if let Ok(block) = job
-                        .connect_svm_rpc()
-                        .await
-                        .expect("Failed to retrieve rpc client")
-                        .get_block_with_config(
-                            number,
-                            crate::svm::blocks::build_config(&job.options),
-                        )
-                        .await
-                    {
-                        channel.send(Message::SvmBlock(block, Arc::clone(job)));
-                        break;
-                    }
-
-                    log!(
-                        "sync: svm: transactions: could not find block {}, retrying",
-                        number
-                    );
-
-                    sleep(Duration::from_millis(1000)).await;
-                    retries = retries + 1;
-                }
-            }
-        }
-    }
 
     let signature = Signature::from_str(log.value.signature.as_str())
         .expect("Invalid signature");
@@ -94,7 +47,7 @@ pub async fn handle_log(
                 channel.send(Message::SvmTransaction(tx, Arc::clone(job)));
             }
             Err(error) => {
-                warning!(
+                bail!(
                     "sync: svm: transactions: {}: {}: transaction validation failed with {}",
                     &job.name,
                     &log.value.signature,
@@ -103,13 +56,15 @@ pub async fn handle_log(
             }
         },
         Err(err) => {
-            warning!(
+            bail!(
                 "sync: svm: logs: {}: failed to get transaction {}",
                 &job.name,
                 err
             );
         }
     }
+
+    Ok(())
 }
 
 use crate::query::PgHandler;
@@ -388,7 +343,7 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
 
             let instruction = SolanaInstruction {
                 tx: &tx,
-                instruction: instruction,
+                instruction,
                 accounts_owners,
                 accounts_mints,
                 index: i as i16 + 1,

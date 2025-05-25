@@ -1,7 +1,8 @@
-use pgrx::prelude::*;
 use pgrx::{log, warning};
 
 use std::sync::Arc;
+
+use anyhow::{bail, ensure};
 
 use alloy::core::primitives::{Address, B256};
 use alloy::primitives::keccak256;
@@ -10,12 +11,13 @@ use alloy::pubsub::SubscriptionStream;
 use alloy::rpc::types::{BlockNumberOrTag, Filter};
 
 use tokio::sync::oneshot;
-use tokio::time::{sleep, Duration};
+use tokio::time::Duration;
 use tokio_stream::{StreamExt, StreamNotifyClose};
 
 use bus::BusReader;
 
 use crate::channel::Channel;
+use crate::evm::blocks::try_block;
 use crate::types::*;
 
 pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
@@ -88,7 +90,17 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                     loop {
                         match stream.next().await {
                             Some(Some(log)) => {
-                                handle_evm_log(&job, log, &channel).await
+                                if let Err(error) =
+                                    handle_evm_log(&job, log, &channel).await
+                                {
+                                    warning!(
+                                      "sync: evm: logs: {}: failed to handle log with {}",
+                                      &job.name,
+                                      error
+                                    );
+                                }
+
+                                retries = 0;
                             }
                             _ => {
                                 warning!(
@@ -131,20 +143,20 @@ pub async fn handle_evm_log(
     job: &Arc<Job>,
     log: alloy::rpc::types::Log,
     channel: &Channel,
-) {
+) -> Result<(), anyhow::Error> {
     let Some(transaction) = log.transaction_hash else {
         warning!("sync: evm: logs: {}: found pending, skipping", &job.name);
-        return;
+        return Ok(());
     };
 
     let Some(block) = log.block_number else {
         warning!("sync: evm: logs: {}: found pending, skipping", &job.name);
-        return;
+        return Ok(());
     };
 
     let Some(log_index) = log.log_index else {
         warning!("sync: evm: logs: {}: found pending, skipping", &job.name);
-        return;
+        return Ok(());
     };
 
     if let Some(event) = &job.options.event {
@@ -156,13 +168,13 @@ pub async fn handle_evm_log(
                 transaction,
                 log_index
             );
-            return;
+            return Ok(());
         }
     } else if let Some(topic0) = &job.options.topic0 {
         let _ = topic0.parse::<B256>().unwrap();
         if !matches!(log.topic0(), Some(_)) {
             warning!("sync: evm: logs: {}: topic0 does not match", &job.name);
-            return;
+            return Ok(());
         }
     }
 
@@ -176,64 +188,62 @@ pub async fn handle_evm_log(
 
     // Await for block logic
     if matches!(job.options.await_block, Some(true)) {
-        let (tx, rx) = oneshot::channel::<bool>();
+        if let Some(check_block_handler) = &job.options.block_check_handler {
+            let (tx, rx) = oneshot::channel::<i64>();
 
-        if channel.send(Message::CheckBlock(block, tx, Arc::clone(job))) {
-            let found = rx.await;
+            if !channel.send(Message::ReturnHandlerWithArg(
+                PostgresReturn::BigInt(block as i64),
+                check_block_handler.to_owned(),
+                PostgresSender::BigInt(tx),
+                Arc::clone(job),
+            )) {
+                bail!(
+                    "sync: evm: logs: {}, failed to send check block message",
+                    &job.name
+                );
+            }
 
-            if found.unwrap() == false {
-                // Retry finding block until available
-                let mut retries = 0;
-                loop {
-                    if retries > 20 {
-                        error!("sync: evm: logs: {}: too many retries to get the block...", &job.name);
-                    }
-
-                    // Reconnect ws on every block retry
-                    let Ok(client) = job.reconnect_evm().await else {
-                        warning!(
-                            "sync: evm: logs: {}: failed to connect to evm at await block handler",
-                            &job.name
+            if let Err(_) = rx.await {
+                match try_block(block, &job).await {
+                    Ok(block) => {
+                        ensure!(
+                            channel.send(Message::EvmBlock(
+                                block.header,
+                                Arc::clone(job),
+                            )),
+                            "sync: evm: logs: {}, failed to send block {}<{}>",
+                            &job.name,
+                            transaction,
+                            log_index,
                         );
-                        sleep(Duration::from_millis(1000)).await;
-                        retries = retries + 1;
-                        continue;
-                    };
-
-                    if let Ok(Some(block)) = client
-                        .get_block(
-                            block.into(),
-                            alloy::rpc::types::BlockTransactionsKind::Hashes,
-                        )
-                        .await
-                    {
-                        channel.send(Message::EvmBlock(
-                            block.header,
-                            Arc::clone(job),
-                        ));
-                        break;
                     }
-
-                    log!(
-                        "sync: evm: logs: {}: could not find block {}, retrying",
-                        &job.name,
-                        block
-                    );
-                    sleep(Duration::from_millis(1000)).await;
-                    retries = retries + 1;
+                    Err(error) => {
+                        bail!(
+                            "sync: evm: logs: {}: failed to retrieve block {} with {}",
+                            &job.name,
+                            block,
+                            error
+                        );
+                    }
                 }
             }
+        } else {
+            bail!(
+                "sync: evm: logs: {}, no block check handler provided",
+                &job.name
+            );
         }
     }
 
-    if !channel.send(Message::EvmLog(log, Arc::clone(job))) {
-        warning!(
-            "sync: evm: logs: {}: failed to send {}<{}>",
-            &job.name,
-            transaction,
-            log_index
-        )
-    }
+    ensure!(
+        channel.send(Message::EvmLog(log, Arc::clone(job))),
+        "sync: evm: logs: {}: failed to send {}<{}>",
+        &job.name,
+        transaction,
+        log_index
+    );
+
+    Ok(())
 }
 
 pub fn build_filter(options: &JobOptions, block: u64) -> Filter {

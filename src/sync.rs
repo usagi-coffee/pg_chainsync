@@ -3,9 +3,9 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use pgrx::bgworkers::*;
 use pgrx::log;
 use pgrx::prelude::*;
+use pgrx::{bgworkers::*, JsonB};
 
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -20,7 +20,7 @@ use bus::Bus;
 use crate::anyhow_pg_try;
 use crate::channel::*;
 use crate::evm;
-use crate::query::{PgHandler, PgResult};
+use crate::query::PgHandler;
 use crate::svm;
 use crate::types::*;
 use crate::worker;
@@ -74,8 +74,7 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
 
     *WORKER_STATUS.exclusive() = WorkerStatus::RUNNING;
 
-    let (send_message, receive_message) =
-        mpsc::channel::<Message>(MESSAGES_CAPACITY);
+    let (send_message, receive_message) = mpsc::channel::<_>(MESSAGES_CAPACITY);
 
     let mut signal_bus = Bus::<Signal>::new(64);
 
@@ -394,70 +393,142 @@ async fn handle_message(mut stream: MessageStream) {
                 svm_txs.fetch_add(1, Ordering::Relaxed);
                 svm::transactions::handle_transaction_message(message, job);
             }
-            Message::Handler(job_id, handler, oneshot) => {
-                let success =
-                    match anyhow_pg_try!(|| Job::handler(&handler, job_id)) {
-                        Ok(_) => true,
-                        Err(error) => {
+            Message::Handler(handler, oneshot, job) => {
+                let id = job.id as i32;
+                match anyhow_pg_try!(|| Job::handler(&handler, id)) {
+                    Ok(_) => {
+                        if let Err(_) = oneshot.send(true) {
                             warning!(
-                                "sync: messages: {}: {} failed with {}",
-                                job_id,
-                                handler,
-                                error
+                                "sync: messages: {}: {} failed to return, task is probably deadlocked!",
+                                job.id, handler
                             );
-                            false
                         }
-                    };
-
-                if let Err(_) = oneshot.send(success) {
-                    warning!(
-                        "sync: messages: {}: {} failed to return, task is probably deadlocked!",
-                        job_id, handler
-                    );
-                }
-            }
-            Message::JsonHandler(job_id, handler, oneshot) => {
-                let result = match anyhow_pg_try!(|| Job::json_handler(
-                    &handler, job_id
-                )) {
-                    Ok(result) => Some(result),
+                    }
                     Err(error) => {
                         warning!(
                             "sync: messages: {}: {} failed with {}",
-                            job_id,
+                            job.id,
                             handler,
                             error
                         );
-                        None
+                        drop(oneshot);
+                    }
+                };
+            }
+            Message::ReturnHandler(handler, sender, job) => {
+                let id = job.id as i32;
+
+                let result: Result<PostgresReturn, _> = match &sender {
+                    PostgresSender::Void(_) => {
+                        anyhow_pg_try!(|| Job::return_handler::<()>(
+                            &handler, id
+                        ))
+                        .map(|_| PostgresReturn::Void)
+                    }
+                    PostgresSender::Integer(_) => {
+                        anyhow_pg_try!(|| Job::return_handler::<i32>(
+                            &handler, id
+                        ))
+                        .map(|r| PostgresReturn::Integer(r))
+                    }
+                    PostgresSender::BigInt(_) => {
+                        anyhow_pg_try!(|| Job::return_handler::<i64>(
+                            &handler, id
+                        ))
+                        .map(|r| PostgresReturn::BigInt(r))
+                    }
+                    PostgresSender::String(_) => {
+                        anyhow_pg_try!(|| Job::return_handler::<String>(
+                            &handler, id
+                        ))
+                        .map(|r| PostgresReturn::String(r))
+                    }
+                    PostgresSender::Boolean(_) => {
+                        anyhow_pg_try!(|| Job::return_handler::<bool>(
+                            &handler, id
+                        ))
+                        .map(|r| PostgresReturn::Boolean(r))
+                    }
+                    PostgresSender::Json(_) => {
+                        anyhow_pg_try!(|| Job::return_handler::<JsonB>(
+                            &handler, id
+                        ))
+                        .map(|r| PostgresReturn::Json(r))
                     }
                 };
 
-                if let Err(_) = oneshot.send(result) {
-                    warning!(
-                        "sync: messages: {}: {} failed to return, task is probably deadlocked!",
-                        job_id, handler
-                    );
-                }
-            }
-            Message::CheckBlock(number, oneshot, job) => {
-                if let Some(handler) = job.options.block_check_handler.as_ref()
-                {
-                    let id = job.id;
-
-                    let found = match anyhow_pg_try!(|| {
-                        u64::call_handler(&number, handler, id)
-                    }) {
-                        Ok(found) => matches!(found, PgResult::Boolean(true)),
-                        Err(_) => false,
-                    };
-
-                    if let Err(_) = oneshot.send(found) {
+                match result {
+                    Ok(arg) => {
+                        if !sender.send(arg) {
+                            warning!(
+                              "sync: messages: {}: {} failed to return, task is probably deadlocked!",
+                              job.id, handler
+                          );
+                        }
+                    }
+                    Err(error) => {
                         warning!(
-                            "sync: messages: {}: check block failed to return with, task is probably deadlocked!",
-                            &job.name
+                            "sync: messages: {}: {} failed with {}",
+                            job.id,
+                            handler,
+                            error
                         );
                     }
-                }
+                };
+            }
+            Message::ReturnHandlerWithArg(arg, handler, sender, job) => {
+                let id = job.id as i32;
+
+                let result: Result<PostgresReturn, anyhow::Error> = match arg {
+                    PostgresArg::Void => {
+                        warning!("sync: messages: {}: {} called with void argument, this is probably a bug!", job.id, handler);
+                        continue;
+                    }
+                    PostgresArg::Integer(arg) => {
+                        anyhow_pg_try!(|| Job::return_handler_with_arg(
+                            arg, &handler, id
+                        ))
+                        .map(|r| PostgresReturn::Integer(r))
+                    }
+                    PostgresArg::BigInt(arg) => {
+                        anyhow_pg_try!(|| Job::return_handler_with_arg(
+                            arg, &handler, id
+                        ))
+                        .map(|r| PostgresReturn::BigInt(r))
+                    }
+                    PostgresArg::String(arg) => {
+                        anyhow_pg_try!(|| Job::return_handler_with_arg(
+                            arg, &handler, id
+                        ))
+                        .map(|r| PostgresReturn::String(r))
+                    }
+                    PostgresArg::Boolean(arg) => {
+                        anyhow_pg_try!(|| Job::return_handler_with_arg(
+                            arg, &handler, id
+                        ))
+                        .map(|r| PostgresReturn::Boolean(r))
+                    }
+                    _ => continue,
+                };
+
+                match result {
+                    Ok(result) => {
+                        if !sender.send(result) {
+                            warning!(
+                              "sync: messages: {}: {} failed to return, task is probably deadlocked!",
+                              job.id, handler
+                          );
+                        }
+                    }
+                    Err(error) => {
+                        warning!(
+                            "sync: messages: {}: {} failed with {}",
+                            job.id,
+                            handler,
+                            error
+                        );
+                    }
+                };
             }
             Message::Shutdown => {
                 break;

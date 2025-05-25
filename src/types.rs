@@ -37,6 +37,51 @@ pub enum JobStatus {
     Running = 2,
 }
 
+#[derive(Debug)]
+pub enum PostgresArg {
+    Void,
+    Boolean(bool),
+    Integer(i32),
+    BigInt(i64),
+    String(String),
+    Json(JsonB),
+}
+pub type PostgresReturn = PostgresArg;
+pub enum PostgresSender {
+    Void(oneshot::Sender<()>),
+    Integer(oneshot::Sender<i32>),
+    BigInt(oneshot::Sender<i64>),
+    String(oneshot::Sender<String>),
+    Boolean(oneshot::Sender<bool>),
+    Json(oneshot::Sender<JsonB>),
+}
+
+impl PostgresSender {
+    pub fn send(self, value: PostgresReturn) -> bool {
+        match (self, value) {
+            (PostgresSender::Void(tx), PostgresReturn::Void) => {
+                tx.send(()).is_ok()
+            }
+            (PostgresSender::Integer(tx), PostgresReturn::Integer(i)) => {
+                tx.send(i).is_ok()
+            }
+            (PostgresSender::BigInt(tx), PostgresReturn::BigInt(i)) => {
+                tx.send(i).is_ok()
+            }
+            (PostgresSender::String(tx), PostgresReturn::String(s)) => {
+                tx.send(s).is_ok()
+            }
+            (PostgresSender::Boolean(tx), PostgresReturn::Boolean(b)) => {
+                tx.send(b).is_ok()
+            }
+            (PostgresSender::Json(tx), PostgresReturn::Json(j)) => {
+                tx.send(j).is_ok()
+            }
+            (_, _) => false,
+        }
+    }
+}
+
 pub enum Message {
     Job(i64, oneshot::Sender<Option<Job>>),
     Jobs(oneshot::Sender<Vec<Job>>),
@@ -50,11 +95,10 @@ pub enum Message {
     SvmTransaction(SvmTransaction, Arc<Job>),
 
     // Handlers
-    Handler(i64, String, oneshot::Sender<bool>),
-    JsonHandler(i64, String, oneshot::Sender<Option<JsonB>>),
-
+    Handler(Arc<String>, oneshot::Sender<bool>, Arc<Job>),
+    ReturnHandler(Arc<String>, PostgresSender, Arc<Job>),
+    ReturnHandlerWithArg(PostgresArg, Arc<String>, PostgresSender, Arc<Job>),
     // Utility messages
-    CheckBlock(u64, oneshot::Sender<bool>, Arc<Job>),
     Shutdown,
 }
 
@@ -94,25 +138,28 @@ pub struct JobOptions {
     pub cron: Option<String>,
 
     // Handlers
-    pub setup_handler: Option<String>,
-    pub success_handler: Option<String>,
-    pub failure_handler: Option<String>,
+    pub setup_handler: Option<Arc<String>>,
+    pub success_handler: Option<Arc<String>>,
+    pub failure_handler: Option<Arc<String>>,
 
     /// Block job
-    pub block_handler: Option<String>,
+    pub block_handler: Option<Arc<String>>,
     // TODO: hashes vs full blocks?
 
     // Log job
     /// Function to call when handling events
-    pub log_handler: Option<String>,
+    pub log_handler: Option<Arc<String>>,
     /// If defined it awaits for block before calling the handler
     pub await_block: Option<bool>,
     /// If defined it awaits for block before calling the handler
-    pub block_check_handler: Option<String>,
+    pub block_check_handler: Option<Arc<String>>,
 
     // Transaction job
-    pub transaction_handler: Option<String>,
-    pub instruction_handler: Option<String>,
+    pub transaction_handler: Option<Arc<String>>,
+    // If defined it will skip the transaction from processing
+    pub transaction_check_handler: Option<Arc<String>>,
+    // Instruction job
+    pub instruction_handler: Option<Arc<String>>,
     // Filters instructions by the specific discriminators
     pub instruction_discriminators: Option<Vec<u8>>,
 

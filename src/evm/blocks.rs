@@ -1,6 +1,6 @@
 use pgrx::{log, warning};
 
-use anyhow::Context;
+use anyhow::{bail, ensure, Context};
 
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -40,7 +40,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
         log!("sync: evm: blocks: found {} jobs", jobs.len());
 
         for job in jobs {
-            let channel = channel.clone();
+            let channel = channel.to_owned();
             let handle = tokio::spawn(async move {
                 let mut retries = 0;
                 'job: loop {
@@ -87,7 +87,13 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                     loop {
                         match stream.next().await {
                             Some(Some(block)) => {
-                                handle_block(&job, block, &channel).await
+                                if let Err(error) =
+                                    handle_block(&job, block, &channel).await
+                                {
+                                    warning!("sync: evm: blocks: {}: failed to handle block with {}", &job.name, error);
+                                }
+
+                                retries = 0;
                             }
                             _ => {
                                 warning!(
@@ -130,11 +136,17 @@ pub async fn handle_block(
     job: &Arc<Job>,
     block: alloy::rpc::types::Header,
     channel: &Channel,
-) {
+) -> Result<(), anyhow::Error> {
     let number = block.number;
     log!("sync: evm: blocks: {}: found {}", &job.name, number);
 
-    channel.send(Message::EvmBlock(block, Arc::clone(job)));
+    ensure!(
+        channel.send(Message::EvmBlock(block, Arc::clone(job))),
+        "sync: evm: blocks: {}: failed to send block to channel",
+        &job.name
+    );
+
+    Ok(())
 }
 
 pub async fn build_stream(
@@ -143,4 +155,50 @@ pub async fn build_stream(
     let provider = job.connect_evm().await.context("Invalid provider")?;
     let sub = provider.subscribe_blocks().await?;
     Ok(sub.into_stream())
+}
+
+// Attempts to fetch a block by its number, retrying if necessary.
+pub async fn try_block(
+    block: u64,
+    job: &Arc<Job>,
+) -> Result<alloy::rpc::types::Block, anyhow::Error> {
+    let mut retries = 0;
+    loop {
+        if retries > 20 {
+            bail!(
+                "sync: evm: {}: too many retries to get the block...",
+                &job.name
+            );
+        }
+
+        // Reconnect ws on every block retry
+        let Ok(client) = job.reconnect_evm().await else {
+            warning!(
+              "sync: evm: {}: failed to connect to evm at await block handler",
+              &job.name
+          );
+            tokio::time::sleep(Duration::from_millis(1000)).await;
+            retries = retries + 1;
+            continue;
+        };
+
+        if let Ok(Some(block)) = client
+            .get_block(
+                block.into(),
+                alloy::rpc::types::BlockTransactionsKind::Hashes,
+            )
+            .await
+        {
+            return Ok(block);
+        }
+
+        log!(
+            "sync: evm: {}: could not find block {}, retrying",
+            &job.name,
+            block
+        );
+
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+        retries = retries + 1;
+    }
 }

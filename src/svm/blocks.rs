@@ -1,6 +1,6 @@
 use pgrx::{log, warning};
 
-use anyhow::Context;
+use anyhow::{bail, ensure, Context};
 use solana_client::rpc_config::{
     RpcBlockConfig, RpcBlockSubscribeConfig, RpcBlockSubscribeFilter,
 };
@@ -105,7 +105,15 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                     loop {
                         match stream.next().await {
                             Some(Some(block)) => {
-                                handle_block(&job, block, &channel).await
+                                if let Err(error) =
+                                    handle_block(&job, block, &channel).await
+                                {
+                                    warning!(
+                                        "sync: svm: blocks: {}: failed to handle block with {}",
+                                        &job.name,
+                                        error
+                                    );
+                                }
                             }
                             _ => {
                                 warning!(
@@ -148,17 +156,23 @@ pub async fn handle_block(
     job: &Arc<Job>,
     block: Response<RpcBlockUpdate>,
     channel: &Channel,
-) {
-    let block = block.value.block.unwrap();
-    log!(
-        "sync: svm: blocks: {}: found {}",
-        &job.name,
-        block.block_height.as_ref().unwrap()
+) -> Result<(), anyhow::Error> {
+    let Some(block) = block.value.block else {
+        bail!("sync: svm: blocks: {}: block is empty", &job.name);
+    };
+
+    let Some(block_height) = block.block_height else {
+        bail!("sync: svm: blocks: {}: block height is empty", &job.name);
+    };
+
+    log!("sync: svm: blocks: {}: found {}", &job.name, block_height);
+    ensure!(
+        channel.send(Message::SvmBlock(block, Arc::clone(job))),
+        "sync: svm: blocks: {}: failed to send",
+        &job.name
     );
 
-    if !channel.send(Message::SvmBlock(block, Arc::clone(job))) {
-        warning!("sync: svm: blocks: {}: failed to send", &job.name)
-    }
+    Ok(())
 }
 
 pub fn build_filter(options: &JobOptions) -> RpcBlockSubscribeFilter {

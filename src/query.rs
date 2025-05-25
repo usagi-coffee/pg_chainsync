@@ -1,5 +1,8 @@
 use pgrx::datum::{DatumWithOid, IntoDatum};
-use pgrx::{prelude::*, JsonB};
+use pgrx::prelude::*;
+
+use std::panic::{RefUnwindSafe, UnwindSafe};
+use std::sync::Arc;
 
 use anyhow::anyhow;
 
@@ -8,7 +11,7 @@ use tokio::sync::OnceCell;
 use crate::evm::*;
 use crate::svm::transactions::{SolanaInnerInstruction, SolanaInstruction};
 use crate::svm::*;
-use crate::types::*;
+use crate::types::{PostgresReturn, *};
 
 use alloy::core::hex;
 
@@ -83,31 +86,44 @@ impl Job {
         })
     }
 
-    pub fn handler(handler: &String, job: i64) -> Result<(), anyhow::Error> {
+    pub fn handler(
+        handler: &Arc<String>,
+        job: i32,
+    ) -> Result<(), anyhow::Error> {
         Spi::run_with_args(
             format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $1))", handler).as_str(),
-            &vec![DatumWithOid::from(job as i32)],
+            &vec![DatumWithOid::from(job)],
         )
         .map_err(|e| e.into())
     }
 
-    pub fn json_handler(
-        handler: &String,
-        job: i64,
-    ) -> Result<JsonB, anyhow::Error> {
-        Spi::get_one_with_args::<JsonB>(
+    pub fn return_handler<R: FromDatum + IntoDatum>(
+        handler: &Arc<String>,
+        job: i32,
+    ) -> Result<R, anyhow::Error> {
+        Spi::get_one_with_args::<R>(
             format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $1))", handler).as_str(),
-            &vec![DatumWithOid::from(job as i32)],
+            &vec![DatumWithOid::from(job)],
         )
         .map_err(|e| e.into())
         .and_then(|opt| opt.ok_or_else(|| anyhow!("did not return anything")))
     }
-}
 
-pub enum PgResult {
-    None,
-    Boolean(bool),
-    Json(JsonB),
+    pub fn return_handler_with_arg<
+        T: IntoDatum + FromDatum + UnwindSafe + RefUnwindSafe,
+        R: FromDatum + IntoDatum,
+    >(
+        arg: T,
+        handler: &Arc<String>,
+        job: i32,
+    ) -> Result<R, anyhow::Error> {
+        Spi::get_one_with_args::<R>(
+            format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2))", handler).as_str(),
+            &vec![DatumWithOid::from(arg), DatumWithOid::from(job as i32)]
+        )
+        .map_err(|e| e.into())
+        .and_then(|opt| opt.ok_or_else(|| anyhow!("did not return anything")))
+    }
 }
 
 pub trait PgHandler {
@@ -115,7 +131,7 @@ pub trait PgHandler {
         &self,
         handler: &String,
         job: i64,
-    ) -> Result<PgResult, anyhow::Error>;
+    ) -> Result<PostgresReturn, anyhow::Error>;
 }
 
 impl PgHandler for u64 {
@@ -123,7 +139,7 @@ impl PgHandler for u64 {
         &self,
         handler: &String,
         job: i64,
-    ) -> Result<PgResult, anyhow::Error> {
+    ) -> Result<PostgresReturn, anyhow::Error> {
         Spi::get_one_with_args::<i64>(
           format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
           &vec![
@@ -131,7 +147,7 @@ impl PgHandler for u64 {
             DatumWithOid::from(job)
           ]
         )
-        .map(|e| PgResult::Boolean(e.is_some()))
+        .map(|e| PostgresReturn::Boolean(e.is_some()))
         .map_err(|e| e.into())
     }
 }
@@ -141,7 +157,7 @@ impl PgHandler for EvmBlock {
         &self,
         handler: &String,
         job: i64,
-    ) -> Result<PgResult, anyhow::Error> {
+    ) -> Result<PostgresReturn, anyhow::Error> {
         let mut data =
             PgHeapTuple::new_composite_type(EVM_BLOCK_COMPOSITE_TYPE).unwrap();
 
@@ -199,7 +215,7 @@ impl PgHandler for EvmBlock {
               DatumWithOid::from(job),
             ],
         )
-        .map(|_| PgResult::None)
+        .map(|_| PostgresReturn::Void)
         .map_err(|e| e.into())
     }
 }
@@ -209,7 +225,7 @@ impl PgHandler for EvmLog {
         &self,
         handler: &String,
         job: i64,
-    ) -> Result<PgResult, anyhow::Error> {
+    ) -> Result<PostgresReturn, anyhow::Error> {
         let mut data =
             PgHeapTuple::new_composite_type(EVM_LOG_COMPOSITE_TYPE).unwrap();
 
@@ -247,7 +263,7 @@ impl PgHandler for EvmLog {
                 DatumWithOid::from(job),
             ],
         )
-        .map(|_| PgResult::None)
+        .map(|_| PostgresReturn::Void)
         .map_err(|e| e.into())
     }
 }
@@ -257,7 +273,7 @@ impl PgHandler for SvmBlock {
         &self,
         handler: &String,
         job: i64,
-    ) -> Result<PgResult, anyhow::Error> {
+    ) -> Result<PostgresReturn, anyhow::Error> {
         let mut data =
             PgHeapTuple::new_composite_type(SVM_BLOCK_COMPOSITE_TYPE).unwrap();
 
@@ -294,7 +310,7 @@ impl PgHandler for SvmBlock {
               DatumWithOid::from(job),
             ],
         )
-        .map(|_| PgResult::None)
+        .map(|_| PostgresReturn::Void)
         .map_err(|e| e.into())
     }
 }
@@ -304,7 +320,7 @@ impl PgHandler for SvmLog {
         &self,
         handler: &String,
         job: i64,
-    ) -> Result<PgResult, anyhow::Error> {
+    ) -> Result<PostgresReturn, anyhow::Error> {
         let mut data =
             PgHeapTuple::new_composite_type(SVM_LOG_COMPOSITE_TYPE).unwrap();
 
@@ -323,7 +339,7 @@ impl PgHandler for SvmLog {
               DatumWithOid::from(job),
             ],
         )
-        .map(|_| PgResult::None)
+        .map(|_| PostgresReturn::Void)
         .map_err(|e| e.into())
     }
 }
@@ -333,7 +349,7 @@ impl PgHandler for SvmTransaction {
         &self,
         handler: &String,
         job: i64,
-    ) -> Result<PgResult, anyhow::Error> {
+    ) -> Result<PostgresReturn, anyhow::Error> {
         let mut data =
             PgHeapTuple::new_composite_type(SVM_TRANSACTION_COMPOSITE_TYPE)
                 .unwrap();
@@ -360,7 +376,7 @@ impl PgHandler for SvmTransaction {
               DatumWithOid::from(job),
             ]
         )
-        .map(|_| PgResult::None)
+        .map(|_| PostgresReturn::Void)
         .map_err(|e| e.into())
     }
 }
@@ -370,7 +386,7 @@ impl PgHandler for SolanaInstruction<'_> {
         &self,
         handler: &String,
         job: i64,
-    ) -> Result<PgResult, anyhow::Error> {
+    ) -> Result<PostgresReturn, anyhow::Error> {
         let mut data =
             PgHeapTuple::new_composite_type(SVM_INSTRUCTION_COMPOSITE_TYPE)
                 .unwrap();
@@ -411,7 +427,7 @@ impl PgHandler for SolanaInstruction<'_> {
               DatumWithOid::from(job),
             ],
         )
-        .map(|_| PgResult::None)
+        .map(|_| PostgresReturn::Void)
         .map_err(|e| e.into())
     }
 }
@@ -421,7 +437,7 @@ impl PgHandler for SolanaInnerInstruction<'_> {
         &self,
         handler: &String,
         job: i64,
-    ) -> Result<PgResult, anyhow::Error> {
+    ) -> Result<PostgresReturn, anyhow::Error> {
         let mut data =
             PgHeapTuple::new_composite_type(SVM_INSTRUCTION_COMPOSITE_TYPE)
                 .unwrap();
@@ -459,7 +475,7 @@ impl PgHandler for SolanaInnerInstruction<'_> {
               DatumWithOid::from(job),
             ],
         )
-        .map(|_| PgResult::None)
+        .map(|_| PostgresReturn::Void)
         .map_err(|e| e.into())
     }
 }

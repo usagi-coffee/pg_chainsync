@@ -1,7 +1,7 @@
+use pgrx::warning;
+
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-
-use pgrx::prelude::warning;
 
 use crate::types::Message;
 

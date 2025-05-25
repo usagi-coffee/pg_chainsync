@@ -1,19 +1,18 @@
-use pgrx::lwlock::PgLwLock;
-use pgrx::PGRXSharedMemory;
-
 use pgrx::bgworkers::BackgroundWorker;
 use pgrx::bgworkers::*;
-
+use pgrx::lwlock::PgLwLock;
 use pgrx::GucSetting;
+use pgrx::PGRXSharedMemory;
 
-use crate::channel::Channel;
 use std::ffi::CStr;
 use std::sync::Arc;
 
 use tokio::time::{sleep_until, Duration, Instant};
 
-use crate::types::*;
 use bus::Bus;
+
+use crate::channel::Channel;
+use crate::types::*;
 
 pub static WORKER_STATUS: PgLwLock<WorkerStatus> =
     PgLwLock::new(c"worker_status");

@@ -13,6 +13,8 @@ use solana_transaction_status_client_types::EncodedConfirmedTransactionWithStatu
 use tokio::sync::{oneshot, Semaphore};
 use tokio::time::{sleep_until, Duration, Instant};
 
+use linked_hash_set::LinkedHashSet;
+
 use super::transactions;
 use super::{blocks, SvmTransaction};
 use crate::channel::Channel;
@@ -61,16 +63,16 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
             }
 
             if let Some(setup_handler) = job.options.setup_handler.as_ref() {
-                let (tx, rx) = oneshot::channel::<Option<JsonB>>();
-                channel.send(Message::JsonHandler(
-                    task,
-                    setup_handler.to_owned(),
-                    tx,
+                let (tx, rx) = oneshot::channel::<JsonB>();
+                channel.send(Message::ReturnHandler(
+                    setup_handler.clone(),
+                    PostgresSender::Json(tx),
+                    Arc::new(job.clone()),
                 ));
 
-                // Update options
                 match rx.await {
-                    Ok(Some(json)) => match serde_json::from_value(json.0) {
+                    Ok(json) => match serde_json::from_value(json.0) {
+                        // Update options
                         Ok(options) => job.options = options,
                         Err(error) => {
                             warning!("sync: svm: tasks: {}: failed to parse return handler options jsonb with {}", &job.name, &error);
@@ -78,15 +80,7 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                         }
                     },
                     Err(error) => {
-                        warning!(
-                        "sync: svm: tasks: {}: setup handler failed with {}",
-                        &job.name,
-                        error
-                    );
-                        continue;
-                    }
-                    _ => {
-                        warning!("sync: svm: tasks: {}: setup handler did not return options jsonb", &job.name);
+                        warning!("sync: svm: tasks: {}: setup handler failed with {}", &job.name, error);
                         continue;
                     }
                 }
@@ -122,9 +116,9 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                     {
                         let (tx, rx) = oneshot::channel::<bool>();
                         channel.send(Message::Handler(
-                            job.id,
-                            success_handler.to_owned(),
+                            success_handler.clone(),
                             tx,
+                            job.clone(),
                         ));
 
                         let _ = rx.await;
@@ -141,9 +135,9 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                     {
                         let (tx, rx) = oneshot::channel::<bool>();
                         channel.send(Message::Handler(
-                            job.id,
-                            failure_handler.to_owned(),
+                            failure_handler.clone(),
                             tx,
+                            job.clone(),
                         ));
                         let _ = rx.await;
                     }
@@ -238,9 +232,22 @@ async fn handle_transactions_task(
         until = Some(Signature::from_str(until_signature)?);
     }
 
-    let mut signatures = Vec::new();
+    let mut signatures: LinkedHashSet<Signature> = LinkedHashSet::new();
 
+    let mut retries = 0;
     'fill: loop {
+        ensure!(
+            retries < 10,
+            "failed to get signatures after 10 retries, aborting..."
+        );
+
+        log!(
+            "sync: svm: tasks: {}: getting signatures {:?} <- {:?}",
+            &job.name,
+            &until,
+            &before
+        );
+
         match rpc.get_signatures_for_address_with_config(
           &address,
           solana_client::rpc_client::GetConfirmedSignaturesForAddress2Config {
@@ -253,16 +260,33 @@ async fn handle_transactions_task(
           },
       ).await {
         Ok(sigs) => {
+          log!(
+            "sync: svm: tasks: {}: got {} signatures",
+            &job.name,
+            sigs.len()
+          );
+
           if sigs.is_empty() {
             break 'fill;
           }
 
           before = Signature::from_str(sigs[sigs.len() - 1].signature.as_str())?.into();
-          signatures.extend(sigs);
+
+          for signature in sigs.iter().rev() {
+            let signature = Signature::from_str(signature.signature.as_str())
+                .expect("signature to be parsed");
+            signatures.insert(signature);
+          }
         },
-        Err(_) => {
-          warning!("sync: svm: tasks: failed to get signatures");
-          break 'fill;
+        Err(error) => {
+          warning!("sync: svm: tasks: {}: failed to get signatures with {}", &job.name, error);
+
+          sleep_until(
+              Instant::now() + Duration::from_millis(1000),
+          )
+          .await;
+          retries += 1;
+          continue;
         }
       }
     }
@@ -270,14 +294,46 @@ async fn handle_transactions_task(
     let mut queue: Vec<
         oneshot::Receiver<EncodedConfirmedTransactionWithStatusMeta>,
     > = Vec::new();
-    queue.reserve_exact(signatures.len());
+
+    if let Some(handler) = &job.options.transaction_check_handler {
+        for signature in std::mem::take(&mut signatures) {
+            let (tx, rx) = oneshot::channel::<String>();
+            ensure!(
+                channel.send(Message::ReturnHandlerWithArg(
+                    PostgresArg::String(signature.to_string()),
+                    handler.clone(),
+                    PostgresSender::String(tx),
+                    job.clone()
+                )),
+                "sync: svm: tasks: {}: failed to send return handler with arg",
+                &job.name
+            );
+
+            if let Err(_) = rx.await {
+                signatures.insert(signature);
+            }
+        }
+    } else {
+        queue.reserve_exact(signatures.len());
+    }
+
+    ensure!(
+        !signatures.is_empty(),
+        "sync: svm: tasks: {}: no signatures found",
+        &job.name
+    );
+
+    log!(
+        "sync: svm: tasks: {}: got {} signatures total, starting to fetch transactions",
+        &job.name,
+        signatures.len()
+    );
 
     let config = transactions::build_config(&job.options);
-
     let semaphore = Arc::new(Semaphore::new(SVM_RPC_PERMITS.get() as usize));
-    for signature in &signatures {
-        let signature = Signature::from_str(signature.signature.as_str())?;
 
+    // Reverse the signatures to fetch them in oldest to newest order
+    for signature in signatures {
         let (tx, rx) = oneshot::channel();
         queue.push(rx);
 
@@ -286,12 +342,11 @@ async fn handle_transactions_task(
         let job = Arc::clone(&job);
         tokio::spawn(async move {
             let permit = semaphore.acquire().await;
-
             loop {
                 match rpc.get_transaction_with_config(&signature, config).await
                 {
                     Ok(transaction) => {
-                        tx.send(transaction).expect("sender got dropped")
+                        tx.send(transaction).expect("sender got dropped");
                     }
                     Err(error) => {
                         warning!(
@@ -316,8 +371,17 @@ async fn handle_transactions_task(
         });
     }
 
+    let count = queue.len();
     for (index, rx) in queue.iter_mut().enumerate() {
-        let signature = &signatures[index].signature;
+        if index % 100 == 0 {
+            log!(
+                "sync: svm: tasks: {}: progress {} / {}",
+                &job.name,
+                index,
+                count
+            );
+        }
+
         let Ok(tx) = rx.await else {
             bail!("failed to receive transaction");
         };
@@ -330,9 +394,8 @@ async fn handle_transactions_task(
             }
             Err(error) => {
                 bail!(
-                  "sync: svm: tasks: {}: {}: transaction validation failed with {}",
+                  "sync: svm: tasks: {}: transaction validation failed with {}",
                   &job.name,
-                  &signature,
                   error
                 );
             }

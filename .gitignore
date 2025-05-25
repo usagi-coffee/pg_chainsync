@@ -8,3 +8,5 @@ install.sh
 *.install.sh
 dev/dev.sql
 examples/test.sql
+examples/svm_test.sql
+examples/evm_test.sql

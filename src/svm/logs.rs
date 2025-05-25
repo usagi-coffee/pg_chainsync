@@ -1,6 +1,6 @@
 use pgrx::{log, warning};
 
-use anyhow::Context;
+use anyhow::{ensure, Context};
 use solana_client::rpc_config::{
     RpcTransactionLogsConfig, RpcTransactionLogsFilter,
 };
@@ -9,7 +9,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use tokio::sync::oneshot;
-use tokio::time::{sleep, Duration};
+use tokio::time::Duration;
 use tokio_stream::{Stream, StreamExt, StreamNotifyClose};
 
 use solana_client::rpc_response::{Response, RpcLogsResponse};
@@ -105,7 +105,15 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                     loop {
                         match stream.next().await {
                             Some(Some(log)) => {
-                                handle_svm_log(&job, log, &channel).await
+                                if let Err(error) =
+                                    handle_svm_log(&job, log, &channel).await
+                                {
+                                    warning!(
+                                      "sync: svm: logs: {}: failed to handle log with {}",
+                                      &job.name,
+                                      error
+                                  );
+                                }
                             }
                             _ => {
                                 warning!(
@@ -148,68 +156,29 @@ pub async fn handle_svm_log(
     job: &Arc<Job>,
     log: Response<RpcLogsResponse>,
     channel: &Channel,
-) {
-    let number = log.context.slot;
+) -> Result<(), anyhow::Error> {
     log!(
-        "sync: svm: logs: {}: found {}",
+        "sync: svm: logs: {}: found {} at {}",
         &job.name,
-        &log.value.signature
+        &log.value.signature,
+        &log.context.slot
     );
-
-    // Await for block logic
-    if matches!(job.options.await_block, Some(true)) {
-        let (tx, rx) = oneshot::channel::<bool>();
-
-        if channel.send(Message::CheckBlock(number, tx, Arc::clone(job))) {
-            let found = rx.await;
-
-            if found.unwrap() == false {
-                // Retry finding block until available
-                let mut retries = 0;
-                loop {
-                    if retries > 20 {
-                        panic!(
-                            "sync: svm: logs: too many retries to get the block..."
-                        );
-                    }
-
-                    if let Ok(block) = job
-                        .connect_svm_rpc()
-                        .await
-                        .unwrap()
-                        .get_block_with_config(
-                            number,
-                            crate::svm::blocks::build_config(&job.options),
-                        )
-                        .await
-                    {
-                        channel.send(Message::SvmBlock(block, Arc::clone(job)));
-                        break;
-                    }
-
-                    log!(
-                        "sync: svm: logs: could not find block {}, retrying",
-                        number
-                    );
-
-                    sleep(Duration::from_millis(1000)).await;
-                    retries = retries + 1;
-                }
-            }
-        }
-    }
 
     if job.options.transaction_handler.is_some()
         || job.options.instruction_handler.is_some()
     {
-        transactions::handle_log(job, &log, channel).await;
+        transactions::handle_log(job, &log, channel).await?;
     }
 
     if let Some(_) = &job.options.log_handler {
-        if !channel.send(Message::SvmLog(log, Arc::clone(job))) {
-            warning!("sync: svm: logs: {}: failed to send", &job.name)
-        }
+        ensure!(
+            channel.send(Message::SvmLog(log, Arc::clone(job))),
+            "sync: svm: logs: {}: failed to send log",
+            &job.name
+        );
     }
+
+    Ok(())
 }
 
 pub fn build_config(_: &JobOptions) -> RpcTransactionLogsConfig {

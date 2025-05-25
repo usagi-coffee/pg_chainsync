@@ -12,6 +12,7 @@ use tokio::sync::{oneshot, Semaphore};
 use tokio::time::{sleep_until, Duration, Instant};
 
 use crate::channel::Channel;
+use crate::evm::blocks::try_block;
 use crate::evm::logs;
 use crate::types::*;
 use crate::worker::{EVM_BLOCKTICK_RESET, EVM_TASKS, EVM_WS_PERMITS};
@@ -59,16 +60,16 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                 continue;
             }
 
-            if let Some(setup_handler) = job.options.setup_handler.as_ref() {
-                let (tx, rx) = oneshot::channel::<Option<JsonB>>();
-                channel.send(Message::JsonHandler(
-                    task,
+            if let Some(setup_handler) = &job.options.setup_handler {
+                let (tx, rx) = oneshot::channel::<JsonB>();
+                channel.send(Message::ReturnHandler(
                     setup_handler.to_owned(),
-                    tx,
+                    PostgresSender::Json(tx),
+                    Arc::new(job.clone()),
                 ));
 
                 match rx.await {
-                    Ok(Some(json)) => match serde_json::from_value(json.0) {
+                    Ok(json) => match serde_json::from_value(json.0) {
                         // Update options
                         Ok(options) => job.options = options,
                         Err(error) => {
@@ -80,12 +81,10 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                         warning!("sync: evm: tasks: {}: setup handler failed with {}", &job.name, error);
                         continue;
                     }
-                    _ => {
-                        warning!("sync: evm: tasks: {}: setup handler did not return options jsonb", &job.name);
-                        continue;
-                    }
                 }
             }
+
+            let job = Arc::new(job);
 
             let Some(ws) = &job.options.ws else {
                 warning!("sync: evm: tasks: {}: no ws was provided", &job.name);
@@ -100,7 +99,6 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                 )))
                 .clone();
 
-            let job = Arc::new(job);
             tokio::spawn(async move {
                 let Ok(permit) = semaphore.acquire().await else {
                     warning!(
@@ -133,9 +131,9 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                         {
                             let (tx, rx) = oneshot::channel::<bool>();
                             channel.send(Message::Handler(
-                                job.id,
                                 success_handler.to_owned(),
                                 tx,
+                                job.clone(),
                             ));
 
                             let _ = rx.await;
@@ -153,9 +151,9 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                         {
                             let (tx, rx) = oneshot::channel::<bool>();
                             channel.send(Message::Handler(
-                                job.id,
                                 failure_handler.to_owned(),
                                 tx,
+                                job.clone(),
                             ));
 
                             let _ = rx.await;
@@ -183,63 +181,21 @@ async fn handle_blocks_task(
 ) -> Result<(), anyhow::Error> {
     let options = &job.options;
 
-    let mut client = job.reconnect_evm().await?;
-
-    let mut from = options.from_block.unwrap_or(0);
+    let from = options.from_block.unwrap_or(0);
     let to = {
         if let Some(to_block) = options.to_block {
             to_block
         } else {
-            client.get_block_number().await? as i64
+            job.reconnect_evm().await?.get_block_number().await? as i64
         }
     };
 
-    let mut retries = 0;
-    'blocks: loop {
-        ensure!(retries <= 10, "failed to get block after 10 retries");
-
-        client = job.reconnect_evm().await?;
-
-        for i in from..to {
-            let block = match client
-                .get_block(
-                    (i as u64).into(),
-                    // TODO: add configuration option for full block, for now only hashes
-                    alloy::rpc::types::BlockTransactionsKind::Hashes,
-                )
-                .await
-            {
-                Ok(block) => block,
-                Err(error) => {
-                    warning!(
-                      "sync: evm: blocks: {}: failed to get block with {}, reconnecting...",
-                      &job.name,
-                      error
-                    );
-                    retries += 1;
-
-                    sleep_until(Instant::now() + Duration::from_millis(250))
-                        .await;
-                    continue 'blocks;
-                }
-            };
-
-            retries = 0;
-
-            if let Some(block) = block {
-                channel.send(Message::EvmBlock(block.header, Arc::clone(&job)));
-            } else {
-                warning!(
-                    "sync: evm: blocks: {}: got empty block at {}",
-                    &job.name,
-                    i
-                );
-            }
-
-            from = i;
-        }
-
-        break;
+    for number in from..to {
+        let block = try_block(number as u64, &job).await?;
+        ensure!(
+            channel.send(Message::EvmBlock(block.header, Arc::clone(&job))),
+            "failed to send block to channel",
+        );
     }
 
     Ok(())
@@ -384,7 +340,7 @@ async fn handle_log_task(
                     retries = 0;
 
                     for log in logs.drain(0..) {
-                        logs::handle_evm_log(&job, log, &channel).await;
+                        logs::handle_evm_log(&job, log, &channel).await?;
                     }
 
                     state.next();
@@ -442,7 +398,7 @@ async fn handle_log_task(
         match client.get_logs(&filter).await {
             Ok(mut logs) => {
                 for log in logs.drain(0..) {
-                    logs::handle_evm_log(&job, log, &channel).await;
+                    logs::handle_evm_log(&job, log, &channel).await?;
                 }
             }
             Err(error) => {
