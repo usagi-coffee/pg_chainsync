@@ -33,7 +33,6 @@ solana-transaction-status-client-types = "2"
 chrono = "0.4"
 bs58 = "0.5"
 derive_more = "2.0.1"
-linked_hash_set = "0.1.5"
 indexmap = "2.9.0"
 
 [dev-dependencies]
