@@ -95,9 +95,9 @@ pub enum Message {
     SvmTransaction(SvmTransaction, Arc<Job>),
 
     // Handlers
-    Handler(Arc<String>, oneshot::Sender<bool>, Arc<Job>),
-    ReturnHandler(Arc<String>, PostgresSender, Arc<Job>),
-    ReturnHandlerWithArg(PostgresArg, Arc<String>, PostgresSender, Arc<Job>),
+    Handler(Arc<str>, oneshot::Sender<bool>, Arc<Job>),
+    ReturnHandler(Arc<str>, PostgresSender, Arc<Job>),
+    ReturnHandlerWithArg(PostgresArg, Arc<str>, PostgresSender, Arc<Job>),
     // Utility messages
     Shutdown,
 }
@@ -138,28 +138,28 @@ pub struct JobOptions {
     pub cron: Option<String>,
 
     // Handlers
-    pub setup_handler: Option<Arc<String>>,
-    pub success_handler: Option<Arc<String>>,
-    pub failure_handler: Option<Arc<String>>,
+    pub setup_handler: Option<Arc<str>>,
+    pub success_handler: Option<Arc<str>>,
+    pub failure_handler: Option<Arc<str>>,
 
     /// Block job
-    pub block_handler: Option<Arc<String>>,
+    pub block_handler: Option<Arc<str>>,
     // TODO: hashes vs full blocks?
 
     // Log job
     /// Function to call when handling events
-    pub log_handler: Option<Arc<String>>,
+    pub log_handler: Option<Arc<str>>,
     /// If defined it awaits for block before calling the handler
     pub await_block: Option<bool>,
     /// If defined it awaits for block before calling the handler
-    pub block_check_handler: Option<Arc<String>>,
+    pub block_check_handler: Option<Arc<str>>,
 
     // Transaction job
-    pub transaction_handler: Option<Arc<String>>,
+    pub transaction_handler: Option<Arc<str>>,
     // If defined it will skip the transaction from processing
-    pub transaction_check_handler: Option<Arc<String>>,
+    pub transaction_check_handler: Option<Arc<str>>,
     // Instruction job
-    pub instruction_handler: Option<Arc<String>>,
+    pub instruction_handler: Option<Arc<str>>,
     // Filters instructions by the specific discriminators
     pub instruction_discriminators: Option<Vec<u8>>,
 

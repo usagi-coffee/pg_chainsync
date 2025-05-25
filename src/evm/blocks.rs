@@ -40,7 +40,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
         log!("sync: evm: blocks: found {} jobs", jobs.len());
 
         for job in jobs {
-            let channel = channel.to_owned();
+            let channel = channel.clone();
             let handle = tokio::spawn(async move {
                 let mut retries = 0;
                 'job: loop {

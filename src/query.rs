@@ -86,10 +86,7 @@ impl Job {
         })
     }
 
-    pub fn handler(
-        handler: &Arc<String>,
-        job: i32,
-    ) -> Result<(), anyhow::Error> {
+    pub fn handler(handler: &Arc<str>, job: i32) -> Result<(), anyhow::Error> {
         Spi::run_with_args(
             format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $1))", handler).as_str(),
             &vec![DatumWithOid::from(job)],
@@ -98,7 +95,7 @@ impl Job {
     }
 
     pub fn return_handler<R: FromDatum + IntoDatum>(
-        handler: &Arc<String>,
+        handler: &Arc<str>,
         job: i32,
     ) -> Result<R, anyhow::Error> {
         Spi::get_one_with_args::<R>(
@@ -114,7 +111,7 @@ impl Job {
         R: FromDatum + IntoDatum,
     >(
         arg: T,
-        handler: &Arc<String>,
+        handler: &Arc<str>,
         job: i32,
     ) -> Result<R, anyhow::Error> {
         Spi::get_one_with_args::<R>(
@@ -129,7 +126,7 @@ impl Job {
 pub trait PgHandler {
     fn call_handler(
         &self,
-        handler: &String,
+        handler: &str,
         job: i64,
     ) -> Result<PostgresReturn, anyhow::Error>;
 }
@@ -137,7 +134,7 @@ pub trait PgHandler {
 impl PgHandler for u64 {
     fn call_handler(
         &self,
-        handler: &String,
+        handler: &str,
         job: i64,
     ) -> Result<PostgresReturn, anyhow::Error> {
         Spi::get_one_with_args::<i64>(
@@ -155,7 +152,7 @@ impl PgHandler for u64 {
 impl PgHandler for EvmBlock {
     fn call_handler(
         &self,
-        handler: &String,
+        handler: &str,
         job: i64,
     ) -> Result<PostgresReturn, anyhow::Error> {
         let mut data =
@@ -223,7 +220,7 @@ impl PgHandler for EvmBlock {
 impl PgHandler for EvmLog {
     fn call_handler(
         &self,
-        handler: &String,
+        handler: &str,
         job: i64,
     ) -> Result<PostgresReturn, anyhow::Error> {
         let mut data =
@@ -271,7 +268,7 @@ impl PgHandler for EvmLog {
 impl PgHandler for SvmBlock {
     fn call_handler(
         &self,
-        handler: &String,
+        handler: &str,
         job: i64,
     ) -> Result<PostgresReturn, anyhow::Error> {
         let mut data =
@@ -318,7 +315,7 @@ impl PgHandler for SvmBlock {
 impl PgHandler for SvmLog {
     fn call_handler(
         &self,
-        handler: &String,
+        handler: &str,
         job: i64,
     ) -> Result<PostgresReturn, anyhow::Error> {
         let mut data =
@@ -347,7 +344,7 @@ impl PgHandler for SvmLog {
 impl PgHandler for SvmTransaction {
     fn call_handler(
         &self,
-        handler: &String,
+        handler: &str,
         job: i64,
     ) -> Result<PostgresReturn, anyhow::Error> {
         let mut data =
@@ -384,7 +381,7 @@ impl PgHandler for SvmTransaction {
 impl PgHandler for SolanaInstruction<'_> {
     fn call_handler(
         &self,
-        handler: &String,
+        handler: &str,
         job: i64,
     ) -> Result<PostgresReturn, anyhow::Error> {
         let mut data =
@@ -435,7 +432,7 @@ impl PgHandler for SolanaInstruction<'_> {
 impl PgHandler for SolanaInnerInstruction<'_> {
     fn call_handler(
         &self,
-        handler: &String,
+        handler: &str,
         job: i64,
     ) -> Result<PostgresReturn, anyhow::Error> {
         let mut data =
