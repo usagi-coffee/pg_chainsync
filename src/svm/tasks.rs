@@ -13,7 +13,7 @@ use solana_transaction_status_client_types::EncodedConfirmedTransactionWithStatu
 use tokio::sync::{oneshot, Semaphore};
 use tokio::time::{sleep_until, Duration, Instant};
 
-use linked_hash_set::LinkedHashSet;
+use indexmap::IndexSet;
 
 use super::transactions;
 use super::{blocks, SvmTransaction};
@@ -238,7 +238,7 @@ async fn handle_transactions_task(
         until = Some(Signature::from_str(until_signature)?);
     }
 
-    let mut signatures: LinkedHashSet<Signature> = LinkedHashSet::new();
+    let mut signatures: IndexSet<Signature> = IndexSet::new();
 
     let mut retries = 0;
     'fill: loop {
