@@ -45,7 +45,7 @@ CREATE TYPE chainsync.SvmInstruction AS (
   program_id TEXT,
   index SMALLINT,
   inner_index SMALLINT,
-  data TEXT,
+  data BYTEA,
   block_time BIGINT
 );
 

@@ -225,8 +225,6 @@ async fn handle_transactions_task(
         bail!("mentions field is required for transaction task");
     };
 
-    let address = Pubkey::from_str(mentions[0].as_str())?;
-
     let mut before: Option<Signature> = None;
     let mut until: Option<Signature> = None;
 
@@ -240,61 +238,77 @@ async fn handle_transactions_task(
 
     let mut signatures: IndexSet<Signature> = IndexSet::new();
 
-    let mut retries = 0;
-    'fill: loop {
-        ensure!(
-            retries < 10,
-            "failed to get signatures after 10 retries, aborting..."
-        );
+    log!(
+        "sync: svm: tasks: {}: getting signatures for {} mentions",
+        &job.name,
+        mentions.len()
+    );
 
-        log!(
-            "sync: svm: tasks: {}: getting signatures {:?} <- {:?}",
-            &job.name,
-            &until,
-            &before
-        );
+    for (i, mention) in mentions.iter().enumerate() {
+        let address = Pubkey::from_str(mention)?;
 
-        match rpc.get_signatures_for_address_with_config(
-          &address,
-          solana_client::rpc_client::GetConfirmedSignaturesForAddress2Config {
-              before,
-              until,
-              limit: Some(1000),
-              commitment: Some(solana_sdk::commitment_config::CommitmentConfig {
-                  commitment: CommitmentLevel::Finalized,
-              }),
-          },
-      ).await {
-        Ok(sigs) => {
-          log!(
-            "sync: svm: tasks: {}: got {} signatures",
-            &job.name,
-            sigs.len()
-          );
+        let mut retries = 0;
+        'fill: loop {
+            ensure!(
+                retries < 10,
+                "failed to get signatures after 10 retries, aborting..."
+            );
 
-          if sigs.is_empty() {
-            break 'fill;
-          }
+            log!(
+                "sync: svm: tasks: {}: getting signatures for {}, {} / {}",
+                &job.name,
+                mention,
+                i + 1,
+                mentions.len()
+            );
 
-          before = Signature::from_str(sigs[sigs.len() - 1].signature.as_str())?.into();
+            match rpc.get_signatures_for_address_with_config(
+              &address,
+              solana_client::rpc_client::GetConfirmedSignaturesForAddress2Config {
+                  before,
+                  until,
+                  limit: Some(1000),
+                  commitment: Some(solana_sdk::commitment_config::CommitmentConfig {
+                      commitment: CommitmentLevel::Finalized,
+                  }),
+              }).await {
+                Ok(sigs) => {
+                  log!(
+                    "sync: svm: tasks: {}: {}: got {} signatures",
+                    &job.name,
+                    mention,
+                    sigs.len()
+                  );
 
-          for signature in sigs.iter().rev() {
-            let signature = Signature::from_str(signature.signature.as_str())
-                .expect("signature to be parsed");
-            signatures.insert(signature);
-          }
-        },
-        Err(error) => {
-          warning!("sync: svm: tasks: {}: failed to get signatures with {}", &job.name, error);
+                  if sigs.is_empty() {
+                    break 'fill;
+                  }
 
-          sleep_until(
-              Instant::now() + Duration::from_millis(1000),
-          )
-          .await;
-          retries += 1;
-          continue;
+                  before = Signature::from_str(sigs[sigs.len() - 1].signature.as_str())?.into();
+
+                  // Insert signatures from newest to oldest (will be reversed later)
+                  for signature in sigs.iter() {
+                    let signature = Signature::from_str(signature.signature.as_str())
+                        .expect("signature to be parsed");
+                    signatures.insert(signature);
+                  }
+
+                  if sigs.len() < 1000 {
+                    break 'fill;
+                  }
+                },
+                Err(error) => {
+                  warning!("sync: svm: tasks: {}: failed to get signatures with {}", &job.name, error);
+
+                  sleep_until(
+                      Instant::now() + Duration::from_millis(1000),
+                  )
+                  .await;
+                  retries += 1;
+                  continue;
+                }
+            }
         }
-      }
     }
 
     let mut queue: Vec<
@@ -322,6 +336,9 @@ async fn handle_transactions_task(
     } else {
         queue.reserve_exact(signatures.len());
     }
+
+    // Reverse the signatures to fetch them in oldest to newest order
+    signatures.reverse();
 
     ensure!(
         !signatures.is_empty(),

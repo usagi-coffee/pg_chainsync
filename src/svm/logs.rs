@@ -195,7 +195,9 @@ pub fn build_config(_: &SvmOptions) -> RpcTransactionLogsConfig {
 
 pub fn build_filter(options: &SvmOptions) -> RpcTransactionLogsFilter {
     if let Some(mentions) = &options.mentions {
-        return RpcTransactionLogsFilter::Mentions(mentions.clone());
+        return RpcTransactionLogsFilter::Mentions(
+            mentions.iter().map(|m| m.to_string()).collect(),
+        );
     }
 
     RpcTransactionLogsFilter::All

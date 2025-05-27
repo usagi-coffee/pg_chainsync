@@ -25,6 +25,7 @@ services:
       - ../pg_chainutils/target/release/pg_chainutils-pg17/opt/postgres/pgrx-install/lib/postgresql/pg_chainutils.so:/usr/lib/postgresql/17/lib/pg_chainutils.so:z
       - ../pg_chainutils/target/release/pg_chainutils-pg17/opt/postgres/pgrx-install/share/postgresql/extension/pg_chainutils.control:/usr/share/postgresql/17/extension/pg_chainutils.control:z
       - ../pg_chainutils/target/release/pg_chainutils-pg17/opt/postgres/pgrx-install/share/postgresql/extension/pg_chainutils--0.2.2.sql:/usr/share/postgresql/17/extension/pg_chainutils--0.2.2.sql:z
+      - ./accounts.csv:/tmp/accounts.csv:z
     ports:
       - 5432:5432
     networks:

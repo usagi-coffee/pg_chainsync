@@ -161,7 +161,7 @@ pub struct SvmOptions {
 
     pub from_slot: Option<u64>,
     pub to_slot: Option<u64>,
-    pub mentions: Option<Vec<String>>,
+    pub mentions: Option<Vec<Arc<str>>>,
 
     #[serde(default, with = "custom_pubkey")]
     pub program: Option<Pubkey>,
@@ -223,7 +223,8 @@ impl JobOptions {
     pub fn is_transaction_job(&self) -> bool {
         if let Some(options) = &self.svm {
             return options.log_handler.is_some()
-                || options.transaction_handler.is_some();
+                || options.transaction_handler.is_some()
+                || options.instruction_handler.is_some();
         }
 
         false

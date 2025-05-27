@@ -1,0 +1,73 @@
+-- Store the history of the accounts here
+-- In this example we do not track closed accounts
+CREATE TABLE accounts (
+  address TEXT,
+  owner TEXT,
+  mint TEXT,
+  changed_at TIMESTAMPTZ,
+  signature TEXT DEFAULT '', -- The newest account owner is always with empty change
+  PRIMARY KEY (address, signature)
+);
+
+-- Handle the account-specific events like initialize and setauthority
+CREATE FUNCTION account_handler(inst chainsync.SvmInstruction, job JSONB) RETURNS VOID
+AS $$
+DECLARE
+  bytes BYTEA;
+  discriminator SMALLINT;
+  account TEXT;
+  owner TEXT;
+  mint TEXT;
+  changed BOOLEAN = FALSE;
+BEGIN
+  -- Check if this instruction changes the owner
+  -- Also lock the account to prevent concurrent updates (we are doing sequential anyway but to be safe)
+  SELECT 1 FROM accounts WHERE address = inst.accounts[1] AND signature  = '' INTO changed FOR UPDATE;
+
+  discriminator := get_byte(inst.data, 0);
+  IF discriminator = 1 THEN -- InitializeAccount
+    IF inst.accounts_mints[1] <> (job->>'token')::TEXT THEN RETURN; END IF;
+    account := inst.accounts[1];
+    owner := inst.accounts[2];
+  ELSIF discriminator = 18 THEN -- InitializeAccount3
+    IF inst.accounts_mints[1] <> (job->>'token')::TEXT THEN RETURN; END IF;
+    account := inst.accounts[1];
+    owner := base58.encode(SUBSTRING(inst.data FROM 2));
+  ELSIF discriminator = 6 THEN -- SetAuthority
+    -- We are safe to skip this set authority as it cannot happen for uninitialized accounts
+    IF changed THEN RETURN; END IF;
+    account := inst.accounts[1];
+    owner := inst.accounts[2];
+  END IF;
+  -- TODO: CloseAccount?
+
+  -- Update the already existing account
+  IF changed THEN
+    UPDATE accounts SET signature = inst.signature, changed_at = TO_TIMESTAMP(inst.block_time) AT TIME ZONE 'UTC' WHERE address = account AND signature = '';
+  END IF;
+
+  -- Newest account will have empty signature
+  INSERT INTO accounts (address, owner, mint, signature)
+  VALUES (account, owner, (job->>'token')::TEXT, '');
+END;
+$$ LANGUAGE plpgsql;
+
+-- This task will build the accounts history table with the accounts that are related to the token
+SELECT chainsync.register(
+  'svm-accounts',
+  '{
+    "ws": "...",
+    "rpc": "...",
+    "oneshot": true,
+    "preload": true,
+
+    "svm": {
+      "program": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+      "mentions": ["..."],
+      "instruction_handler": "account_handler",
+      "instruction_discriminators": [1, 6, 18]
+    },
+
+    "token": "..."
+  }'::JSONB
+);

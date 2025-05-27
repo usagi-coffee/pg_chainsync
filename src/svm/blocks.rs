@@ -178,7 +178,7 @@ pub async fn handle_block(
 pub fn build_filter(options: &SvmOptions) -> RpcBlockSubscribeFilter {
     if let Some(mentions) = &options.mentions {
         return RpcBlockSubscribeFilter::MentionsAccountOrProgram(
-            mentions[0].clone(),
+            mentions[0].to_string(),
         );
     }
 

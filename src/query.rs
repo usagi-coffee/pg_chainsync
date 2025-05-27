@@ -393,10 +393,7 @@ impl PgHandler for SolanaInstruction<'_> {
         data.set_by_name("slot", pgrx::AnyNumeric::try_from(self.tx.slot))?;
         data.set_by_name("block_time", self.tx.block_time)?;
 
-        data.set_by_name(
-            "data",
-            bs58::encode(&self.instruction.data).into_string(),
-        )?;
+        data.set_by_name("data", self.instruction.data.as_slice())?;
 
         data.set_by_name(
             "program_id",
@@ -444,7 +441,10 @@ impl PgHandler for SolanaInnerInstruction<'_> {
         data.set_by_name("slot", pgrx::AnyNumeric::try_from(self.tx.slot))?;
         data.set_by_name("block_time", self.tx.block_time)?;
 
-        data.set_by_name("data", &self.instruction.data)?;
+        data.set_by_name(
+            "data",
+            bs58::decode(&self.instruction.data).into_vec()?.as_slice(),
+        )?;
 
         data.set_by_name(
             "program_id",
