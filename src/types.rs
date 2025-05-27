@@ -165,8 +165,9 @@ pub struct SvmOptions {
 
     #[serde(default, with = "custom_pubkey")]
     pub program: Option<Pubkey>,
-    pub before: Option<String>,
-    pub until: Option<String>,
+
+    pub before: Option<Vec<Arc<str>>>,
+    pub until: Option<Vec<Arc<str>>>,
 
     pub transaction_details: Option<SvmTransactionDetails>,
 }

@@ -225,17 +225,6 @@ async fn handle_transactions_task(
         bail!("mentions field is required for transaction task");
     };
 
-    let mut before: Option<Signature> = None;
-    let mut until: Option<Signature> = None;
-
-    if let Some(before_signature) = &options.before {
-        before = Some(Signature::from_str(before_signature)?);
-    }
-
-    if let Some(until_signature) = &options.until {
-        until = Some(Signature::from_str(until_signature)?);
-    }
-
     let mut signatures: IndexSet<Signature> = IndexSet::new();
 
     log!(
@@ -246,6 +235,20 @@ async fn handle_transactions_task(
 
     for (i, mention) in mentions.iter().enumerate() {
         let address = Pubkey::from_str(mention)?;
+        let mut before: Option<Signature> = None;
+        let mut until: Option<Signature> = None;
+
+        if let Some(before_signatures) = &options.before {
+            if let Some(signature) = before_signatures.get(i) {
+                before = Some(Signature::from_str(signature)?);
+            }
+        }
+
+        if let Some(until_signatures) = &options.until {
+            if let Some(signature) = until_signatures.get(i) {
+                until = Some(Signature::from_str(signature)?);
+            }
+        }
 
         let mut retries = 0;
         'fill: loop {
