@@ -12,7 +12,7 @@ CREATE TABLE accounts (
 
 CREATE UNIQUE INDEX accounts_changed ON accounts (address, changed_at DESC);
 
--- Handle the account-specific events like initialize and setauthority
+-- Handle account-specific events like initialize and setauthority
 CREATE FUNCTION account_handler(inst chainsync.SvmInstruction, job JSONB) RETURNS VOID
 AS $$
 DECLARE
