@@ -276,16 +276,16 @@ async fn handle_transactions_task(
                   }),
               }).await {
                 Ok(sigs) => {
+                  if sigs.is_empty() {
+                    break 'fill;
+                  }
+
                   log!(
                     "sync: svm: tasks: {}: {}: got {} signatures",
                     &job.name,
                     mention,
                     sigs.len()
                   );
-
-                  if sigs.is_empty() {
-                    break 'fill;
-                  }
 
                   before = Signature::from_str(sigs[sigs.len() - 1].signature.as_str())?.into();
 
@@ -296,9 +296,7 @@ async fn handle_transactions_task(
                     signatures.insert(signature);
                   }
 
-                  if sigs.len() < 1000 {
-                    break 'fill;
-                  }
+                  retries = 0;
                 },
                 Err(error) => {
                   warning!("sync: svm: tasks: {}: failed to get signatures with {}", &job.name, error);
