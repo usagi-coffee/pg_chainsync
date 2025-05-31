@@ -215,7 +215,7 @@ pub async fn handle_evm_log(
                 Ok(found) => {
                     if found != block as i64 {
                         bail!(
-                            "sync: evm: logs: {}, block check handler returned {} instead of {}",
+                            "sync: evm: logs: {}, block skip lookup returned {} instead of {}",
                             &job.name,
                             found,
                             block
@@ -245,11 +245,6 @@ pub async fn handle_evm_log(
                     }
                 },
             };
-        } else {
-            bail!(
-                "sync: evm: logs: {}, no block check handler provided",
-                &job.name
-            );
         }
     }
 
