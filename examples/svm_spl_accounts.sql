@@ -4,10 +4,13 @@ CREATE TABLE accounts (
   address TEXT,
   owner TEXT,
   mint TEXT,
-  changed_at TIMESTAMPTZ,
-  signature TEXT DEFAULT '', -- The newest account owner is always with empty change
+  closed BOOLEAN,
+  signature TEXT NOT NULL,
+  changed_at TIMESTAMPTZ NOT NULL,
   PRIMARY KEY (address, signature)
 );
+
+CREATE UNIQUE INDEX accounts_changed ON accounts (address, changed_at DESC);
 
 -- Handle the account-specific events like initialize and setauthority
 CREATE FUNCTION account_handler(inst chainsync.SvmInstruction, job JSONB) RETURNS VOID
@@ -18,37 +21,31 @@ DECLARE
   account TEXT;
   owner TEXT;
   mint TEXT;
-  changed BOOLEAN = FALSE;
+  closed BOOLEAN = FALSE;
 BEGIN
-  -- Check if this instruction changes the owner
-  -- Also lock the account to prevent concurrent updates (we are doing sequential anyway but to be safe)
-  SELECT 1 FROM accounts WHERE address = inst.accounts[1] AND signature  = '' INTO changed FOR UPDATE;
-
   discriminator := get_byte(inst.data, 0);
   IF discriminator = 1 THEN -- InitializeAccount
-    IF inst.accounts_mints[1] <> (job->>'token')::TEXT THEN RETURN; END IF;
+    IF inst.accounts[2] <> (job->>'token')::TEXT THEN RETURN; END IF;
     account := inst.accounts[1];
-    owner := inst.accounts[2];
+    owner := inst.accounts[3];
   ELSIF discriminator = 18 THEN -- InitializeAccount3
     IF inst.accounts_mints[1] <> (job->>'token')::TEXT THEN RETURN; END IF;
     account := inst.accounts[1];
     owner := base58.encode(SUBSTRING(inst.data FROM 2));
   ELSIF discriminator = 6 THEN -- SetAuthority
     -- We are safe to skip this set authority as it cannot happen for uninitialized accounts
-    IF changed THEN RETURN; END IF;
     account := inst.accounts[1];
     owner := inst.accounts[2];
+  ELSIF discriminator = 9 THEN -- CloseAccount
+    IF inst.accounts_mints[1] <> (job->>'token')::TEXT THEN RETURN; END IF;
+    account := inst.accounts[1];
+    owner := inst.accounts[3];
+    closed := TRUE;
   END IF;
-  -- TODO: CloseAccount?
 
-  -- Update the already existing account
-  IF changed THEN
-    UPDATE accounts SET signature = inst.signature, changed_at = TO_TIMESTAMP(inst.block_time) AT TIME ZONE 'UTC' WHERE address = account AND signature = '';
-  END IF;
-
-  -- Newest account will have empty signature
-  INSERT INTO accounts (address, owner, mint, signature)
-  VALUES (account, owner, (job->>'token')::TEXT, '');
+  INSERT INTO accounts (address, owner, mint, signature, changed_at, closed)
+  VALUES(account, owner, (job->>'token')::TEXT, inst.signature, TO_TIMESTAMP(inst.block_time) AT TIME ZONE 'UTC', closed)
+  ON CONFLICT (address, changed_at) DO UPDATE SET signature = EXCLUDED.signature, owner = EXCLUDED.owner, closed = EXCLUDED.closed;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -65,7 +62,7 @@ SELECT chainsync.register(
       "program": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
       "mentions": ["..."],
       "instruction_handler": "account_handler",
-      "instruction_discriminators": [1, 6, 18]
+      "instruction_discriminators": [1, 6, 9, 18]
     },
 
     "token": "..."
