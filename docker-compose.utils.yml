@@ -32,15 +32,6 @@ services:
       - net-chainsync
     depends_on:
       - foundry
-  erc20:
-    container_name: pg-chainsync-erc20
-    build:
-      context: ./dev/erc20
-      dockerfile: Dockerfile
-    networks:
-      - net-chainsync
-    depends_on:
-      - foundry
 networks:
   net-chainsync:
     driver: bridge
