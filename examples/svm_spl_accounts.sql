@@ -16,7 +16,6 @@ CREATE UNIQUE INDEX accounts_changed ON accounts (address, changed_at DESC);
 CREATE FUNCTION account_handler(inst chainsync.SvmInstruction, job JSONB) RETURNS VOID
 AS $$
 DECLARE
-  bytes BYTEA;
   discriminator SMALLINT;
   account TEXT;
   owner TEXT;

@@ -9,7 +9,6 @@ CREATE TABLE transfers (
 CREATE FUNCTION svm_transfer_handler(inst chainsync.SvmInstruction, job JSONB) RETURNS VOID
 AS $$
 DECLARE
-  bytes BYTEA;
   discriminator SMALLINT;
   source TEXT;
   destination TEXT;
@@ -19,7 +18,8 @@ BEGIN
 
   IF discriminator = 3 THEN -- Transfer
     -- NOTICE: Not always there will be an account mint mentioned in the transaction!
-    -- To properly handle Transfer you need an additional source of account -> mint mapping, like accounts table with owners, check account_mint_lookup feature
+    -- To properly handle Transfer you need an additional source of account -> mint mapping, like accounts table (address, owner, mint)
+    -- You can use account_mint_lookup feature to inject mint into accounts_mints from your accounts table!
     IF inst.accounts_mints[1] IS DISTINCT FROM (job->>'token')::TEXT THEN RETURN; END IF; -- Mint NOT always mentioned!
 
     source := inst.accounts[1]; -- or accounts_owners[1]
