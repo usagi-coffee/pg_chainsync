@@ -149,7 +149,7 @@ pub struct SvmOptions {
     // Transaction job
     pub transaction_handler: Option<Arc<str>>,
     // If defined it will skip the transaction from processing
-    pub transaction_check_handler: Option<Arc<str>>,
+    pub transaction_skip_lookup: Option<Arc<str>>,
     // Instruction job
     pub instruction_handler: Option<Arc<str>>,
     // Filters instructions by the specific discriminators

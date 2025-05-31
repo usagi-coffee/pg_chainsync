@@ -316,7 +316,7 @@ async fn handle_transactions_task(
         oneshot::Receiver<EncodedConfirmedTransactionWithStatusMeta>,
     > = Vec::new();
 
-    if let Some(handler) = &options.transaction_check_handler {
+    if let Some(handler) = &options.transaction_skip_lookup {
         for signature in std::mem::take(&mut signatures) {
             let (tx, rx) = oneshot::channel::<String>();
             ensure!(
