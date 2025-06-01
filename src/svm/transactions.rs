@@ -261,8 +261,8 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                                 return Some(&initialized.mint);
                             }
 
-                            if let Some(owner) = &lookedup_mints[index] {
-                                return Some(&owner);
+                            if let Some(mint) = &lookedup_mints[index] {
+                                return Some(&mint);
                             }
 
                             None
@@ -386,7 +386,7 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                         return Some(&initialized.mint);
                     }
 
-                    if let Some(mint) = &lookedup_owners[index] {
+                    if let Some(mint) = &lookedup_mints[index] {
                         return Some(&mint);
                     }
 
@@ -424,7 +424,6 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
             &tx.signature
         );
 
-        let id = job.id;
         if let Err(error) =
             anyhow_pg_try!(|| tx.call_handler(transaction_handler, id))
         {

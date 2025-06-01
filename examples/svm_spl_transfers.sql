@@ -16,6 +16,20 @@ DECLARE
 BEGIN
   discriminator := get_byte(inst.data, 0);
 
+  -- Calculate the amount from the instruction data, this is probably slower than using custom extension function
+  SELECT
+    get_byte(inst.data, 1) +
+    get_byte(inst.data, 2) * 256 +
+    get_byte(inst.data, 3) * 256^2 +
+    get_byte(inst.data, 4) * 256^3 +
+    get_byte(inst.data, 5) * 256^4 +
+    get_byte(inst.data, 6) * 256^5 +
+    get_byte(inst.data, 7) * 256^6 +
+    get_byte(inst.data, 8) * 256^7
+  INTO amount;
+  -- Convert the amount to the proper value using the decimals from the job
+  amount := amount / POWER(10, (job->>'decimals')::SMALLINT);
+
   IF discriminator = 3 THEN -- Transfer
     -- NOTICE: Not always there will be an account mint mentioned in the transaction!
     -- To properly handle Transfer you need an additional source of account -> mint mapping, like accounts table (address, owner, mint)
@@ -52,20 +66,6 @@ BEGIN
     RAISE LOG 'BurnChecked % amount: %', source, amount;
   END IF;
 
-  -- Calculate the amount from the instruction data, this is probably slower than using custom extension function
-  SELECT
-    get_byte(inst.data, 1) +
-    get_byte(inst.data, 2) * 256 +
-    get_byte(inst.data, 3) * 256^2 +
-    get_byte(inst.data, 4) * 256^3 +
-    get_byte(inst.data, 5) * 256^4 +
-    get_byte(inst.data, 6) * 256^5 +
-    get_byte(inst.data, 7) * 256^6 +
-    get_byte(inst.data, 8) * 256^7
-  INTO amount;
-  -- Convert the amount to the proper value using the decimals from the job
-  amount := amount / POWER(10, (job->>'decimals')::SMALLINT);
-
   INSERT INTO transfers (source, destination, amount, timestamp)
   VALUES (source, destination, amount, TO_TIMESTAMP(inst.block_time) AT TIME ZONE 'UTC')
   ON CONFLICT DO NOTHING;
@@ -75,18 +75,18 @@ $$ LANGUAGE plpgsql;
 SELECT chainsync.register(
   'svm-transfers',
   '{
-    "ws": "<redacted>",
-    "rpc": "<redacted>",
+    "ws": "...",
+    "rpc": "...",
     "oneshot": true,
 
     "svm": {
       "program": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-      "mentions": ["<your_token>"],
+      "mentions": ["..."],
       "instruction_handler": "svm_transfer_handler",
       "instruction_discriminators": [3, 7, 8, 12, 14, 15]
     },
 
-    "address": "<your_token>",
-    "decimals": 6,
+    "address": "...",
+    "decimals": 8
   }'::JSONB
 );

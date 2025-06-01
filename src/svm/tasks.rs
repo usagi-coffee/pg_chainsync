@@ -316,6 +316,7 @@ async fn handle_transactions_task(
         oneshot::Receiver<EncodedConfirmedTransactionWithStatusMeta>,
     > = Vec::new();
 
+    let mut skipped_signatures = 0;
     if let Some(handler) = &options.transaction_skip_lookup {
         for signature in std::mem::take(&mut signatures) {
             let (tx, rx) = oneshot::channel::<String>();
@@ -332,6 +333,8 @@ async fn handle_transactions_task(
 
             if let Err(_) = rx.await {
                 signatures.insert(signature);
+            } else {
+                skipped_signatures += 1;
             }
         }
     } else {
@@ -348,9 +351,10 @@ async fn handle_transactions_task(
     );
 
     log!(
-        "sync: svm: tasks: {}: got {} signatures total, starting to fetch transactions",
+        "sync: svm: tasks: {}: got {} ({} skipped) signatures total",
         &job.name,
-        signatures.len()
+        signatures.len(),
+        skipped_signatures
     );
 
     let config = transactions::build_config(&job.options);
