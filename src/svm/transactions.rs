@@ -402,6 +402,13 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                 index: i as i16 + 1,
             };
 
+            log!(
+                "sync: svm: transactions: {}: adding {}<{}.0>",
+                &job.name,
+                &tx.signature,
+                i + 1
+            );
+
             if let Err(error) = anyhow_pg_try!(
                 || instruction.call_handler(&instruction_handler, id)
             ) {
