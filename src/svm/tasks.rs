@@ -110,8 +110,6 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
 
             match task {
                 Ok(()) => {
-                    log!("sync: svm: tasks: {}: task completed", &job.name);
-
                     if let Some(success_handler) = &job.options.success_handler
                     {
                         let (tx, rx) = oneshot::channel::<bool>();
@@ -123,14 +121,10 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
 
                         let _ = rx.await;
                     }
+
+                    log!("sync: svm: tasks: {}: task completed", &job.name);
                 }
                 Err(error) => {
-                    warning!(
-                        "sync: svm: tasks: {}: task failed with {}",
-                        &job.name,
-                        error
-                    );
-
                     if let Some(failure_handler) = &job.options.failure_handler
                     {
                         let (tx, rx) = oneshot::channel::<bool>();
@@ -141,6 +135,12 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                         ));
                         let _ = rx.await;
                     }
+
+                    warning!(
+                        "sync: svm: tasks: {}: task failed with {}",
+                        &job.name,
+                        error
+                    );
                 }
             };
 

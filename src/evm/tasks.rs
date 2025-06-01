@@ -124,8 +124,6 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
 
                 match task {
                     Ok(()) => {
-                        log!("sync: evm: tasks: {}: task completed", &job.name);
-
                         if let Some(success_handler) =
                             &job.options.success_handler
                         {
@@ -138,14 +136,10 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
 
                             let _ = rx.await;
                         }
+
+                        log!("sync: evm: tasks: {}: task completed", &job.name);
                     }
                     Err(error) => {
-                        warning!(
-                            "sync: evm: tasks: {}: task failed with {}",
-                            &job.name,
-                            error
-                        );
-
                         if let Some(failure_handler) =
                             &job.options.failure_handler
                         {
@@ -158,6 +152,12 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
 
                             let _ = rx.await;
                         }
+
+                        warning!(
+                            "sync: evm: tasks: {}: task failed with {}",
+                            &job.name,
+                            error
+                        );
                     }
                 };
 
