@@ -391,7 +391,7 @@ async fn handle_message(mut stream: MessageStream) {
                 );
 
                 let Some(handler) = &options.log_handler else {
-                    error!("sync: svm: blocks: {}: missing handler", job.name);
+                    error!("sync: svm: logs: {}: missing handler", job.name);
                 };
 
                 let id = job.id;

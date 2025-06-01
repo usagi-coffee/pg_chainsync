@@ -361,7 +361,7 @@ async fn handle_transactions_task(
     let semaphore = Arc::new(Semaphore::new(SVM_RPC_PERMITS.get() as usize));
 
     // Reverse the signatures to fetch them in oldest to newest order
-    for signature in signatures {
+    for signature in signatures.drain(..) {
         let (tx, rx) = oneshot::channel();
         queue.push(rx);
 
@@ -398,6 +398,8 @@ async fn handle_transactions_task(
             drop(permit);
         });
     }
+
+    drop(signatures);
 
     let count = queue.len();
     for (index, rx) in queue.iter_mut().enumerate() {
