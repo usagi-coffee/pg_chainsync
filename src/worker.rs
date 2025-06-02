@@ -27,7 +27,9 @@ pub static DATABASE: GucSetting<Option<&'static CStr>> =
     GucSetting::<Option<&'static CStr>>::new(Some(c"postgres"));
 pub static EVM_WS_PERMITS: GucSetting<i32> = GucSetting::<i32>::new(1);
 pub static EVM_BLOCKTICK_RESET: GucSetting<i32> = GucSetting::<i32>::new(100);
-pub static SVM_RPC_PERMITS: GucSetting<i32> = GucSetting::<i32>::new(3);
+pub static SVM_RPC_PERMITS: GucSetting<i32> = GucSetting::<i32>::new(10);
+pub static SVM_SIGNATURES_BUFFER: GucSetting<i32> =
+    GucSetting::<i32>::new(50000);
 
 // Should be more than restart count
 pub static STOP_COUNT: i32 = 999;

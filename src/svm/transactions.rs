@@ -1,12 +1,20 @@
 use pgrx::prelude::*;
 use pgrx::{log, warning};
 
+use tokio::sync::mpsc::Receiver;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
+use tokio::time::{sleep_until, Instant};
+
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::ensure;
 
 use solana_client::rpc_config::RpcTransactionConfig;
 use solana_client::rpc_response::{Response, RpcLogsResponse};
-use solana_sdk::commitment_config::CommitmentConfig;
+use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use solana_sdk::instruction::CompiledInstruction;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
@@ -17,6 +25,7 @@ use solana_transaction_status_client_types::{
 use crate::svm::*;
 use crate::types::Job;
 
+use crate::channel::unbounded;
 use crate::channel::Channel;
 use crate::types::*;
 
@@ -67,7 +76,166 @@ pub async fn handle_log(
     Ok(())
 }
 
+pub async fn try_signatures(
+    address: Pubkey,
+    before: Option<Signature>,
+    until: Option<Signature>,
+    job: &Arc<Job>,
+) -> anyhow::Result<Vec<Signature>, anyhow::Error> {
+    let Some(_) = &job.options.svm else {
+        bail!("sync: svm: tasks: {}: job options are not set", &job.name);
+    };
+
+    let rpc = job.connect_svm_rpc().await?;
+
+    let mut before: Option<Signature> = before;
+    let until: Option<Signature> = until;
+
+    let mut signatures = vec![];
+    let mut retries = 0;
+    let mut batch = 0;
+    loop {
+        ensure!(
+            retries < 10,
+            "failed to get signatures after 10 retries, aborting..."
+        );
+
+        log!(
+            "sync: svm: tasks: {}: getting signatures for {} [{}]",
+            &job.name,
+            address,
+            batch,
+        );
+
+        match rpc.get_signatures_for_address_with_config(
+            &address,
+            solana_client::rpc_client::GetConfirmedSignaturesForAddress2Config {
+                before,
+                until,
+                limit: Some(1000),
+                commitment: Some(solana_sdk::commitment_config::CommitmentConfig {
+                    commitment: CommitmentLevel::Finalized,
+                }),
+            }).await {
+                Ok(confirmed) => {
+                  if confirmed.is_empty() {
+                    break;
+                  }
+
+                  log!(
+                    "sync: svm: tasks: {}: {}: got {} signatures",
+                    &job.name,
+                    address,
+                    confirmed.len()
+                  );
+
+                  before = Signature::from_str(confirmed[confirmed.len() - 1].signature.as_str())?.into();
+                  for status in confirmed {
+                      let signature = Signature::from_str(status.signature.as_str())?;
+                      signatures.push(signature);
+                  }
+
+                  retries = 0;
+                  batch += 1;
+                },
+                Err(error) => {
+                  warning!("sync: svm: tasks: {}: failed to get signatures with {}", &job.name, error);
+
+                  sleep_until(
+                      Instant::now() + Duration::from_millis(1000),
+                  )
+                  .await;
+                  retries += 1;
+                  continue;
+            }
+        }
+    }
+
+    Ok(signatures)
+}
+
+pub async fn try_transaction(
+    signature: Signature,
+    job: &Arc<Job>,
+) -> anyhow::Result<SvmTransaction, anyhow::Error> {
+    let config = transactions::build_config(&job.options);
+    let rpc = job.connect_svm_rpc().await?;
+
+    let mut retries = 0;
+    loop {
+        if retries > 20 {
+            bail!("too many retries to get the block...");
+        }
+
+        match rpc.get_transaction_with_config(&signature, config).await {
+            Ok(transaction) => {
+                return transaction.try_into()
+                    as Result<SvmTransaction, anyhow::Error>;
+            }
+            Err(error) => {
+                warning!(
+                    "sync: svm: {}: failed to get transaction {} with {}, retrying...",
+                    &job.name,
+                    &signature,
+                    error
+                );
+
+                sleep_until(Instant::now() + Duration::from_millis(1000)).await;
+                retries += 1;
+            }
+        };
+    }
+}
+
+pub async fn stream_transactions(
+    receiver: &mut Receiver<Signature>,
+    sender: unbounded::OrderedSender<SvmTransaction>,
+    job: Arc<Job>,
+) -> Result<(), anyhow::Error> {
+    let mut set = JoinSet::new();
+    let semaphore = Arc::new(Semaphore::new(SVM_RPC_PERMITS.get() as usize));
+    let mut sequence = 0;
+
+    while let Some(signature) = receiver.recv().await {
+        if sender.closed() {
+            break;
+        }
+
+        let id = sequence;
+        sequence += 1;
+
+        let permit = semaphore.clone().acquire_owned().await?;
+
+        let job = job.clone();
+        let sender = sender.clone();
+        set.spawn(async move {
+            match try_transaction(signature, &job).await {
+                Ok(tx) => {
+                    drop(permit);
+                    sender.send(id, tx)?;
+
+                    return Ok(());
+                }
+                Err(error) => {
+                    sender.close(id);
+                    return Err(error);
+                }
+            }
+        });
+    }
+
+    // Only wait for the tasks to finish if the sender is still open
+    if !sender.closed() {
+        while let Some(result) = set.join_next().await {
+            result??;
+        }
+    }
+
+    Ok(())
+}
+
 use crate::query::PgHandler;
+use crate::worker::SVM_RPC_PERMITS;
 use pgrx::bgworkers::BackgroundWorker;
 
 use crate::anyhow_pg_try;

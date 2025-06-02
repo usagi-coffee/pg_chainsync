@@ -5,6 +5,9 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::types::Message;
 
+pub mod bounded;
+pub mod unbounded;
+
 pub const MESSAGES_CAPACITY: usize = 10_000_000;
 
 pub type MessageStream = ReceiverStream<Message>;
@@ -37,4 +40,15 @@ impl Channel {
             tokio::task::yield_now().await;
         }
     }
+}
+
+pub fn ordered_channel<T>(
+    buffer: usize,
+) -> (bounded::OrderedSender<T>, bounded::OrderedReceiver<T>) {
+    bounded::OrderedSender::new(buffer)
+}
+
+pub fn unbounded_ordered_channel<T>(
+) -> (unbounded::OrderedSender<T>, unbounded::OrderedReceiver<T>) {
+    unbounded::OrderedSender::new()
 }

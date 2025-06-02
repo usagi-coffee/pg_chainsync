@@ -8,18 +8,16 @@ use pgrx::{log, warning, JsonB};
 use solana_sdk::commitment_config::CommitmentLevel;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
-use solana_transaction_status_client_types::EncodedConfirmedTransactionWithStatusMeta;
 
-use tokio::sync::{oneshot, Semaphore};
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::{sleep_until, Duration, Instant};
 
-use indexmap::IndexSet;
-
-use super::transactions;
+use super::transactions::stream_transactions;
 use super::{blocks, SvmTransaction};
-use crate::channel::Channel;
+
+use crate::channel::{unbounded_ordered_channel, Channel};
 use crate::types::*;
-use crate::worker::{SVM_RPC_PERMITS, SVM_TASKS};
+use crate::worker::{SVM_SIGNATURES_BUFFER, SVM_TASKS};
 
 pub async fn handle_tasks(channel: Arc<Channel>) {
     loop {
@@ -215,222 +213,169 @@ async fn handle_transactions_task(
     job: Arc<Job>,
     channel: &Arc<Channel>,
 ) -> Result<(), anyhow::Error> {
-    let Some(options) = &job.options.svm else {
+    if job.options.svm.is_none() {
         bail!("sync: svm: tasks: {}: job options are not set", &job.name);
     };
 
     let rpc = Arc::new(job.reconnect_svm_rpc().await);
 
-    let Some(mentions) = &options.mentions else {
-        bail!("mentions field is required for transaction task");
-    };
+    let (send_signature, mut receive_signature) =
+        mpsc::channel::<Signature>(SVM_SIGNATURES_BUFFER.get() as usize);
+    let (tx, mut rx) = unbounded_ordered_channel::<SvmTransaction>();
 
-    let mut signatures: IndexSet<Signature> = IndexSet::new();
+    let signatures_job = job.clone();
+    let (signatures, transactions, inserts) = tokio::join!(
+        async move {
+            let _ = send_signature;
 
-    log!(
-        "sync: svm: tasks: {}: getting signatures for {} mentions",
-        &job.name,
-        mentions.len()
-    );
+            let Some(options) = &signatures_job.options.svm else {
+                bail!(
+                    "sync: svm: tasks: {}: job options are not set",
+                    &signatures_job.name
+                );
+            };
 
-    for (i, mention) in mentions.iter().enumerate() {
-        let address = Pubkey::from_str(mention)?;
-        let mut before: Option<Signature> = None;
-        let mut until: Option<Signature> = None;
-
-        if let Some(before_signatures) = &options.before {
-            if let Some(signature) = before_signatures.get(i) {
-                before = Some(Signature::from_str(signature)?);
-            }
-        }
-
-        if let Some(until_signatures) = &options.until {
-            if let Some(signature) = until_signatures.get(i) {
-                until = Some(Signature::from_str(signature)?);
-            }
-        }
-
-        let mut retries = 0;
-        'fill: loop {
-            ensure!(
-                retries < 10,
-                "failed to get signatures after 10 retries, aborting..."
-            );
+            let Some(mentions) = &options.mentions else {
+                bail!(
+                    "sync: svm: tasks: {}: mentions are not set",
+                    &signatures_job.name
+                );
+            };
 
             log!(
-                "sync: svm: tasks: {}: getting signatures for {}, {} / {}",
-                &job.name,
-                mention,
-                i + 1,
-                mentions.len()
+                "sync: svm: tasks: {}: getting signatures for {} mentions",
+                &signatures_job.name,
+                mentions.len(),
             );
 
-            match rpc.get_signatures_for_address_with_config(
-              &address,
-              solana_client::rpc_client::GetConfirmedSignaturesForAddress2Config {
-                  before,
-                  until,
-                  limit: Some(1000),
-                  commitment: Some(solana_sdk::commitment_config::CommitmentConfig {
-                      commitment: CommitmentLevel::Finalized,
-                  }),
-              }).await {
-                Ok(sigs) => {
-                  if sigs.is_empty() {
-                    break 'fill;
-                  }
-
-                  log!(
-                    "sync: svm: tasks: {}: {}: got {} signatures",
-                    &job.name,
-                    mention,
-                    sigs.len()
-                  );
-
-                  before = Signature::from_str(sigs[sigs.len() - 1].signature.as_str())?.into();
-
-                  // Insert signatures from newest to oldest (will be reversed later)
-                  for signature in sigs.iter() {
-                    let signature = Signature::from_str(signature.signature.as_str())
-                        .expect("signature to be parsed");
-                    signatures.insert(signature);
-                  }
-
-                  retries = 0;
-                },
-                Err(error) => {
-                  warning!("sync: svm: tasks: {}: failed to get signatures with {}", &job.name, error);
-
-                  sleep_until(
-                      Instant::now() + Duration::from_millis(1000),
-                  )
-                  .await;
-                  retries += 1;
-                  continue;
-                }
-            }
-        }
-    }
-
-    let mut queue: Vec<
-        oneshot::Receiver<EncodedConfirmedTransactionWithStatusMeta>,
-    > = Vec::new();
-
-    let mut skipped_signatures = 0;
-    if let Some(handler) = &options.transaction_skip_lookup {
-        for signature in std::mem::take(&mut signatures) {
-            let (tx, rx) = oneshot::channel::<String>();
-            ensure!(
-                channel.send(Message::ReturnHandlerWithArg(
-                    PostgresArg::String(signature.to_string()),
-                    handler.clone(),
-                    PostgresSender::String(tx),
-                    job.clone()
-                )),
-                "sync: svm: tasks: {}: failed to send return handler with arg",
-                &job.name
-            );
-
-            if let Err(_) = rx.await {
-                signatures.insert(signature);
-            } else {
-                skipped_signatures += 1;
-            }
-        }
-    } else {
-        queue.reserve_exact(signatures.len());
-    }
-
-    // Reverse the signatures to fetch them in oldest to newest order
-    signatures.reverse();
-
-    ensure!(
-        !signatures.is_empty(),
-        "sync: svm: tasks: {}: no signatures found",
-        &job.name
-    );
-
-    log!(
-        "sync: svm: tasks: {}: got {} ({} skipped) signatures total",
-        &job.name,
-        signatures.len(),
-        skipped_signatures
-    );
-
-    let config = transactions::build_config(&job.options);
-    let semaphore = Arc::new(Semaphore::new(SVM_RPC_PERMITS.get() as usize));
-
-    // Reverse the signatures to fetch them in oldest to newest order
-    for signature in signatures.drain(..) {
-        let (tx, rx) = oneshot::channel();
-        queue.push(rx);
-
-        let semaphore = Arc::clone(&semaphore);
-        let rpc = Arc::clone(&rpc);
-        let job = Arc::clone(&job);
-        tokio::spawn(async move {
-            let permit = semaphore.acquire().await;
-            loop {
-                match rpc.get_transaction_with_config(&signature, config).await
-                {
-                    Ok(transaction) => {
-                        tx.send(transaction).expect("sender got dropped");
-                    }
-                    Err(error) => {
-                        warning!(
-                            "sync: svm: tasks: {}: {}: failed to get transaction with {}, retrying",
-                            &job.name,
-                            &signature,
-                            error
-                        );
-
-                        sleep_until(
-                            Instant::now() + Duration::from_millis(1000),
-                        )
-                        .await;
-                        continue;
+            for (i, mention) in mentions.iter().enumerate() {
+                let address = Pubkey::from_str(mention)?;
+                let mut before = {
+                    if let Some(before_signatures) = &options.before {
+                        if let Some(signature) = before_signatures.get(i) {
+                            Some(Signature::from_str(signature)?)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
                     }
                 };
 
-                break;
-            }
+                let until = {
+                    if let Some(until_signatures) = &options.until {
+                        if let Some(signature) = until_signatures.get(i) {
+                            Some(Signature::from_str(signature)?)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
 
-            drop(permit);
-        });
-    }
+                let mut retries = 0;
+                let mut batch = 0;
+                loop {
+                    ensure!(
+                        retries < 10,
+                        "failed to get signatures after 10 retries, aborting..."
+                    );
 
-    drop(signatures);
+                    log!(
+                        "sync: svm: tasks: {}: getting signatures for {} [{}]",
+                        &signatures_job.name,
+                        address,
+                        batch,
+                    );
 
-    let count = queue.len();
-    for (index, rx) in queue.iter_mut().enumerate() {
-        if index % 100 == 0 {
-            log!(
-                "sync: svm: tasks: {}: progress {} / {}",
-                &job.name,
-                index,
-                count
-            );
-        }
+                    match rpc.get_signatures_for_address_with_config(
+                        &address,
+                        solana_client::rpc_client::GetConfirmedSignaturesForAddress2Config {
+                            before,
+                            until,
+                            limit: Some(1000),
+                            commitment: Some(solana_sdk::commitment_config::CommitmentConfig {
+                                commitment: CommitmentLevel::Finalized,
+                            }),
+                        }).await {
+                            Ok(confirmed) => {
+                              if confirmed.is_empty() {
+                                break;
+                              }
 
-        let Ok(tx) = rx.await else {
-            bail!("failed to receive transaction");
-        };
+                              log!(
+                                "sync: svm: tasks: {}: {}: got {} signatures",
+                                &signatures_job.name,
+                                address,
+                                confirmed.len()
+                              );
 
-        match tx.try_into() as Result<SvmTransaction, anyhow::Error> {
-            Ok(tx) => {
-                if !tx.failed {
-                    channel.send(Message::SvmTransaction(tx, job.clone()));
+                              before = Signature::from_str(confirmed[confirmed.len() - 1].signature.as_str())?.into();
+                              for status in confirmed {
+                                  let signature = Signature::from_str(status.signature.as_str())?;
+
+                                  // Sometimes we can skip the lookup so we don't have to re-handle the same signature
+                                  if let Some(handler) = &options.transaction_skip_lookup {
+                                      let (tx, rx) = oneshot::channel::<String>();
+                                      ensure!(
+                                          channel.send(Message::ReturnHandlerWithArg(
+                                              PostgresArg::String(status.signature),
+                                              handler.clone(),
+                                              PostgresSender::String(tx),
+                                              signatures_job.clone()
+                                          )),
+                                          "failed to lookup transaction through skip handler",
+                                      );
+
+                                      if rx.await.is_ok() {
+                                          continue; // Skip this signature
+                                      }
+                                  }
+
+                                  send_signature.send(signature).await?;
+                              }
+
+                              retries = 0;
+                              batch += 1;
+                            },
+                            Err(error) => {
+                              warning!("sync: svm: tasks: {}: failed to get signatures with {}", &signatures_job.name, error);
+
+                              sleep_until(
+                                  Instant::now() + Duration::from_millis(1000),
+                              )
+                              .await;
+                              retries += 1;
+                              continue;
+                        }
+                    }
                 }
             }
-            Err(error) => {
-                bail!(
-                  "sync: svm: tasks: {}: transaction validation failed with {}",
-                  &job.name,
-                  error
-                );
+
+            Ok(())
+        },
+        stream_transactions(&mut receive_signature, tx, job.clone()),
+        async move {
+            while let Some(transaction) = rx.recv().await {
+                if !transaction.failed {
+                    ensure!(
+                        channel.send(Message::SvmTransaction(
+                            transaction,
+                            job.clone()
+                        )),
+                        "failed to send insert transaction message"
+                    );
+                }
             }
-        };
-    }
+
+            Ok(())
+        },
+    );
+
+    signatures?;
+    transactions?;
+    inserts?;
 
     Ok(())
 }
