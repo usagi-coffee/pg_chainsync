@@ -413,7 +413,7 @@ async fn handle_accounts_task(
             solana_client::rpc_config::RpcProgramAccountsConfig {
                 filters: Some(filters.clone()),
                 account_config: RpcAccountInfoConfig {
-                    encoding: Some(UiAccountEncoding::Base64),
+                    encoding: Some(UiAccountEncoding::Base64Zstd),
                     data_slice: options.accounts_data_slice,
                     ..RpcAccountInfoConfig::default()
                 },

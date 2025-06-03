@@ -22,7 +22,7 @@ BEGIN
 
   INSERT INTO accounts (address, balance, ui_balance)
   VALUES (acc.pubkey, amount, amount / POW(10, (job->>'decimals')::SMALLINT))
-  ON CONFLICT (address) DO UPDATE SET data = EXCLUDED.data, balance = EXCLUDED.balance, ui_balance = EXCLUDED.ui_balance;
+  ON CONFLICT (address) DO UPDATE SET balance = EXCLUDED.balance, ui_balance = EXCLUDED.ui_balance;
 END;
 $$ LANGUAGE plpgsql;
 
