@@ -36,22 +36,22 @@ BEGIN
     -- You can use account_mint_lookup feature to inject mint into accounts_mints from your accounts table!
     IF inst.accounts_mints[1] IS DISTINCT FROM (job->>'token')::TEXT THEN RETURN; END IF; -- Mint NOT always mentioned!
 
-    source := inst.accounts[1]; -- or accounts_owners[1]
-    destination := inst.accounts[2]; -- or accounts_owners[2]
+    source := inst.accounts[1];
+    destination := inst.accounts[2];
     RAISE LOG 'Transfer % -> % amount: %', source, destination, amount;
   ELSIF discriminator = 12 THEN -- TransferChecked
     IF inst.accounts[2] IS DISTINCT FROM (job->>'token')::TEXT THEN RETURN; END IF; -- Mint provided in accounts
-    source := inst.accounts[1]; -- or accounts_owners[1]
-    destination := inst.accounts[3]; -- or accounts_owners[3]
+    source := inst.accounts[1];
+    destination := inst.accounts[3];
     RAISE LOG 'Transfer % -> % amount: %', source, destination, amount;
   ELSIF discriminator = 7 THEN -- MintTo
     IF inst.accounts[1] IS DISTINCT FROM (job->>'token')::TEXT THEN RETURN; END IF; -- Mint provided in accounts
     source := '';
-    destination := inst.accounts[2]; -- or accounts_owners[1]
+    destination := inst.accounts[2];
     RAISE LOG 'Mint % amount: %', destination, amount;
   ELSIF discriminator = 8 THEN -- Burn
     IF inst.accounts[2] IS DISTINCT FROM (job->>'token')::TEXT THEN RETURN; END IF; -- Mint provided in accounts
-    source := inst.accounts[1]; -- or accounts_owners[1]
+    source := inst.accounts[1];
     destination := '';
     RAISE LOG 'Burn % amount: %', source, amount;
   ELSIF discriminator = 14 THEN -- MintToChecked

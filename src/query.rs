@@ -24,6 +24,7 @@ pub const SVM_BLOCK_COMPOSITE_TYPE: &str = "chainsync.SvmBlock";
 pub const SVM_INSTRUCTION_COMPOSITE_TYPE: &str = "chainsync.SvmInstruction";
 pub const SVM_TRANSACTION_COMPOSITE_TYPE: &str = "chainsync.SvmTransaction";
 pub const SVM_LOG_COMPOSITE_TYPE: &str = "chainsync.SvmLog";
+pub const SVM_ACCOUNT_COMPOSITE_TYPE: &str = "chainsync.SvmAccount";
 
 impl Job {
     pub fn register(name: String, options: pgrx::JsonB) -> i64 {
@@ -475,5 +476,41 @@ impl PgHandler for SolanaInnerInstruction<'_> {
         )
         .map(|_| PostgresReturn::Void)
         .map_err(|e| e.into())
+    }
+}
+
+impl PgHandler for SvmAccount {
+    fn call_handler(
+        &self,
+        handler: &str,
+        job: i64,
+    ) -> Result<PostgresReturn, anyhow::Error> {
+        let mut data =
+            PgHeapTuple::new_composite_type(SVM_ACCOUNT_COMPOSITE_TYPE)
+                .unwrap();
+
+        data.set_by_name("pubkey", self.address.to_string())?;
+        data.set_by_name("data", self.inner.data.as_slice())?;
+        data.set_by_name("executable", self.inner.executable)?;
+        data.set_by_name("owner", self.inner.owner.to_string())?;
+        data.set_by_name(
+            "lamports",
+            pgrx::AnyNumeric::try_from(self.inner.rent_epoch),
+        )?;
+        data.set_by_name(
+            "rent_epoch",
+            pgrx::AnyNumeric::try_from(self.inner.rent_epoch),
+        )?;
+
+        let oid = data.composite_type_oid().unwrap();
+        Spi::run_with_args(
+          format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
+          &vec![
+            unsafe { DatumWithOid::new(data, oid) },
+            DatumWithOid::from(job),
+          ],
+      )
+      .map(|_| PostgresReturn::Void)
+      .map_err(|e| e.into())
     }
 }

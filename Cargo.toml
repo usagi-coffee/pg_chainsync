@@ -30,6 +30,7 @@ alloy-chains = { version = "0.2", features = ["serde"] }
 solana-sdk = "2"
 solana-client = "2"
 solana-transaction-status-client-types = "2"
+solana-account-decoder-client-types = "2"
 chrono = "0.4"
 bs58 = "0.5"
 derive_more = "2.0.1"

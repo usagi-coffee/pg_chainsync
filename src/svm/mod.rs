@@ -42,6 +42,11 @@ const SPL_INITIALIZE_ACCOUNT: u8 = 1;
 const SPL_INITIALIZE_ACCOUNT3: u8 = 18;
 
 pub struct SvmAccount {
+    pub address: Pubkey,
+    pub inner: solana_sdk::account::Account,
+}
+
+pub struct SvmInitializedAccount {
     pub address: String,
     pub owner: String,
     pub mint: String,
@@ -55,7 +60,7 @@ pub struct SvmTransaction {
     pub message: VersionedMessage,
     pub accounts: Vec<String>,
     pub writable_accounts: Vec<String>,
-    pub initialized_accounts: Vec<SvmAccount>,
+    pub initialized_accounts: Vec<SvmInitializedAccount>,
     pub inner_instructions: Vec<UiInnerInstructions>,
     pub pre_token_balances: Vec<UiTransactionTokenBalance>,
     pub post_token_balances: Vec<UiTransactionTokenBalance>,
@@ -182,7 +187,7 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
                         .expect("failed to decode data");
 
                     if slice[0] == SPL_INITIALIZE_ACCOUNT {
-                        initialized_accounts.push(SvmAccount {
+                        initialized_accounts.push(SvmInitializedAccount {
                             address: accounts
                                 [inner_instruction.accounts[0] as usize]
                                 .to_owned(),
@@ -194,7 +199,7 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
                                 .to_owned(),
                         });
                     } else if slice[0] == SPL_INITIALIZE_ACCOUNT3 {
-                        initialized_accounts.push(SvmAccount {
+                        initialized_accounts.push(SvmInitializedAccount {
                             address: accounts
                                 [inner_instruction.accounts[0] as usize]
                                 .to_owned(),
@@ -219,7 +224,7 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
 
             if let Some(discriminator) = instruction.data.get(0) {
                 if discriminator == &SPL_INITIALIZE_ACCOUNT {
-                    initialized_accounts.push(SvmAccount {
+                    initialized_accounts.push(SvmInitializedAccount {
                         address: accounts[instruction.accounts[0] as usize]
                             .to_owned(),
                         mint: accounts[instruction.accounts[1] as usize]
@@ -228,7 +233,7 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
                             .to_owned(),
                     });
                 } else if discriminator == &SPL_INITIALIZE_ACCOUNT3 {
-                    initialized_accounts.push(SvmAccount {
+                    initialized_accounts.push(SvmInitializedAccount {
                         address: accounts[instruction.accounts[0] as usize]
                             .to_owned(),
                         mint: accounts[instruction.accounts[1] as usize]

@@ -6,6 +6,8 @@ use chrono::DateTime;
 use pgrx::JsonB;
 use serde::{Deserialize, Serialize};
 
+use solana_account_decoder_client_types::UiDataSliceConfig;
+use solana_client::rpc_filter::RpcFilterType;
 use solana_sdk::pubkey::Pubkey;
 use tokio::sync::oneshot;
 use tokio::sync::OnceCell;
@@ -93,6 +95,7 @@ pub enum Message {
     SvmBlock(SvmBlock, Arc<Job>),
     SvmLog(SvmLog, Arc<Job>),
     SvmTransaction(SvmTransaction, Arc<Job>),
+    SvmAccount(SvmAccount, Arc<Job>),
 
     // Handlers
     Handler(Arc<str>, oneshot::Sender<bool>, Arc<Job>),
@@ -159,6 +162,11 @@ pub struct SvmOptions {
     /// If defined it will fetch account mint from the database before inserting instruction/transaction
     pub account_mint_lookup: Option<Arc<str>>,
 
+    // Account job
+    pub account_handler: Option<Arc<str>>,
+    pub accounts_filters: Option<Vec<RpcFilterType>>,
+    pub accounts_data_slice: Option<UiDataSliceConfig>,
+
     pub from_slot: Option<u64>,
     pub to_slot: Option<u64>,
     pub mentions: Option<Vec<Arc<str>>>,
@@ -216,6 +224,14 @@ impl JobOptions {
             return options.log_handler.is_some();
         } else if let Some(options) = &self.svm {
             return options.log_handler.is_some();
+        }
+
+        false
+    }
+
+    pub fn is_accounts_job(&self) -> bool {
+        if let Some(options) = &self.svm {
+            return options.account_handler.is_some();
         }
 
         false

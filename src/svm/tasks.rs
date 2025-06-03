@@ -5,6 +5,10 @@ use anyhow::{anyhow, bail, ensure};
 
 use pgrx::{log, warning, JsonB};
 
+use solana_account_decoder_client_types::UiAccountEncoding;
+use solana_client::rpc_config::{
+    RpcAccountInfoConfig, RpcProgramAccountsConfig,
+};
 use solana_sdk::commitment_config::CommitmentLevel;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
@@ -16,6 +20,7 @@ use super::transactions::stream_transactions;
 use super::{blocks, SvmTransaction};
 
 use crate::channel::{unbounded_ordered_channel, Channel};
+use crate::svm::SvmAccount;
 use crate::types::*;
 use crate::worker::{SVM_SIGNATURES_BUFFER, SVM_TASKS};
 
@@ -99,6 +104,8 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                     handle_blocks_task(job.clone(), &channel).await
                 } else if job.options.is_log_job() {
                     Err(anyhow!("log tasks are not supported yet"))
+                } else if job.options.is_accounts_job() {
+                    handle_accounts_task(job.clone(), &channel).await
                 } else if job.options.is_transaction_job() {
                     handle_transactions_task(job.clone(), &channel).await
                 } else {
@@ -376,6 +383,73 @@ async fn handle_transactions_task(
     signatures?;
     transactions?;
     inserts?;
+
+    Ok(())
+}
+
+async fn handle_accounts_task(
+    job: Arc<Job>,
+    channel: &Arc<Channel>,
+) -> Result<(), anyhow::Error> {
+    let Some(options) = &job.options.svm else {
+        bail!("sync: svm: tasks: {}: job options are not set", &job.name);
+    };
+
+    let rpc = job.reconnect_svm_rpc().await;
+
+    let Some(program) = options.program else {
+        bail!("program is required for accounts task");
+    };
+
+    let Some(filters) = &options.accounts_filters else {
+        bail!("filters are required for accounts task");
+    };
+
+    log!("{:?}", filters);
+
+    match rpc
+        .get_program_accounts_with_config(
+            &program,
+            solana_client::rpc_config::RpcProgramAccountsConfig {
+                filters: Some(filters.clone()),
+                account_config: RpcAccountInfoConfig {
+                    encoding: Some(UiAccountEncoding::Base64),
+                    data_slice: options.accounts_data_slice,
+                    ..RpcAccountInfoConfig::default()
+                },
+                ..RpcProgramAccountsConfig::default()
+            },
+        )
+        .await
+    {
+        Ok(accounts) => {
+            log!(
+                "sync: svm: tasks: {}: got {} accounts for program {}",
+                &job.name,
+                accounts.len(),
+                program
+            );
+
+            for (pubkey, account) in accounts {
+                let account = SvmAccount {
+                    address: pubkey,
+                    inner: account,
+                };
+
+                ensure!(
+                    channel.send(Message::SvmAccount(account, job.clone())),
+                    "failed to send account message"
+                );
+            }
+        }
+        Err(error) => {
+            warning!(
+                "sync: svm: tasks: {}: failed to get accounts with {}",
+                &job.name,
+                error
+            );
+        }
+    }
 
     Ok(())
 }

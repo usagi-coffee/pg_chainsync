@@ -413,6 +413,35 @@ async fn handle_message(mut stream: MessageStream) {
                 svm_txs.fetch_add(1, Ordering::Relaxed);
                 svm::transactions::handle_transaction_message(message, job);
             }
+            Message::SvmAccount(account, job) => {
+                let Some(options) = &job.options.svm else {
+                    error!("sync: svm: accounts: {}: job is not SVM", job.name);
+                };
+
+                log!(
+                    "sync: svm: accounts: {}: adding {}",
+                    job.name,
+                    &account.address
+                );
+
+                let Some(handler) = &options.account_handler else {
+                    error!(
+                        "sync: svm: accounts: {}: missing handler",
+                        job.name
+                    );
+                };
+
+                let id = job.id;
+                if let Err(error) =
+                    anyhow_pg_try!(|| account.call_handler(&handler, id))
+                {
+                    warning!(
+                        "sync: svm: accounts: {}: account handler failed with {}",
+                        job.id,
+                        error
+                    );
+                }
+            }
             Message::Handler(handler, sender, job) => {
                 let id = job.id as i32;
                 match anyhow_pg_try!(|| Job::handler(&handler, id)) {

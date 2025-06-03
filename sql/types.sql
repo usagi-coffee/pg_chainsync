@@ -69,6 +69,15 @@ CREATE TYPE chainsync.SvmBlock AS (
   block_time BIGINT
 );
 
+CREATE TYPE chainsync.SvmAccount AS (
+  pubkey TEXT,
+  data BYTEA,
+  executable BOOLEAN,
+  lamports NUMERIC,
+  owner TEXT,
+  rent_epoch NUMERIC
+);
+
 CREATE TYPE chainsync.SvmLog AS (
   slot_number NUMERIC,
   signature TEXT,
