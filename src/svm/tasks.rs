@@ -1,5 +1,6 @@
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::{atomic::Ordering, Arc};
 
 use anyhow::{anyhow, bail, ensure};
 
@@ -230,7 +231,9 @@ async fn handle_transactions_task(
         mpsc::channel::<Signature>(SVM_SIGNATURES_BUFFER.get() as usize);
     let (tx, mut rx) = unbounded_ordered_channel::<SvmTransaction>();
 
+    let transaction_count = Arc::new(AtomicUsize::new(0));
     let signatures_job = job.clone();
+    let signatures_count = transaction_count.clone();
     let (signatures, transactions, inserts) = tokio::join!(
         async move {
             let _ = send_signature;
@@ -341,6 +344,7 @@ async fn handle_transactions_task(
                                   }
 
                                   send_signature.send(signature).await?;
+                                  signatures_count.fetch_add(1, Ordering::Relaxed);
                               }
 
                               retries = 0;
@@ -364,7 +368,18 @@ async fn handle_transactions_task(
         },
         stream_transactions(&mut receive_signature, tx, job.clone()),
         async move {
+            let mut current = 0;
             while let Some(transaction) = rx.recv().await {
+                let count = transaction_count.load(Ordering::Relaxed);
+                if current % 100 == 0 {
+                    log!(
+                        "sync: svm: tasks: {}: {} / {} signatures processed",
+                        job.name,
+                        current,
+                        count
+                    );
+                }
+
                 if !transaction.failed {
                     ensure!(
                         channel.send(Message::SvmTransaction(
@@ -374,6 +389,8 @@ async fn handle_transactions_task(
                         "failed to send insert transaction message"
                     );
                 }
+
+                current += 1;
             }
 
             Ok(())
@@ -404,8 +421,6 @@ async fn handle_accounts_task(
     let Some(filters) = &options.accounts_filters else {
         bail!("filters are required for accounts task");
     };
-
-    log!("{:?}", filters);
 
     match rpc
         .get_program_accounts_with_config(

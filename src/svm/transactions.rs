@@ -40,13 +40,11 @@ pub async fn handle_log(
         &log.value.signature
     );
 
-    let signature = Signature::from_str(log.value.signature.as_str())
-        .expect("Invalid signature");
+    let signature = Signature::from_str(log.value.signature.as_str())?;
 
     let tx = job
         .connect_svm_rpc()
-        .await
-        .expect("Failed retrieve rpc client")
+        .await?
         .get_transaction_with_config(&signature, build_config(&job.options))
         .await;
 
