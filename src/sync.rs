@@ -139,10 +139,12 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
 
 pub fn preload_tasks(tasks: Vec<Job>) {
     for task in tasks {
-        if matches!(task.options.evm, Some(_)) {
-            EVM_TASKS.exclusive().push(task.id).unwrap();
-        } else if matches!(task.options.svm, Some(_)) {
-            SVM_TASKS.exclusive().push(task.id).unwrap();
+        if matches!(task.options.preload, Some(true)) {
+            if matches!(task.options.evm, Some(_)) {
+                EVM_TASKS.exclusive().push(task.id).unwrap();
+            } else if matches!(task.options.svm, Some(_)) {
+                SVM_TASKS.exclusive().push(task.id).unwrap();
+            }
         }
     }
 }
