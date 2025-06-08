@@ -156,7 +156,7 @@ pub async fn schedule_tasks(channel: Arc<Channel>) {
 
         let Ok(jobs) = rx.await else {
             warning!("sync: tasks: failed to get jobs, retrying...");
-            continue;
+            return;
         };
 
         let tasks = jobs.tasks();

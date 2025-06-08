@@ -49,6 +49,8 @@ pub enum PostgresArg {
     Json(JsonB),
 }
 pub type PostgresReturn = PostgresArg;
+
+#[derive(Debug)]
 pub enum PostgresSender {
     Void(oneshot::Sender<()>),
     Integer(oneshot::Sender<i32>),
@@ -175,7 +177,7 @@ pub struct SvmOptions {
     pub program: Option<Pubkey>,
 
     pub before: Option<Vec<Arc<str>>>,
-    pub until: Option<Vec<Arc<str>>>,
+    pub until: Option<Vec<Option<Arc<str>>>>,
 
     pub transaction_details: Option<SvmTransactionDetails>,
 }

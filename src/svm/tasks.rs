@@ -274,7 +274,7 @@ async fn handle_transactions_task(
 
                 let until = {
                     if let Some(until_signatures) = &options.until {
-                        if let Some(signature) = until_signatures.get(i) {
+                        if let Some(Some(signature)) = until_signatures.get(i) {
                             Some(Signature::from_str(signature)?)
                         } else {
                             None
