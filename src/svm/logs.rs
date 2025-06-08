@@ -58,7 +58,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         return;
                     }
 
-                    if let Err(error) = job.connect_svm_ws().await {
+                    if let Err(error) = job.reconnect_svm_ws().await {
                         warning!(
                             "sync: svm: logs: {}: failed to connect with ws with {}",
                             &job.name,

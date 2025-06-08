@@ -293,10 +293,12 @@ async fn handle_transactions_task(
                     );
 
                     log!(
-                        "sync: svm: tasks: {}: getting signatures for {} [{}]",
+                        "sync: svm: tasks: {}: getting signatures for {}: {} [{} / {}]",
                         &signatures_job.name,
                         address,
                         batch,
+                        i + 1,
+                        mentions.len(),
                     );
 
                     match rpc.get_signatures_for_address_with_config(
