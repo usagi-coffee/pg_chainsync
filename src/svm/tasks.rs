@@ -15,6 +15,7 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::yield_now;
 use tokio::time::{sleep_until, Duration, Instant};
 
 use super::transactions::stream_transactions;
@@ -447,7 +448,7 @@ async fn handle_accounts_task(
                 program
             );
 
-            for (pubkey, account) in accounts {
+            for (i, (pubkey, account)) in accounts.into_iter().enumerate() {
                 let account = SvmAccount {
                     address: pubkey,
                     inner: account,
@@ -457,6 +458,10 @@ async fn handle_accounts_task(
                     channel.send(Message::SvmAccount(account, job.clone())),
                     "failed to send account message"
                 );
+
+                if i % 100 == 0 {
+                    yield_now().await; // Yield to not spam the channel too much
+                }
             }
         }
         Err(error) => {
