@@ -6,10 +6,10 @@ use anyhow::{anyhow, bail, ensure};
 use alloy::providers::Provider;
 use alloy::rpc::types::Log;
 
-use pgrx::{log, warning, JsonB};
+use pgrx::{JsonB, log, warning};
 
-use tokio::sync::{oneshot, Semaphore};
-use tokio::time::{sleep_until, Duration, Instant};
+use tokio::sync::{Semaphore, oneshot};
+use tokio::time::{Duration, Instant, sleep_until};
 
 use crate::channel::Channel;
 use crate::evm::blocks::try_block;
@@ -73,12 +73,20 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                         // Update options
                         Ok(options) => job.options = options,
                         Err(error) => {
-                            warning!("sync: evm: tasks: {}: failed to parse return handler options jsonb with {}", &job.name, &error);
+                            warning!(
+                                "sync: evm: tasks: {}: failed to parse return handler options jsonb with {}",
+                                &job.name,
+                                &error
+                            );
                             continue;
                         }
                     },
                     Err(error) => {
-                        warning!("sync: evm: tasks: {}: setup handler failed with {}", &job.name, error);
+                        warning!(
+                            "sync: evm: tasks: {}: setup handler failed with {}",
+                            &job.name,
+                            error
+                        );
                         continue;
                     }
                 }
@@ -380,7 +388,11 @@ async fn handle_log_task(
                                 break 'reconnect;
                             }
                             Err(error) => {
-                                warning!("sync: evm: tasks: {}: failed to reconnect with {}", &job.name, error);
+                                warning!(
+                                    "sync: evm: tasks: {}: failed to reconnect with {}",
+                                    &job.name,
+                                    error
+                                );
                                 retries += 1;
                             }
                         }

@@ -1,6 +1,6 @@
 use pgrx::{log, warning};
 
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use solana_client::rpc_config::{
     RpcBlockConfig, RpcBlockSubscribeConfig, RpcBlockSubscribeFilter,
 };
@@ -52,9 +52,9 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                 'job: loop {
                     if retries >= 10 {
                         warning!(
-                        "sync: svm: blocks: {}: too many retries, stopping job",
-                        &job.name
-                    );
+                            "sync: svm: blocks: {}: too many retries, stopping job",
+                            &job.name
+                        );
                         return;
                     }
 

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use pgrx::bgworkers::*;
 use pgrx::log;
@@ -27,7 +27,7 @@ use crate::worker;
 use crate::worker::*;
 
 #[pg_guard]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
     // Auto-quit after n restarts, require manual restart
     if *RESTART_COUNT.exclusive() >= 5 {
@@ -492,7 +492,11 @@ async fn handle_message(mut stream: MessageStream) {
 
                 let result: Result<PostgresReturn, anyhow::Error> = match arg {
                     PostgresArg::Void => {
-                        warning!("sync: messages: {}: {} called with void argument, this is probably a bug!", job.id, handler);
+                        warning!(
+                            "sync: messages: {}: {} called with void argument, this is probably a bug!",
+                            job.id,
+                            handler
+                        );
                         continue;
                     }
                     PostgresArg::Integer(arg) => {

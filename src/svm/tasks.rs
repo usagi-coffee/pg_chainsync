@@ -1,10 +1,10 @@
 use std::str::FromStr;
 use std::sync::atomic::AtomicUsize;
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::{Arc, atomic::Ordering};
 
 use anyhow::{anyhow, bail, ensure};
 
-use pgrx::{log, warning, JsonB};
+use pgrx::{JsonB, log, warning};
 
 use solana_account_decoder_client_types::UiAccountEncoding;
 use solana_client::rpc_config::{
@@ -16,12 +16,12 @@ use solana_sdk::signature::Signature;
 
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::yield_now;
-use tokio::time::{sleep_until, Duration, Instant};
+use tokio::time::{Duration, Instant, sleep_until};
 
 use super::transactions::stream_transactions;
-use super::{blocks, SvmTransaction};
+use super::{SvmTransaction, blocks};
 
-use crate::channel::{unbounded_ordered_channel, Channel};
+use crate::channel::{Channel, unbounded_ordered_channel};
 use crate::svm::SvmAccount;
 use crate::types::*;
 use crate::worker::{SVM_SIGNATURES_BUFFER, SVM_TASKS};
@@ -80,12 +80,20 @@ pub async fn handle_tasks(channel: Arc<Channel>) {
                         // Update options
                         Ok(options) => job.options = options,
                         Err(error) => {
-                            warning!("sync: svm: tasks: {}: failed to parse return handler options jsonb with {}", &job.name, &error);
+                            warning!(
+                                "sync: svm: tasks: {}: failed to parse return handler options jsonb with {}",
+                                &job.name,
+                                &error
+                            );
                             continue;
                         }
                     },
                     Err(error) => {
-                        warning!("sync: svm: tasks: {}: setup handler failed with {}", &job.name, error);
+                        warning!(
+                            "sync: svm: tasks: {}: setup handler failed with {}",
+                            &job.name,
+                            error
+                        );
                         continue;
                     }
                 }
@@ -199,9 +207,9 @@ async fn handle_blocks_task(
                 }
                 Err(error) => {
                     warning!(
-                      "sync: svm: blocks: {}: failed to get block with {}, reconnecting...",
-                      &job.name,
-                      error
+                        "sync: svm: blocks: {}: failed to get block with {}, reconnecting...",
+                        &job.name,
+                        error
                     );
                     retries += 1;
 
@@ -262,24 +270,20 @@ async fn handle_transactions_task(
             for (i, mention) in mentions.iter().enumerate() {
                 let address = Pubkey::from_str(mention)?;
                 let mut before = {
-                    if let Some(before_signatures) = &options.before {
-                        if let Some(signature) = before_signatures.get(i) {
-                            Some(Signature::from_str(signature)?)
-                        } else {
-                            None
-                        }
+                    if let Some(before_signatures) = &options.before
+                        && let Some(signature) = before_signatures.get(i)
+                    {
+                        Some(Signature::from_str(signature)?)
                     } else {
                         None
                     }
                 };
 
                 let until = {
-                    if let Some(until_signatures) = &options.until {
-                        if let Some(Some(signature)) = until_signatures.get(i) {
-                            Some(Signature::from_str(signature)?)
-                        } else {
-                            None
-                        }
+                    if let Some(until_signatures) = &options.until
+                        && let Some(Some(signature)) = until_signatures.get(i)
+                    {
+                        Some(Signature::from_str(signature)?)
                     } else {
                         None
                     }

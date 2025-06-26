@@ -1,6 +1,6 @@
 use pgrx::{log, warning};
 
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -46,9 +46,9 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                 'job: loop {
                     if retries >= 10 {
                         warning!(
-                        "sync: evm: blocks: {}: too many retries, stopping job",
-                        &job.name
-                    );
+                            "sync: evm: blocks: {}: too many retries, stopping job",
+                            &job.name
+                        );
                         return;
                     }
 
@@ -90,7 +90,11 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                                 if let Err(error) =
                                     handle_block(&job, block, &channel).await
                                 {
-                                    warning!("sync: evm: blocks: {}: failed to handle block with {}", &job.name, error);
+                                    warning!(
+                                        "sync: evm: blocks: {}: failed to handle block with {}",
+                                        &job.name,
+                                        error
+                                    );
                                 }
 
                                 retries = 0;
@@ -174,9 +178,9 @@ pub async fn try_block(
         // Reconnect ws on every block retry
         let Ok(client) = job.reconnect_evm().await else {
             warning!(
-              "sync: evm: {}: failed to connect to evm at await block handler",
-              &job.name
-          );
+                "sync: evm: {}: failed to connect to evm at await block handler",
+                &job.name
+            );
             tokio::time::sleep(Duration::from_millis(1000)).await;
             retries = retries + 1;
             continue;

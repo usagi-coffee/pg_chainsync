@@ -58,10 +58,10 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 
                     if let Err(error) = job.connect_evm().await {
                         warning!(
-                          "sync: evm: logs: {}: failed to connect with provider with {}",
-                          &job.name,
-                          error
-                      );
+                            "sync: evm: logs: {}: failed to connect with provider with {}",
+                            &job.name,
+                            error
+                        );
 
                         retries += 1;
                         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -95,9 +95,9 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                                     handle_evm_log(&job, log, &channel).await
                                 {
                                     warning!(
-                                      "sync: evm: logs: {}: failed to handle log with {}",
-                                      &job.name,
-                                      error
+                                        "sync: evm: logs: {}: failed to handle log with {}",
+                                        &job.name,
+                                        error
                                     );
                                 }
 
@@ -164,23 +164,26 @@ pub async fn handle_evm_log(
         return Ok(());
     };
 
-    if let Some(event) = &options.event {
-        let _ = keccak256(event.as_bytes());
-        if !matches!(log.topic0(), Some(_)) {
-            warning!(
-                "sync: evm: logs: {}: {}<{}>: topic0 does not match",
-                &job.name,
-                transaction,
-                log_index
-            );
-            return Ok(());
-        }
-    } else if let Some(topic0) = &options.topic0 {
-        let _ = topic0.parse::<B256>().unwrap();
-        if !matches!(log.topic0(), Some(_)) {
-            warning!("sync: evm: logs: {}: topic0 does not match", &job.name);
-            return Ok(());
-        }
+    if let Some(event) = &options.event
+        && let _hash = keccak256(event.as_bytes())
+        && !matches!(log.topic0(), Some(_hash))
+    {
+        warning!(
+            "sync: evm: logs: {}: {}<{}>: topic0 does not match",
+            &job.name,
+            transaction,
+            log_index,
+        );
+
+        return Ok(());
+    }
+
+    if let Some(topic0) = &options.topic0
+        && let Ok(_hash) = topic0.parse::<B256>()
+        && !matches!(log.topic0(), Some(_hash))
+    {
+        warning!("sync: evm: logs: {}: topic0 does not match", &job.name);
+        return Ok(());
     }
 
     log!(
@@ -192,60 +195,60 @@ pub async fn handle_evm_log(
     );
 
     // Await for block logic
-    if matches!(options.await_block, Some(true)) {
-        if let Some(handler) = &options.block_skip_lookup {
-            // Let's yield in case the block listener does our work for us
-            yield_now().await;
+    if matches!(options.await_block, Some(true))
+        && let Some(handler) = &options.block_skip_lookup
+    {
+        // Let's yield in case the block listener does our work for us
+        yield_now().await;
 
-            let (tx, rx) = oneshot::channel::<i64>();
+        let (tx, rx) = oneshot::channel::<i64>();
 
-            if !channel.send(Message::ReturnHandlerWithArg(
-                PostgresReturn::BigInt(block as i64),
-                handler.clone(),
-                PostgresSender::BigInt(tx),
-                job.clone(),
-            )) {
-                bail!(
-                    "sync: evm: logs: {}, failed to send check block message",
-                    &job.name
-                );
-            }
-
-            match rx.await {
-                Ok(found) => {
-                    if found != block as i64 {
-                        bail!(
-                            "sync: evm: logs: {}, block skip lookup returned {} instead of {}",
-                            &job.name,
-                            found,
-                            block
-                        );
-                    }
-                }
-                Err(_) => match try_block(block, &job).await {
-                    Ok(block) => {
-                        ensure!(
-                            channel.send(Message::EvmBlock(
-                                block.header,
-                                job.clone(),
-                            )),
-                            "sync: evm: logs: {}, failed to send block {}<{}>",
-                            &job.name,
-                            transaction,
-                            log_index,
-                        );
-                    }
-                    Err(error) => {
-                        bail!(
-                            "sync: evm: logs: {}: failed to retrieve block {} with {}",
-                            &job.name,
-                            block,
-                            error
-                        );
-                    }
-                },
-            };
+        if !channel.send(Message::ReturnHandlerWithArg(
+            PostgresReturn::BigInt(block as i64),
+            handler.clone(),
+            PostgresSender::BigInt(tx),
+            job.clone(),
+        )) {
+            bail!(
+                "sync: evm: logs: {}, failed to send check block message",
+                &job.name
+            );
         }
+
+        match rx.await {
+            Ok(found) => {
+                if found != block as i64 {
+                    bail!(
+                        "sync: evm: logs: {}, block skip lookup returned {} instead of {}",
+                        &job.name,
+                        found,
+                        block
+                    );
+                }
+            }
+            Err(_) => match try_block(block, &job).await {
+                Ok(block) => {
+                    ensure!(
+                        channel
+                            .send(
+                                Message::EvmBlock(block.header, job.clone(),)
+                            ),
+                        "sync: evm: logs: {}, failed to send block {}<{}>",
+                        &job.name,
+                        transaction,
+                        log_index,
+                    );
+                }
+                Err(error) => {
+                    bail!(
+                        "sync: evm: logs: {}: failed to retrieve block {} with {}",
+                        &job.name,
+                        block,
+                        error
+                    );
+                }
+            },
+        };
     }
 
     ensure!(

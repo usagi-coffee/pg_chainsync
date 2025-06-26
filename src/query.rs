@@ -30,10 +30,7 @@ impl Job {
     pub fn register(name: String, options: pgrx::JsonB) -> i64 {
         match Spi::get_one_with_args(
             "INSERT INTO chainsync.jobs (name, options) VALUES ($1, $2) RETURNING id",
-            &vec![
-              DatumWithOid::from(name),
-              DatumWithOid::from(options)
-            ],
+            &vec![DatumWithOid::from(name), DatumWithOid::from(options)],
         ) {
             Ok(id) => id.unwrap(),
             Err(_) => -1,

@@ -1,10 +1,10 @@
 use pgrx::prelude::*;
 use pgrx::{log, warning};
 
-use tokio::sync::mpsc::Receiver;
 use tokio::sync::Semaphore;
+use tokio::sync::mpsc::Receiver;
 use tokio::task::JoinSet;
-use tokio::time::{sleep_until, Instant};
+use tokio::time::{Instant, sleep_until};
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -25,8 +25,8 @@ use solana_transaction_status_client_types::{
 use crate::svm::*;
 use crate::types::Job;
 
-use crate::channel::unbounded;
 use crate::channel::Channel;
+use crate::channel::unbounded;
 use crate::types::*;
 
 pub async fn handle_log(
@@ -372,38 +372,37 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                         .collect::<Vec<_>>();
 
                     let accounts_owners = inner_instruction
-                            .accounts
-                            .iter()
-                            .enumerate()
-                            .map(|(i, index)| {
-                                let index = *index as usize;
+                        .accounts
+                        .iter()
+                        .enumerate()
+                        .map(|(i, index)| {
+                            let index = *index as usize;
 
-                                if let Some(balance) = balances[i] {
-                                    if let OptionSerializer::Some(owner) =
-                                        &balance.owner
-                                    {
-                                        return Some(owner);
-                                    }
+                            if let Some(balance) = balances[i]
+                                && let OptionSerializer::Some(owner) =
+                                    &balance.owner
+                            {
+                                return Some(owner);
+                            }
 
-                                    warning!("sync: svm: transactins: balance does not have an owner!");
-                                }
+                            // Lookup initialized owners
+                            if let Some(initialized) = tx
+                                .initialized_accounts
+                                .iter()
+                                .find(|initialized| {
+                                    initialized.address == tx.accounts[index]
+                                })
+                            {
+                                return Some(&initialized.owner);
+                            }
 
-                                // Lookup initialized owners
-                                if let Some(initialized) = tx
-                                    .initialized_accounts
-                                    .iter()
-                                    .find(|initialized| initialized.address == tx.accounts[index])
-                                {
-                                    return Some(&initialized.owner);
-                                }
+                            if let Some(owner) = &lookedup_owners[index] {
+                                return Some(&owner);
+                            }
 
-                                if let Some(owner) = &lookedup_owners[index] {
-                                    return Some(&owner);
-                                }
-
-                                None
-                            })
-                            .collect::<Vec<_>>();
+                            None
+                        })
+                        .collect::<Vec<_>>();
 
                     let accounts_mints = inner_instruction
                         .accounts
@@ -455,20 +454,23 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                     if let Err(error) = anyhow_pg_try!(
                         || bundled.call_handler(&instruction_handler, id)
                     ) {
-                        warning!("sync: svm: transactions: {}: instruction handler failed with {}", &id, error);
+                        warning!(
+                            "sync: svm: transactions: {}: instruction handler failed with {}",
+                            &id,
+                            error
+                        );
                     }
                 }
             }
 
             // Filter out program id if specified
-            if let Some(program_id) = options.program {
-                if let Ok(program) = Pubkey::from_str(
+            if let Some(program_id) = options.program
+                && let Ok(program) = Pubkey::from_str(
                     &tx.accounts[instruction.program_id_index as usize],
-                ) {
-                    if program != program_id {
-                        continue;
-                    }
-                }
+                )
+                && program != program_id
+            {
+                continue;
             }
 
             // Filter out instruction discriminator if specified
@@ -491,10 +493,10 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                 .accounts
                 .iter()
                 .map(|index| {
-                    if let Some(balance) = get_balance(*index) {
-                        if balance.owner.is_some() {
-                            return Some(balance);
-                        }
+                    if let Some(balance) = get_balance(*index)
+                        && balance.owner.is_some()
+                    {
+                        return Some(balance);
                     }
 
                     None
@@ -507,22 +509,19 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
                 .enumerate()
                 .map(|(i, index)| {
                     let index = *index as usize;
-                    if let Some(balance) = balances[i] {
-                        if let OptionSerializer::Some(owner) = &balance.owner {
-                            return Some(owner);
-                        }
-
-                        warning!("sync: svm: transactins: balance does not have an owner!");
+                    if let Some(balance) = balances[i]
+                        && let OptionSerializer::Some(owner) = &balance.owner
+                    {
+                        return Some(owner);
                     }
 
                     // Lookup initialized owners
-                    if let Some(initialized) = tx
-                        .initialized_accounts
-                        .iter()
-                        .find(|initialized| initialized.address == tx.accounts[index])
+                    if let Some(initialized) =
+                        tx.initialized_accounts.iter().find(|initialized| {
+                            initialized.address == tx.accounts[index]
+                        })
                     {
                         return Some(&initialized.owner);
-
                     }
 
                     if let Some(owner) = &lookedup_owners[index] {
@@ -578,7 +577,11 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
             if let Err(error) = anyhow_pg_try!(
                 || instruction.call_handler(&instruction_handler, id)
             ) {
-                warning!("sync: svm: transactions: {}: instruction handler failed with {}", &id, error);
+                warning!(
+                    "sync: svm: transactions: {}: instruction handler failed with {}",
+                    &id,
+                    error
+                );
             }
         }
     }
@@ -594,9 +597,9 @@ pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
             anyhow_pg_try!(|| tx.call_handler(transaction_handler, id))
         {
             warning!(
-              "sync: evm: transactions: {}: transaction handler failed with {}",
-              &id,
-              error
+                "sync: evm: transactions: {}: transaction handler failed with {}",
+                &id,
+                error
             );
         }
     };

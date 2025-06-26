@@ -13,13 +13,13 @@ use solana_sdk::message::VersionedMessage;
 use solana_sdk::pubkey;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
-use solana_transaction_status_client_types::option_serializer::OptionSerializer;
 use solana_transaction_status_client_types::EncodedConfirmedTransactionWithStatusMeta;
 use solana_transaction_status_client_types::TransactionDetails;
 use solana_transaction_status_client_types::UiConfirmedBlock;
 use solana_transaction_status_client_types::UiInnerInstructions;
 use solana_transaction_status_client_types::UiInstruction;
 use solana_transaction_status_client_types::UiTransactionTokenBalance;
+use solana_transaction_status_client_types::option_serializer::OptionSerializer;
 
 use crate::types::Job;
 
@@ -161,9 +161,7 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
 
         let mut initialized_accounts = vec![];
 
-        for (i, instruction) in
-            transaction.message.instructions().iter().enumerate()
-        {
+        for (i, inst) in transaction.message.instructions().iter().enumerate() {
             for inner_instruction in inner_instructions
                 .iter()
                 .find(|inner| inner.index == i as u8)
@@ -172,20 +170,13 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
             {
                 if let UiInstruction::Compiled(inner_instruction) =
                     inner_instruction
-                {
-                    let inner_program = Pubkey::from_str(
+                    && let Ok(inner_program) = Pubkey::from_str(
                         &accounts[inner_instruction.program_id_index as usize],
                     )
-                    .expect("account index out of bounds");
-
-                    if inner_program != SPL_TOKEN_PROGRAM {
-                        continue;
-                    }
-
-                    let slice = bs58::decode(&inner_instruction.data)
-                        .into_vec()
-                        .expect("failed to decode data");
-
+                    && inner_program == SPL_TOKEN_PROGRAM
+                    && let Ok(slice) =
+                        bs58::decode(&inner_instruction.data).into_vec()
+                {
                     if slice[0] == SPL_INITIALIZE_ACCOUNT {
                         initialized_accounts.push(SvmInitializedAccount {
                             address: accounts
@@ -213,33 +204,22 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
             }
 
             // We care only about SPL Token program
-            let program = Pubkey::from_str(
-                &accounts[instruction.program_id_index as usize],
-            )
-            .expect("account index out of bounds");
-
-            if program != SPL_TOKEN_PROGRAM {
-                continue;
-            }
-
-            if let Some(discriminator) = instruction.data.get(0) {
+            if let Ok(program) =
+                Pubkey::from_str(&accounts[inst.program_id_index as usize])
+                && program == SPL_TOKEN_PROGRAM
+                && let Some(discriminator) = inst.data.get(0)
+            {
                 if discriminator == &SPL_INITIALIZE_ACCOUNT {
                     initialized_accounts.push(SvmInitializedAccount {
-                        address: accounts[instruction.accounts[0] as usize]
-                            .to_owned(),
-                        mint: accounts[instruction.accounts[1] as usize]
-                            .to_owned(),
-                        owner: accounts[instruction.accounts[2] as usize]
-                            .to_owned(),
+                        address: accounts[inst.accounts[0] as usize].to_owned(),
+                        mint: accounts[inst.accounts[1] as usize].to_owned(),
+                        owner: accounts[inst.accounts[2] as usize].to_owned(),
                     });
                 } else if discriminator == &SPL_INITIALIZE_ACCOUNT3 {
                     initialized_accounts.push(SvmInitializedAccount {
-                        address: accounts[instruction.accounts[0] as usize]
-                            .to_owned(),
-                        mint: accounts[instruction.accounts[1] as usize]
-                            .to_owned(),
-                        owner: bs58::encode(&instruction.data[1..33])
-                            .into_string(),
+                        address: accounts[inst.accounts[0] as usize].to_owned(),
+                        mint: accounts[inst.accounts[1] as usize].to_owned(),
+                        owner: bs58::encode(&inst.data[1..33]).into_string(),
                     });
                 }
             }

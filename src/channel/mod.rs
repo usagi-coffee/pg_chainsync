@@ -48,7 +48,7 @@ pub fn ordered_channel<T>(
     bounded::OrderedSender::new(buffer)
 }
 
-pub fn unbounded_ordered_channel<T>(
-) -> (unbounded::OrderedSender<T>, unbounded::OrderedReceiver<T>) {
+pub fn unbounded_ordered_channel<T>()
+-> (unbounded::OrderedSender<T>, unbounded::OrderedReceiver<T>) {
     unbounded::OrderedSender::new()
 }

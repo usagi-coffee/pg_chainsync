@@ -1,7 +1,7 @@
 use pgrx::prelude::*;
 use pgrx::{
-    pg_shmem_init, GucContext, GucFlags, GucRegistry,
-    PgSharedMemoryInitialization,
+    GucContext, GucFlags, GucRegistry, PgSharedMemoryInitialization,
+    pg_shmem_init,
 };
 
 #[macro_use]
@@ -91,48 +91,44 @@ mod chainsync {
             .expect("Invalid options provided");
 
         // Validate cron expression
-        if let Some(cron) = &configuration.cron {
-            if Schedule::from_str(&cron).is_err() {
-                panic!("incorrect cron expression")
-            }
+        if let Some(cron) = &configuration.cron
+            && Schedule::from_str(&cron).is_err()
+        {
+            panic!("incorrect cron expression")
         }
 
         let id = Job::register(name.into(), options);
 
-        if matches!(configuration.evm, Some(_)) {
-            if let Some(oneshot) = configuration.oneshot {
-                if oneshot {
-                    if let Err(_) = EVM_TASKS.exclusive().push(id) {
-                        panic!("failed to enqueue the task")
-                    }
-                }
-            }
-        } else if matches!(configuration.svm, Some(_)) {
-            if let Some(oneshot) = configuration.oneshot {
-                if oneshot {
-                    if let Err(_) = SVM_TASKS.exclusive().push(id) {
-                        panic!("failed to enqueue the task")
-                    }
-                }
-            }
+        if matches!(configuration.evm, Some(_))
+            && let Some(oneshot) = configuration.oneshot
+            && oneshot
+            && let Err(_) = EVM_TASKS.exclusive().push(id)
+        {
+            panic!("failed to enqueue the task");
+        } else if matches!(configuration.svm, Some(_))
+            && let Some(oneshot) = configuration.oneshot
+            && oneshot
+            && let Err(_) = SVM_TASKS.exclusive().push(id)
+        {
+            panic!("failed to enqueue the task");
         }
 
         // Send signal to the worker to restart the loop if it's a job
         if !matches!(configuration.oneshot, Some(true)) {
-            if configuration.is_block_job() {
-                if let Err(_) = SIGNALS
+            if configuration.is_block_job()
+                && SIGNALS
                     .exclusive()
                     .push(crate::types::Signal::RestartBlocks as u8)
-                {
-                    panic!("failed to send restart signal");
-                }
-            } else if configuration.is_log_job() {
-                if let Err(_) = SIGNALS
+                    .is_err()
+            {
+                panic!("failed to send restart signal");
+            } else if configuration.is_log_job()
+                && SIGNALS
                     .exclusive()
                     .push(crate::types::Signal::RestartLogs as u8)
-                {
-                    panic!("failed to send restart signal");
-                }
+                    .is_err()
+            {
+                panic!("failed to send restart signal");
             }
         }
 
