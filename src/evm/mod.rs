@@ -1,14 +1,17 @@
-pub type EvmPubSub =
-    alloy::providers::RootProvider<alloy::pubsub::PubSubFrontend>;
+use crate::types::Job;
+use alloy::{
+    network::{AnyHeader, AnyNetwork},
+    providers::Identity,
+};
+
+pub type EvmPubSub = alloy::providers::RootProvider<AnyNetwork>;
 pub type EvmPubSubError =
     alloy::transports::RpcError<alloy::transports::TransportErrorKind>;
 
 pub type EvmLogResponse = alloy::rpc::types::Log;
 
-pub type EvmBlock = alloy::rpc::types::Header;
+pub type EvmBlock = alloy::rpc::types::Header<AnyHeader>;
 pub type EvmLog = alloy::rpc::types::Log;
-
-use crate::types::Job;
 
 impl Job {
     pub async fn connect_evm(
@@ -22,8 +25,13 @@ impl Job {
 
         self.evm
             .get_or_try_init(|| async {
-                let ws = alloy::providers::WsConnect::new(url);
-                alloy::providers::ProviderBuilder::new().on_ws(ws).await
+                alloy::providers::ProviderBuilder::<
+                    Identity,
+                    Identity,
+                    AnyNetwork,
+                >::default()
+                .connect_ws(alloy::providers::WsConnect::new(url))
+                .await
             })
             .await
     }
@@ -37,8 +45,13 @@ impl Job {
             .as_ref()
             .expect("Websocket URL was not provided");
 
-        let ws = alloy::providers::WsConnect::new(url);
-        alloy::providers::ProviderBuilder::new().on_ws(ws).await
+        alloy::providers::ProviderBuilder::<
+            Identity,
+            Identity,
+            AnyNetwork,
+        >::default()
+        .connect_ws(alloy::providers::WsConnect::new(url))
+        .await
     }
 }
 

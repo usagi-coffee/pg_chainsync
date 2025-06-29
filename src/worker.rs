@@ -4,7 +4,7 @@ use pgrx::bgworkers::BackgroundWorker;
 use pgrx::bgworkers::*;
 use pgrx::lwlock::PgLwLock;
 
-use std::ffi::CStr;
+use std::ffi::CString;
 use std::sync::Arc;
 
 use tokio::time::{Duration, Instant, sleep_until};
@@ -23,8 +23,8 @@ pub static EVM_TASKS: PgLwLock<heapless::Vec<i64, 32>> =
 pub static SVM_TASKS: PgLwLock<heapless::Vec<i64, 32>> =
     PgLwLock::new(c"svm_tasks");
 
-pub static DATABASE: GucSetting<Option<&'static CStr>> =
-    GucSetting::<Option<&'static CStr>>::new(Some(c"postgres"));
+pub static DATABASE: GucSetting<Option<CString>> =
+    GucSetting::<Option<CString>>::new(Some(c"postgres"));
 pub static EVM_WS_PERMITS: GucSetting<i32> = GucSetting::<i32>::new(1);
 pub static EVM_BLOCKTICK_RESET: GucSetting<i32> = GucSetting::<i32>::new(100);
 pub static SVM_RPC_PERMITS: GucSetting<i32> = GucSetting::<i32>::new(3);

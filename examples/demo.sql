@@ -1,5 +1,5 @@
 -- This is a demo script that collects logs from the local foundry testnet
--- It collects logs and blocks in real-time (unverified) and verifies them later with a cron task
+-- It collects logs in real-time (unverified) and verifies them later with a cron task
 
 -- For convenience let's use case insensitive collation for the txhash and address (evm is case insensitive)
 CREATE COLLATION IF NOT EXISTS case_insensitive (
@@ -7,24 +7,6 @@ CREATE COLLATION IF NOT EXISTS case_insensitive (
   locale = 'und-u-ks-level2',
   deterministic = false
 );
-
--- Table to store blocks, for most common cases you only need timestamp
-CREATE TABLE blocks (
-  bl_number BIGINT PRIMARY KEY,
-  bl_timestamp TIMESTAMPTZ NOT NULL
-);
-
--- Function to find blocks
-CREATE OR REPLACE FUNCTION find_block(block BIGINT, job JSONB) RETURNS BIGINT
-AS $$ SELECT bl_number FROM blocks WHERE bl_number = block LIMIT 1 $$ LANGUAGE SQL STABLE;
-
--- Function to insert blocks
-CREATE FUNCTION block_handler(block chainsync.EvmBlock, job JSONB) RETURNS VOID
-AS $$
-  INSERT INTO blocks (bl_number, bl_timestamp)
-  VALUES (block.number, TO_TIMESTAMP(block.timestamp) AT TIME ZONE 'UTC')
-  ON CONFLICT DO NOTHING
-$$ LANGUAGE SQL;
 
 -- Table to store logs
 CREATE TABLE logs (
@@ -51,8 +33,7 @@ AS $$
     log.transaction_hash,
     log.log_index,
     log.block_number,
-    -- Get the timestamp from the blocks table, await block handler ensures that the block is already in the table :)
-    (SELECT bl_timestamp FROM blocks WHERE bl_number = log.block_number),
+    TO_TIMESTAMP(log.block_timestamp) AT TIME ZONE 'UTC'
     log.address,
     log.topics,
     log.data,
@@ -71,11 +52,7 @@ SELECT chainsync.register(
     "evm": {
       "log_handler": "log_handler",
       "address": "5FbDB2315678afecb367f032d93F642f64180aa3",
-      "event": "Transfer(address,address,uint256)",
-
-      "await_block": true,
-      "block_handler": "block_handler",
-      "block_skip_lookup": "find_block"
+      "event": "Transfer(address,address,uint256)"
     },
 
     "source": "unverified"

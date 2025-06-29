@@ -228,11 +228,12 @@ pub async fn handle_evm_log(
             }
             Err(_) => match try_block(block, &job).await {
                 Ok(block) => {
+                    let inner = block.0.inner;
                     ensure!(
-                        channel
-                            .send(
-                                Message::EvmBlock(block.header, job.clone(),)
-                            ),
+                        channel.send(Message::EvmBlock(
+                            inner.into_header(),
+                            job.clone(),
+                        )),
                         "sync: evm: logs: {}, failed to send block {}<{}>",
                         &job.name,
                         transaction,

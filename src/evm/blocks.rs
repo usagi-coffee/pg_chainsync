@@ -1,3 +1,4 @@
+use alloy::network::{AnyHeader, AnyRpcBlock};
 use pgrx::{log, warning};
 
 use anyhow::{Context, bail, ensure};
@@ -11,7 +12,6 @@ use bus::BusReader;
 
 use alloy::providers::Provider;
 use alloy::pubsub::SubscriptionStream;
-use alloy::rpc::types::Header;
 
 use crate::types::Job;
 
@@ -138,7 +138,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 
 pub async fn handle_block(
     job: &Arc<Job>,
-    block: alloy::rpc::types::Header,
+    block: alloy::rpc::types::Header<AnyHeader>,
     channel: &Channel,
 ) -> Result<(), anyhow::Error> {
     let number = block.number;
@@ -155,7 +155,7 @@ pub async fn handle_block(
 
 pub async fn build_stream(
     job: &Job,
-) -> anyhow::Result<SubscriptionStream<Header>> {
+) -> anyhow::Result<SubscriptionStream<alloy::rpc::types::Header<AnyHeader>>> {
     let provider = job.connect_evm().await.context("Invalid provider")?;
     let sub = provider.subscribe_blocks().await?;
     Ok(sub.into_stream())
@@ -165,7 +165,7 @@ pub async fn build_stream(
 pub async fn try_block(
     block: u64,
     job: &Arc<Job>,
-) -> Result<alloy::rpc::types::Block, anyhow::Error> {
+) -> Result<AnyRpcBlock, anyhow::Error> {
     let mut retries = 0;
     loop {
         if retries > 20 {
@@ -186,13 +186,7 @@ pub async fn try_block(
             continue;
         };
 
-        if let Ok(Some(block)) = client
-            .get_block(
-                block.into(),
-                alloy::rpc::types::BlockTransactionsKind::Hashes,
-            )
-            .await
-        {
+        if let Ok(Some(block)) = client.get_block(block.into()).await {
             return Ok(block);
         }
 

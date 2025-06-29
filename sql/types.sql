@@ -28,6 +28,7 @@ CREATE TYPE chainsync.EvmBlock AS (
 CREATE TYPE chainsync.EvmLog AS (
   block_number NUMERIC,
   block_hash TEXT,
+  block_timestamp NUMERIC,
   transaction_hash TEXT,
   transaction_index BIGINT,
 	log_index BIGINT,

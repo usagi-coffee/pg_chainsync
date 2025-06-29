@@ -231,6 +231,14 @@ impl PgHandler for EvmLog {
                 self.block_number.unwrap().to_string().as_str(),
             ),
         )?;
+
+        if let Some(block_timestamp) = self.block_timestamp {
+            data.set_by_name(
+                "block_timestamp",
+                pgrx::AnyNumeric::try_from(block_timestamp),
+            )?;
+        }
+
         data.set_by_name("block_hash", hex::encode(self.block_hash.unwrap()))?;
         data.set_by_name(
             "transaction_hash",

@@ -152,18 +152,18 @@ pub extern "C-unwind" fn _PG_init() {
     pg_shmem_init!(SIGNALS);
 
     GucRegistry::define_string_guc(
-        "chainsync.database",
-        "database where the chainsync schema is",
-        "database where the chainsync schema is",
+        c"chainsync.database",
+        c"database where the chainsync schema is",
+        c"database where the chainsync schema is",
         &DATABASE,
         GucContext::Postmaster,
         GucFlags::default(),
     );
 
     GucRegistry::define_int_guc(
-        "chainsync.evm_ws_permits",
-        "number of permits per ws key",
-        "number of permits per ws key",
+        c"chainsync.evm_ws_permits",
+        c"number of permits per ws key",
+        c"number of permits per ws key",
         &EVM_WS_PERMITS,
         1,
         999,
@@ -172,9 +172,9 @@ pub extern "C-unwind" fn _PG_init() {
     );
 
     GucRegistry::define_int_guc(
-        "chainsync.evm_blocktick_reset",
-        "number of range fetches before blocktick reset",
-        "number of range fetches before blocktick reset",
+        c"chainsync.evm_blocktick_reset",
+        c"number of range fetches before blocktick reset",
+        c"number of range fetches before blocktick reset",
         &EVM_BLOCKTICK_RESET,
         1,
         999999,
@@ -183,9 +183,9 @@ pub extern "C-unwind" fn _PG_init() {
     );
 
     GucRegistry::define_int_guc(
-        "chainsync.svm_ws_permits",
-        "number of permits per rpc key in a single task",
-        "number of permits per rpc ket in a single task",
+        c"chainsync.svm_ws_permits",
+        c"number of permits per rpc key in a single task",
+        c"number of permits per rpc ket in a single task",
         &SVM_RPC_PERMITS,
         1,
         999,
@@ -194,9 +194,9 @@ pub extern "C-unwind" fn _PG_init() {
     );
 
     GucRegistry::define_int_guc(
-        "chainsync.svm_signatures_buffer",
-        "number of signatures to buffer in a single task",
-        "number of signatures to buffer in a single task",
+        c"chainsync.svm_signatures_buffer",
+        c"number of signatures to buffer in a single task",
+        c"number of signatures to buffer in a single task",
         &SVM_SIGNATURES_BUFFER,
         1,
         100000000,
