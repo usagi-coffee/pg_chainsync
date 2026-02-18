@@ -236,8 +236,6 @@ use crate::query::PgHandler;
 use crate::worker::SVM_RPC_PERMITS;
 use pgrx::bgworkers::BackgroundWorker;
 
-use crate::anyhow_pg_try;
-
 pub fn handle_transaction_message(tx: SvmTransaction, job: Arc<Job>) {
     let Some(options) = &job.options.svm else {
         warning!(

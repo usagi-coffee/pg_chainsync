@@ -25,6 +25,10 @@ pub static SVM_TASKS: PgLwLock<heapless::Vec<i64, 32>> =
 
 pub static DATABASE: GucSetting<Option<CString>> =
     GucSetting::<Option<CString>>::new(Some(c"postgres"));
+pub static CONFIG_DIR: GucSetting<Option<CString>> =
+    GucSetting::<Option<CString>>::new(None);
+pub static PLUGIN_DIR: GucSetting<Option<CString>> =
+    GucSetting::<Option<CString>>::new(None);
 pub static EVM_WS_PERMITS: GucSetting<i32> = GucSetting::<i32>::new(1);
 pub static EVM_BLOCKTICK_RESET: GucSetting<i32> = GucSetting::<i32>::new(100);
 pub static SVM_RPC_PERMITS: GucSetting<i32> = GucSetting::<i32>::new(3);

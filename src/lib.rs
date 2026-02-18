@@ -8,6 +8,8 @@ use pgrx::{
 pub mod worker;
 
 pub mod channel;
+pub mod config;
+pub mod plugin;
 pub mod query;
 pub mod types;
 
@@ -20,17 +22,13 @@ mod sync;
 
 #[pg_schema]
 mod chainsync {
-    use crate::types::{Job, JobOptions};
+    use crate::config::{self, RuntimeStatus};
     use crate::worker;
     use crate::worker::*;
 
     use pgrx::prelude::*;
-    use serde::Deserialize;
-
-    use std::str::FromStr;
+    use serde_json::json;
     use std::time::{Duration, Instant};
-
-    use cron::Schedule;
 
     #[pg_extern]
     fn restart() {
@@ -82,65 +80,67 @@ mod chainsync {
 
     #[pg_extern]
     fn register(name: &str, options: pgrx::JsonB) -> i64 {
-        if options.0.is_null() || !options.0.is_object() {
-            panic!("provided options are not an object")
-        }
+        let _ = name;
+        let _ = options;
+        panic!(
+            "chainsync.register is removed in v2. Define jobs in chainsync.config_dir and call chainsync.reload()"
+        );
+    }
 
-        // Deserialize options
-        let configuration = JobOptions::deserialize(&options.0)
-            .expect("Invalid options provided");
+    #[pg_extern]
+    fn reload() -> pgrx::JsonB {
+        let config_dir = CONFIG_DIR
+            .get()
+            .and_then(|v| v.to_str().ok().map(|s| s.to_string()))
+            .expect("chainsync.config_dir must be configured");
+        let plugin_dir = PLUGIN_DIR
+            .get()
+            .and_then(|v| v.to_str().ok().map(|s| s.to_string()))
+            .expect("chainsync.plugin_dir must be configured");
 
-        // Validate cron expression
-        if let Some(cron) = &configuration.cron
-            && Schedule::from_str(&cron).is_err()
+        let statuses = Spi::connect(|_| {
+            config::sync_from_toml(
+                std::path::Path::new(&config_dir),
+                std::path::Path::new(&plugin_dir),
+            )
+        })
+        .expect("reload failed");
+
+        if SIGNALS
+            .exclusive()
+            .push(crate::types::Signal::RestartBlocks as u8)
+            .is_err()
         {
-            panic!("incorrect cron expression")
+            warning!("failed to send block restart signal");
         }
-
-        let id = Job::register(name.into(), options);
-
-        if matches!(configuration.evm, Some(_))
-            && let Some(oneshot) = configuration.oneshot
-            && oneshot
-            && let Err(_) = EVM_TASKS.exclusive().push(id)
+        if SIGNALS
+            .exclusive()
+            .push(crate::types::Signal::RestartLogs as u8)
+            .is_err()
         {
-            panic!("failed to enqueue the task");
-        } else if matches!(configuration.svm, Some(_))
-            && let Some(oneshot) = configuration.oneshot
-            && oneshot
-            && let Err(_) = SVM_TASKS.exclusive().push(id)
-        {
-            panic!("failed to enqueue the task");
+            warning!("failed to send log restart signal");
         }
 
-        // Send signal to the worker to restart the loop if it's a job
-        if !matches!(configuration.oneshot, Some(true)) {
-            if configuration.is_block_job()
-                && SIGNALS
-                    .exclusive()
-                    .push(crate::types::Signal::RestartBlocks as u8)
-                    .is_err()
-            {
-                panic!("failed to send restart signal");
-            } else if configuration.is_log_job()
-                && SIGNALS
-                    .exclusive()
-                    .push(crate::types::Signal::RestartLogs as u8)
-                    .is_err()
-            {
-                panic!("failed to send restart signal");
-            }
-        }
-
-        id
+        let payload = statuses
+            .into_iter()
+            .map(|status: RuntimeStatus| {
+                json!({
+                    "job_id": status.job_id,
+                    "status": status.status,
+                    "last_error": status.last_error,
+                })
+            })
+            .collect::<Vec<_>>();
+        pgrx::JsonB(json!(payload))
     }
 }
 
 extension_sql_file!("../sql/types.sql", name = "types_schema");
 
 use worker::{
-    DATABASE, EVM_BLOCKTICK_RESET, EVM_TASKS, EVM_WS_PERMITS, RESTART_COUNT,
-    SIGNALS, SVM_RPC_PERMITS, SVM_SIGNATURES_BUFFER, SVM_TASKS, WORKER_STATUS,
+    CONFIG_DIR, DATABASE, EVM_BLOCKTICK_RESET, EVM_TASKS, EVM_WS_PERMITS,
+    PLUGIN_DIR, RESTART_COUNT, SIGNALS, SVM_RPC_PERMITS, SVM_SIGNATURES_BUFFER,
+    SVM_TASKS, WORKER_STATUS,
 };
 
 #[pg_guard]
@@ -156,6 +156,22 @@ pub extern "C-unwind" fn _PG_init() {
         c"database where the chainsync schema is",
         c"database where the chainsync schema is",
         &DATABASE,
+        GucContext::Postmaster,
+        GucFlags::default(),
+    );
+    GucRegistry::define_string_guc(
+        c"chainsync.config_dir",
+        c"directory with .toml job files",
+        c"directory with .toml job files",
+        &CONFIG_DIR,
+        GucContext::Postmaster,
+        GucFlags::default(),
+    );
+    GucRegistry::define_string_guc(
+        c"chainsync.plugin_dir",
+        c"directory with native chainsync modules",
+        c"directory with native chainsync modules",
+        &PLUGIN_DIR,
         GucContext::Postmaster,
         GucFlags::default(),
     );

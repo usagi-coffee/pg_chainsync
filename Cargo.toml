@@ -20,11 +20,13 @@ pgrx = "0.15.0"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 serde_json = { version = "1.0" }
+toml = "0.8"
 heapless = "0.8"
 serde = { version = "1", features = ["rc"] }
 cron = "0.15"
 anyhow = "1"
 bus = "2.4"
+libloading = "0.8"
 alloy = { version = "1", features = ["full"] }
 alloy-chains = { version = "0.2", features = ["serde"] }
 solana-sdk = "2"

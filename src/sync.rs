@@ -17,8 +17,8 @@ use cron::Schedule;
 
 use bus::Bus;
 
-use crate::anyhow_pg_try;
 use crate::channel::*;
+use crate::config;
 use crate::evm;
 use crate::query::PgHandler;
 use crate::svm;
@@ -47,6 +47,23 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
         );
     } else {
         error!("sync: database name was not provided");
+    }
+
+    if let (Some(config_dir), Some(plugin_dir)) =
+        (CONFIG_DIR.get(), PLUGIN_DIR.get())
+    {
+        if let (Ok(config_dir), Ok(plugin_dir)) =
+            (config_dir.to_str(), plugin_dir.to_str())
+        {
+            if let Err(error) = anyhow_pg_try!(|| {
+                config::sync_from_toml(
+                    std::path::Path::new(config_dir),
+                    std::path::Path::new(plugin_dir),
+                )
+            }) {
+                warning!("sync: failed to sync toml jobs with {}", error);
+            }
+        }
     }
 
     let runtime = tokio::runtime::Builder::new_current_thread()

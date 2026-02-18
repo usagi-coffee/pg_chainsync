@@ -202,6 +202,8 @@ pub struct JobOptions {
     pub setup_handler: Option<Arc<str>>,
     pub success_handler: Option<Arc<str>>,
     pub failure_handler: Option<Arc<str>>,
+    /// Native plugin module name loaded from chainsync.plugin_dir
+    pub module: Option<Arc<str>>,
 
     pub evm: Option<EvmOptions>,
     pub svm: Option<SvmOptions>,
