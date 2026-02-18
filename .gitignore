@@ -11,3 +11,4 @@ examples/test.sql
 examples/evm_test*
 examples/svm_test*
 accounts.csv
+.env

@@ -1,11 +1,12 @@
+ws = "${EVM_WS_URL}"
+
 [handler]
 id = "erc20-transfer"
 chain = "evm"
 mode = "stream"
 
-ws = "${EVM_WS_URL}"
-
 [evm]
+address = "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
 event = "Transfer(address,address,uint256)"
 
 [queries.mutations.upsert_transfer]

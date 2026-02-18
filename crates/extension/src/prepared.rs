@@ -44,7 +44,12 @@ fn stable_name(handler_id: i64, kind: &str, query_id: &str) -> String {
 #[derive(Default, Clone)]
 struct HandlerPrepared {
     lookups: HashMap<String, String>,
-    mutations: HashMap<String, String>,
+    mutations: HashMap<String, MutationPrepared>,
+}
+
+#[derive(Clone)]
+struct MutationPrepared {
+    sql: String,
 }
 
 static PREPARED: OnceLock<RwLock<HashMap<i64, HandlerPrepared>>> = OnceLock::new();
@@ -54,8 +59,38 @@ fn prepared_store() -> &'static RwLock<HashMap<i64, HandlerPrepared>> {
 }
 
 fn prepare_named_statement(name: &str, sql: &str) -> Result<()> {
-    let _ = Spi::run(&format!("DEALLOCATE {}", name));
+    // Avoid SPI tuple cursor edge cases by doing existence check/deallocate inside SQL.
+    Spi::run(
+        format!(
+            "DO $$ BEGIN \
+             IF EXISTS (SELECT 1 FROM pg_prepared_statements WHERE name = '{name}') THEN \
+               DEALLOCATE {name}; \
+             END IF; \
+             END $$;"
+        )
+        .as_str(),
+    )
+    .with_context(|| format!("deallocating statement {}", name))?;
     Spi::run(&format!("PREPARE {} AS {}", name, sql))
+        .with_context(|| format!("preparing statement {}", name))?;
+    Ok(())
+}
+
+fn prepare_mutation_statement(name: &str, sql: &str) -> Result<()> {
+    // Mutation SQL receives payload as $1 and expects jsonb operators (->, ->>),
+    // so parameter type must be explicit at PREPARE time.
+    Spi::run(
+        format!(
+            "DO $$ BEGIN \
+             IF EXISTS (SELECT 1 FROM pg_prepared_statements WHERE name = '{name}') THEN \
+               DEALLOCATE {name}; \
+             END IF; \
+             END $$;"
+        )
+        .as_str(),
+    )
+    .with_context(|| format!("deallocating statement {}", name))?;
+    Spi::run(&format!("PREPARE {}(jsonb) AS {}", name, sql))
         .with_context(|| format!("preparing statement {}", name))?;
     Ok(())
 }
@@ -91,8 +126,10 @@ pub fn prepare_handler_queries(handler: &HandlerRuntime) -> Result<usize> {
                 format!("resolving mutation sql '{}'", query_id)
             })?;
             let name = stable_name(handler.id, "mutation", query_id);
-            prepare_named_statement(&name, &sql)?;
-            handler_prepared.mutations.insert(query_id.clone(), name);
+            prepare_mutation_statement(&name, &sql)?;
+            handler_prepared
+                .mutations
+                .insert(query_id.clone(), MutationPrepared { sql });
             prepared += 1;
         }
     }
@@ -123,23 +160,23 @@ pub fn execute_mutation(
     mutation_id: &str,
     payload: JsonB,
 ) -> Result<()> {
-    let sql_name = {
+    let mutation_sql = {
         let guard = prepared_store().read().expect("prepared plans lock");
         let Some(handler) = guard.get(&handler_id) else {
             anyhow::bail!("no prepared queries for handler {}", handler_id);
         };
-        let Some(name) = handler.mutations.get(mutation_id) else {
+        let Some(query) = handler.mutations.get(mutation_id) else {
             anyhow::bail!(
                 "mutation id '{}' not prepared for handler {}",
                 mutation_id,
                 handler_id
             );
         };
-        name.clone()
+        query.sql.clone()
     };
 
     Spi::run_with_args(
-        format!("EXECUTE {}($1)", sql_name).as_str(),
+        mutation_sql.as_str(),
         &vec![DatumWithOid::from(payload)],
     )
     .with_context(|| format!("executing mutation {}", mutation_id))?;

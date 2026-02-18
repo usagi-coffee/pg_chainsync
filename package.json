@@ -2,7 +2,7 @@
   "name": "pg_chainsync",
   "private": true,
   "scripts": {
-    "dev": "PGURL=postgresql://127.0.0.1:28818/pg_chainsync bun run scripts/dev-handler.ts --all",
+    "dev": "PGURL=postgresql://127.0.0.1:28818/pg_chainsync bun run scripts/dev-handler.ts",
     "dev:postgres": "cargo pgrx start pg18 --manifest-path crates/extension/Cargo.toml",
     "dev:handler": "bun run scripts/dev-handler.ts"
   }

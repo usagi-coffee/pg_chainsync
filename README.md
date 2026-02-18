@@ -4,12 +4,12 @@
 
 ## Architecture at a glance
 
-- Handlers are discovered from `*.so` files in `chainsync.config_dir`.
+- Handlers are discovered from `*.so` files in `<data_directory>/chainsync/handlers`.
 - Each module `.so` embeds its own `handler.toml` config.
 - Event workers run module logic.
 - A dedicated DB executor thread owns SPI execution.
 - Workers and DB executor communicate over an internal typed bus.
-- Runtime artifacts are stored under `chainsync/status`, `chainsync/logs`, and `chainsync/state`.
+- Runtime artifacts are stored under `chainsync/logs` and `chainsync/state`.
 
 ## Monorepo layout
 
@@ -54,8 +54,6 @@ Copy extension artifacts according to your `pg_config` installation paths.
 shared_preload_libraries = 'pg_chainsync'
 
 chainsync.database = 'postgres'
-# optional, defaults to <data_directory>/chainsync/handlers
-# chainsync.config_dir = '/etc/pg_chainsync/handlers'
 ```
 
 Restart PostgreSQL after config changes.
@@ -73,13 +71,17 @@ SELECT chainsync.reload();
 ## Filesystem layout
 
 ```text
-/etc/pg_chainsync/
-  handlers/
-    evm-transfer-stream.so
-    svm-program-stream.so
-    status/
-      evm-transfer-stream.json
-      svm-program-stream.json
+<data_directory>/
+  chainsync/
+    handlers/
+      evm-transfer-stream.so
+      svm-program-stream.so
+    logs/
+      evm-transfer-stream.log
+      svm-program-stream.log
+    state/
+      evm-transfer-stream.bin
+      svm-program-stream.bin
     logs/
       evm-transfer-stream.log
       svm-program-stream.log
@@ -97,7 +99,7 @@ SELECT chainsync.reload();
 - `[handler].id`
 - `[handler].chain` = `"evm" | "svm"`
 - `[handler].mode` = `"stream"`
-- Module file is the `.so` itself in `chainsync.config_dir`
+- Module file is the `.so` itself in `<data_directory>/chainsync/handlers`
 
 ### Optional keys
 
@@ -140,7 +142,6 @@ In SO-only mode, queries must use `sql_inline` (no external `queries/*.sql` file
 
 ## Runtime artifacts per handler
 
-- `<data_directory>/chainsync/status/<handler_id>.json`
 - `<data_directory>/chainsync/logs/<module_name>.log`
 
 `<module_name>.log` is JSONL and records states (`REGISTERED`, `UPDATED`, `ERROR`, `REMOVED`) and reload/validation events.
@@ -308,9 +309,9 @@ Typical flow:
 ## Operational flow
 
 1. Build module `.so` (with embedded `handler.toml`).
-2. Copy `.so` into `chainsync.config_dir`.
+2. Copy `.so` into `<data_directory>/chainsync/handlers`.
 3. Run `SELECT chainsync.reload();`.
-4. Check `chainsync/status/<handler_id>.json` and `chainsync/logs/<module_name>.log`.
+4. Check `chainsync/logs/<module_name>.log`.
 5. Restart worker if needed.
 
 ## Development

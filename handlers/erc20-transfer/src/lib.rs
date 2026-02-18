@@ -134,5 +134,5 @@ export_plugin!(
     Erc20TransferHandler,
     "erc20_transfer_handler",
     "0.1.0",
-    include_str!("../handler.toml")
+    include_str!(concat!(env!("OUT_DIR"), "/handler.generated.toml"))
 );

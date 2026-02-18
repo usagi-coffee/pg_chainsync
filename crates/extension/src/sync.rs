@@ -36,6 +36,7 @@ fn prelookup_cache() -> &'static RwLock<HashMap<i64, serde_json::Value>> {
 fn resolve_prefetched(
     handler: &Arc<HandlerRuntime>,
 ) -> Result<Option<serde_json::Value>, anyhow::Error> {
+    let handler_id = handler.id;
     let Some(prelookups) = &handler.options.prelookups else {
         return Ok(None);
     };
@@ -54,7 +55,17 @@ fn resolve_prefetched(
 
     let mut values = serde_json::Map::new();
     for lookup_id in prelookups {
-        let value = prepared::execute_lookup(handler.id, lookup_id)?;
+        let lookup_id_ref = lookup_id.as_str();
+        let value =
+            anyhow_pg_try!(|| prepared::execute_lookup(handler_id, lookup_id_ref))
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "prefetch lookup '{}' failed for handler {}: {}",
+                    lookup_id,
+                    handler_id,
+                    error
+                )
+            })?;
         values.insert(lookup_id.clone(), value);
     }
 
@@ -94,10 +105,22 @@ fn invoke_handler_module(
             anyhow::bail!("module returned error: {}", message);
         }
         module_protocol::ModuleResponse::Done { mutations } => {
+            let handler_id = handler.id;
             for mutation in mutations {
+                let mutation_id = mutation.id;
                 let payload =
                     module_protocol::payload_to_jsonb(mutation.payload)?;
-                prepared::execute_mutation(handler.id, &mutation.id, payload)?;
+                anyhow_pg_try!(|| {
+                    prepared::execute_mutation(handler_id, &mutation_id, payload)
+                })
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "mutation '{}' failed for handler {}: {}",
+                        mutation_id,
+                        handler_id,
+                        error
+                    )
+                })?;
             }
             Ok(())
         }
@@ -152,7 +175,10 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
     }) {
         Ok(total) => log!("sync: prepared {} handler queries", total),
         Err(error) => {
-            warning!("sync: failed to prepare handler queries with {}", error)
+            warning!(
+                "sync: failed to prepare handler queries: {:#}",
+                error
+            )
         }
     }
 

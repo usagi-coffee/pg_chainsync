@@ -66,7 +66,10 @@ mod chainsync {
     fn reload() -> pgrx::JsonB {
         let outcome = Spi::connect(|_| {
             let config_dir = config::resolve_config_dir()?;
-            config::sync_from_handlers(&config_dir)
+            let outcome = config::sync_from_handlers(&config_dir)?;
+            let handlers = crate::types::HandlerRuntime::query_all()?;
+            let _prepared = crate::prepared::prepare_all_handlers(&handlers)?;
+            Ok::<_, anyhow::Error>(outcome)
         })
         .expect("reload failed");
 
@@ -103,8 +106,8 @@ mod chainsync {
 }
 
 use worker::{
-    CONFIG_DIR, DATABASE, EVM_BLOCKTICK_RESET, EVM_WS_PERMITS, RESTART_COUNT,
-    SIGNALS, SVM_RPC_PERMITS, SVM_SIGNATURES_BUFFER, WORKER_STATUS,
+    DATABASE, EVM_BLOCKTICK_RESET, EVM_WS_PERMITS, RESTART_COUNT, SIGNALS,
+    SVM_RPC_PERMITS, SVM_SIGNATURES_BUFFER, WORKER_STATUS,
 };
 
 #[pg_guard]
@@ -121,15 +124,6 @@ pub extern "C-unwind" fn _PG_init() {
         GucContext::Postmaster,
         GucFlags::default(),
     );
-    GucRegistry::define_string_guc(
-        c"chainsync.config_dir",
-        c"directory with handler folders and handler.toml files",
-        c"directory with handler folders and handler.toml files",
-        &CONFIG_DIR,
-        GucContext::Postmaster,
-        GucFlags::default(),
-    );
-
     GucRegistry::define_int_guc(
         c"chainsync.evm_ws_permits",
         c"number of permits per ws key",

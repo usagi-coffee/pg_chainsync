@@ -1,9 +1,9 @@
+ws = "${EVM_WS_URL}"
+
 [handler]
 id = "ohlc-1m"
 chain = "evm"
 mode = "stream"
-
-ws = "${EVM_WS_URL}"
 
 [evm]
 # Example Uniswap V2 Swap event

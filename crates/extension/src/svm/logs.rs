@@ -8,6 +8,7 @@ use solana_client::rpc_config::{
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio::task::JoinHandle;
 
 use tokio::sync::oneshot;
 use tokio::time::Duration;
@@ -32,142 +33,201 @@ fn ingress_key(handler: &HandlerRuntime) -> String {
     format!("rpc={}|mentions={:?}", rpc, options.mentions)
 }
 
-pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
-    'logs: loop {
-        let mut handles = vec![];
+fn group_fingerprint(group_handlers: &[Arc<HandlerRuntime>]) -> String {
+    let mut ids = group_handlers
+        .iter()
+        .map(|h| h.id.to_string())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids.join(",")
+}
 
-        let (tx, rx) = oneshot::channel::<Vec<HandlerRuntime>>();
-        channel.send(Message::Handlers(tx));
+fn spawn_group(
+    key: String,
+    group_handlers: Vec<Arc<HandlerRuntime>>,
+    channel: Arc<Channel>,
+) -> JoinHandle<()> {
+    let Some(primary) = group_handlers.first().cloned() else {
+        return tokio::spawn(async {});
+    };
 
-        let Ok(handlers) = rx.await else {
-            warning!("sync: ingress: svm:logs: failed to load route table");
-            return;
-        };
+    tokio::spawn(async move {
+        let mut retries = 0;
+        'group: loop {
+            if retries >= 10 {
+                warning!(
+                    "sync: ingress: svm:logs: {}: too many retries, stopping lane",
+                    key
+                );
 
-        let handlers = handlers
-            .svm_handlers()
-            .log_handlers()
-            .into_iter()
-            .map(Arc::new)
-            .collect::<Vec<_>>();
+                return;
+            }
 
-        let mut groups: HashMap<String, Vec<Arc<HandlerRuntime>>> = HashMap::new();
-        for handler in handlers {
-            groups.entry(ingress_key(&handler)).or_default().push(handler);
-        }
+            if let Err(error) = primary.reconnect_svm_ws().await {
+                warning!(
+                    "sync: ingress: svm:logs: {}: ws connect failed: {}",
+                    key,
+                    error
+                );
 
-        for (key, group_handlers) in groups {
-            let Some(primary) = group_handlers.first().cloned() else {
+                retries += 1;
+                tokio::time::sleep(Duration::from_millis(200)).await;
                 continue;
             };
-            let channel = channel.clone();
-            let handle = tokio::spawn(async move {
-                let mut retries = 0;
-                'group: loop {
-                    if retries >= 10 {
+
+            if let Err(error) = primary.connect_svm_rpc().await {
+                warning!(
+                    "sync: ingress: svm:logs: {}: rpc connect failed: {}",
+                    key,
+                    error
+                );
+
+                retries += 1;
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                continue;
+            };
+
+            let mut stream = match build_stream(&primary).await {
+                Ok(stream) => StreamNotifyClose::new(stream),
+                Err(error) => {
+                    warning!(
+                        "sync: ingress: svm:logs: {}: stream build failed: {}",
+                        key,
+                        error
+                    );
+
+                    retries += 1;
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    continue;
+                }
+            };
+
+            log!("sync: ingress: svm:logs: {}: lane online", key);
+            loop {
+                match stream.next().await {
+                    Some(Some(svm_log)) => {
+                        for handler in &group_handlers {
+                            if let Err(error) =
+                                handle_svm_log(handler, svm_log.clone(), &channel).await
+                            {
+                                warning!(
+                                    "sync: ingress: svm:logs: {}: route={} dispatch failed: {}",
+                                    key,
+                                    &handler.name,
+                                    error
+                                );
+                            }
+                        }
+                    }
+                    _ => {
                         warning!(
-                            "sync: ingress: svm:logs: {}: too many retries, stopping lane",
+                            "sync: ingress: svm:logs: {}: stream ended, reconnecting",
                             key
                         );
 
-                        return;
+                        continue 'group;
                     }
+                }
+            }
+        }
+    })
+}
 
-                    if let Err(error) = primary.reconnect_svm_ws().await {
-                        warning!(
-                            "sync: ingress: svm:logs: {}: ws connect failed: {}",
-                            key,
-                            error
-                        );
+async fn desired_groups(
+    channel: &Channel,
+) -> Option<HashMap<String, Vec<Arc<HandlerRuntime>>>> {
+    let (tx, rx) = oneshot::channel::<Vec<HandlerRuntime>>();
+    channel.send(Message::Handlers(tx));
 
-                        retries += 1;
-                        tokio::time::sleep(Duration::from_millis(200)).await;
-                        continue;
-                    };
+    let Ok(handlers) = rx.await else {
+        warning!("sync: ingress: svm:logs: failed to load route table");
+        return None;
+    };
 
-                    if let Err(error) = primary.connect_svm_rpc().await {
-                        warning!(
-                            "sync: ingress: svm:logs: {}: rpc connect failed: {}",
-                            key,
-                            error
-                        );
+    let handlers = handlers
+        .svm_handlers()
+        .log_handlers()
+        .into_iter()
+        .map(Arc::new)
+        .collect::<Vec<_>>();
 
-                        retries += 1;
-                        tokio::time::sleep(Duration::from_millis(200)).await;
-                        continue;
-                    };
+    let mut groups: HashMap<String, Vec<Arc<HandlerRuntime>>> = HashMap::new();
+    for handler in handlers {
+        groups.entry(ingress_key(&handler)).or_default().push(handler);
+    }
 
-                    let mut stream = match build_stream(&primary).await {
-                        Ok(stream) => StreamNotifyClose::new(stream),
-                        Err(error) => {
-                            warning!(
-                                "sync: ingress: svm:logs: {}: stream build failed: {}",
-                                key,
-                                error
-                            );
+    Some(groups)
+}
 
-                            retries += 1;
-                            tokio::time::sleep(Duration::from_millis(200))
-                                .await;
-                            continue;
+pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
+    log!("sync: ingress: svm:logs: listener boot");
+    let mut running: HashMap<String, (String, JoinHandle<()>)> = HashMap::new();
+
+    let Some(initial_groups) = desired_groups(&channel).await else {
+        return;
+    };
+    log!(
+        "sync: ingress: svm:logs: route groups={} at startup",
+        initial_groups.len()
+    );
+    if initial_groups.is_empty() {
+        log!("sync: ingress: svm:logs: no active routes, listener idle");
+    }
+    for (key, group_handlers) in initial_groups {
+        let fingerprint = group_fingerprint(&group_handlers);
+        let handle = spawn_group(key.clone(), group_handlers, channel.clone());
+        running.insert(key, (fingerprint, handle));
+    }
+
+    loop {
+        match signals.try_recv() {
+            Ok(Signal::RestartLogs) => {
+                let Some(groups) = desired_groups(&channel).await else {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                };
+                log!(
+                    "sync: ingress: svm:logs: route groups={} after reload",
+                    groups.len()
+                );
+
+                let mut keep = HashMap::new();
+                for (key, group_handlers) in groups {
+                    let fingerprint = group_fingerprint(&group_handlers);
+                    match running.remove(&key) {
+                        Some((old_fingerprint, handle)) if old_fingerprint == fingerprint => {
+                            keep.insert(key, (old_fingerprint, handle));
                         }
-                    };
-
-                    log!("sync: ingress: svm:logs: {}: lane online", key);
-                    loop {
-                        match stream.next().await {
-                            Some(Some(svm_log)) => {
-                                for handler in &group_handlers {
-                                    if let Err(error) = handle_svm_log(
-                                        handler,
-                                        svm_log.clone(),
-                                        &channel,
-                                    )
-                                    .await
-                                    {
-                                        warning!(
-                                            "sync: ingress: svm:logs: {}: route={} dispatch failed: {}",
-                                            key,
-                                            &handler.name,
-                                            error
-                                        );
-                                    }
-                                }
-                            }
-                            _ => {
-                                warning!(
-                                    "sync: ingress: svm:logs: {}: stream ended, reconnecting",
-                                    key
-                                );
-
-                                continue 'group;
-                            }
+                        Some((_, handle)) => {
+                            handle.abort();
+                            let new_handle = spawn_group(
+                                key.clone(),
+                                group_handlers,
+                                channel.clone(),
+                            );
+                            keep.insert(key, (fingerprint, new_handle));
+                        }
+                        None => {
+                            let new_handle = spawn_group(
+                                key.clone(),
+                                group_handlers,
+                                channel.clone(),
+                            );
+                            keep.insert(key, (fingerprint, new_handle));
                         }
                     }
                 }
-            });
 
-            handles.push(handle);
-        }
-
-        loop {
-            match signals.try_recv() {
-                Ok(signal) => match signal {
-                    Signal::RestartLogs => {
-                        log!("sync: ingress: svm:logs: reload signal received, restarting lane");
-                        for handle in handles {
-                            handle.abort();
-                        }
-
-                        continue 'logs;
-                    }
-                    _ => {}
-                },
-                Err(_) => {}
+                for (_, (_, handle)) in running {
+                    handle.abort();
+                }
+                running = keep;
             }
-
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            Ok(_) => {}
+            Err(_) => {}
         }
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
 

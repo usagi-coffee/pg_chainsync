@@ -1,8 +1,10 @@
 use pgrx::GucSetting;
 use pgrx::PGRXSharedMemory;
+use pgrx::PgTryBuilder;
 use pgrx::bgworkers::BackgroundWorker;
 use pgrx::bgworkers::*;
 use pgrx::lwlock::PgLwLock;
+use pgrx::warning;
 
 use std::ffi::CString;
 use std::sync::Arc;
@@ -11,7 +13,9 @@ use tokio::time::{Duration, Instant, sleep_until};
 
 use bus::Bus;
 
+use crate::anyhow_pg_try;
 use crate::channel::Channel;
+use crate::prepared;
 use crate::types::*;
 
 #[derive(Default)]
@@ -38,8 +42,6 @@ pub static SIGNALS: PgLwLock<SharedSignalQueue> =
 
 pub static DATABASE: GucSetting<Option<CString>> =
     GucSetting::<Option<CString>>::new(Some(c"postgres"));
-pub static CONFIG_DIR: GucSetting<Option<CString>> =
-    GucSetting::<Option<CString>>::new(None);
 pub static EVM_WS_PERMITS: GucSetting<i32> = GucSetting::<i32>::new(1);
 pub static EVM_BLOCKTICK_RESET: GucSetting<i32> = GucSetting::<i32>::new(100);
 pub static SVM_RPC_PERMITS: GucSetting<i32> = GucSetting::<i32>::new(3);
@@ -88,6 +90,20 @@ pub async fn handle_signals(_: Arc<Channel>, mut bus: Bus<Signal>) {
 
         let signal = { SIGNALS.exclusive().pop() };
         if let Some(signal) = signal {
+            if matches!(
+                Signal::from(signal),
+                Signal::RestartBlocks | Signal::RestartLogs
+            ) {
+                if let Err(error) = anyhow_pg_try!(|| {
+                    let handlers = HandlerRuntime::query_all()?;
+                    prepared::prepare_all_handlers(&handlers)
+                }) {
+                    warning!(
+                        "sync: worker: failed to prepare queries on reload signal: {}",
+                        error
+                    );
+                }
+            }
             bus.broadcast(signal.into());
         }
 

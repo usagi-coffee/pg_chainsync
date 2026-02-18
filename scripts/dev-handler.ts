@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 type Mode =
   | { kind: "single"; cargoPackage: string; handlerId: string }
+  | { kind: "by_handler_id"; handlerId: string }
   | { kind: "all" };
 
 type HandlerSpec = {
@@ -18,9 +19,13 @@ function usage(): never {
     "Usage: bun run scripts/dev-handler.ts <cargo_package> <handler_id> [--debug] [--no-reload]",
   );
   console.error(
+    "   or: bun run scripts/dev-handler.ts <handler_id> [--debug] [--no-reload]",
+  );
+  console.error(
     "   or: bun run scripts/dev-handler.ts --all [--debug] [--no-reload]",
   );
   console.error("Example: bun run scripts/dev-handler.ts ohlc_handler ohlc-1m");
+  console.error("Example: bun run scripts/dev-handler.ts erc20-transfer");
   console.error("Example: bun run scripts/dev-handler.ts --all");
   process.exit(1);
 }
@@ -58,6 +63,21 @@ function parseArgs(rawArgs: string[]): {
       usage();
     }
     return { mode: { kind: "all" }, profile, doReload };
+  }
+
+  if (positional.length === 0) {
+    return { mode: { kind: "all" }, profile, doReload };
+  }
+
+  if (positional.length === 1) {
+    return {
+      mode: {
+        kind: "by_handler_id",
+        handlerId: positional[0]!,
+      },
+      profile,
+      doReload,
+    };
   }
 
   if (positional.length !== 2) {
@@ -129,6 +149,23 @@ async function discoverHandlers(repoRoot: string): Promise<HandlerSpec[]> {
 
   out.sort((a, b) => a.handlerId.localeCompare(b.handlerId));
   return out;
+}
+
+async function resolveHandlerById(
+  repoRoot: string,
+  handlerId: string,
+): Promise<HandlerSpec> {
+  const all = await discoverHandlers(repoRoot);
+  const found = all.filter((h) => h.handlerId === handlerId);
+  if (found.length === 0) {
+    throw new Error(`[dev-handler] handler_id '${handlerId}' was not found in /handlers`);
+  }
+  if (found.length > 1) {
+    throw new Error(
+      `[dev-handler] handler_id '${handlerId}' is duplicated in /handlers`,
+    );
+  }
+  return found[0]!;
 }
 
 async function deployOne(
@@ -203,7 +240,6 @@ const { mode, profile, doReload } = parseArgs(process.argv.slice(2));
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const pgurl = process.env.PGURL ?? "postgresql:///postgres";
 let handlersDir = process.env.CHAINSYNC_HANDLERS_DIR;
-
 if (!handlersDir) {
   try {
     const dataDir = (
@@ -223,6 +259,8 @@ handlersDir ??= "/home/jk/.pgrx/data-18/chainsync/handlers";
 let specs: HandlerSpec[];
 if (mode.kind === "single") {
   specs = [{ cargoPackage: mode.cargoPackage, handlerId: mode.handlerId }];
+} else if (mode.kind === "by_handler_id") {
+  specs = [await resolveHandlerById(repoRoot, mode.handlerId)];
 } else {
   specs = await discoverHandlers(repoRoot);
   if (specs.length === 0) {

@@ -14,12 +14,12 @@ Build and evolve `pg_chainsync` as a filesystem-first PGRX extension where handl
 
 ## Core architecture (must preserve)
 
-- Handler definitions live in `chainsync.config_dir`.
-- Module binary is loaded directly from `<config_dir>/*.so`.
+- Handler definitions live in `<data_directory>/chainsync/handlers/*.so`.
+- Module binary is loaded directly from `<data_directory>/chainsync/handlers`.
 - Module workers execute business logic.
 - A dedicated DB executor thread is the single SPI owner.
 - Worker/DB communication is a typed internal bus.
-- Runtime artifacts are filesystem data under `chainsync/status`, `chainsync/logs`, and `chainsync/state`.
+- Runtime artifacts are filesystem data under `chainsync/logs` and `chainsync/state`.
 - Shared ingress layer deduplicates upstream subscriptions and decoded events, then fans out to bound handlers.
 
 ## Hard constraints
@@ -41,7 +41,6 @@ Build and evolve `pg_chainsync` as a filesystem-first PGRX extension where handl
 
 ### GUC
 - `chainsync.database`
-- `chainsync.config_dir`
 
 ## Module ABI contract
 

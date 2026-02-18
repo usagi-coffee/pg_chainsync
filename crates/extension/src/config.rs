@@ -9,13 +9,12 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use pgrx::{Spi, log};
+use pgrx::{Spi, log, warning};
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 
 use crate::plugin;
 use crate::types::{HandlerRuntime, HandlerOptions};
-use crate::worker::CONFIG_DIR;
 
 #[derive(Deserialize, Clone)]
 struct HandlerHeader {
@@ -238,6 +237,11 @@ fn parse_handler(config_dir: &Path, handler_module: &Path) -> Result<LoadedHandl
     if parsed.handler.chain == "svm" && parsed.svm.is_none() {
         bail!("handler.chain=svm requires [svm] section");
     }
+    if parsed.handler.chain == "evm"
+        && parsed.ws.as_deref().is_none_or(|v| v.trim().is_empty())
+    {
+        bail!("handler.chain=evm requires top-level ws");
+    }
 
     if parsed.handler.mode != "stream" {
         bail!("handler.mode must be 'stream' in v2");
@@ -306,19 +310,6 @@ fn write_handler_status(
     status: &RuntimeStatus,
 ) -> Result<()> {
     let chainsync_dir = config_dir.parent().unwrap_or(config_dir);
-    let status_dir = chainsync_dir.join("status");
-    fs::create_dir_all(&status_dir).with_context(|| {
-        format!(
-            "creating status directory {}",
-            status_dir.display()
-        )
-    })?;
-
-    let status_path = status_dir.join(format!("{}.json", status.handler_id));
-    let status_json = serde_json::to_string_pretty(status)?;
-    fs::write(&status_path, status_json)
-        .with_context(|| format!("writing {}", status_path.display()))?;
-
     let logs_dir = chainsync_dir.join("logs");
     fs::create_dir_all(&logs_dir)
         .with_context(|| format!("creating logs directory {}", logs_dir.display()))?;
@@ -409,13 +400,6 @@ fn routing_snapshots(handlers: &[HandlerRuntime]) -> Vec<RoutingSnapshot> {
 }
 
 pub fn resolve_config_dir() -> Result<PathBuf> {
-    if let Some(config_dir) = CONFIG_DIR.get()
-        && let Ok(config_dir) = config_dir.to_str()
-        && !config_dir.trim().is_empty()
-    {
-        return Ok(PathBuf::from(config_dir));
-    }
-
     let data_dir = Spi::get_one::<String>("SHOW data_directory")?
         .context("SHOW data_directory returned no value")?;
     Ok(PathBuf::from(data_dir).join("chainsync").join("handlers"))
@@ -426,6 +410,12 @@ pub fn sync_from_handlers(config_dir: &Path) -> Result<SyncOutcome> {
         format!("creating config directory {}", config_dir.display())
     })?;
     let handler_modules = discover_handler_modules(config_dir)?;
+    if handler_modules.is_empty() {
+        warning!(
+            "sync: handlers: no handler modules found in {}",
+            config_dir.display()
+        );
+    }
     let mut seen = HashSet::new();
     let mut statuses = Vec::new();
     let mut loaded_handlers = Vec::new();
@@ -490,6 +480,11 @@ pub fn sync_from_handlers(config_dir: &Path) -> Result<SyncOutcome> {
         });
 
         if let Err(error) = result {
+            warning!(
+                "sync: handlers: failed to load module {}: {}",
+                handler_module.display(),
+                error
+            );
             let fallback_id = handler_module
                 .file_stem()
                 .and_then(|s| s.to_str())
@@ -549,6 +544,13 @@ pub fn sync_from_handlers(config_dir: &Path) -> Result<SyncOutcome> {
         .collect::<Vec<_>>();
     let restart_blocks = previous_blocks != next_blocks;
     let restart_logs = previous_logs != next_logs;
+
+    log!(
+        "sync: handlers: active={} restart_blocks={} restart_logs={}",
+        loaded_handlers.len(),
+        restart_blocks,
+        restart_logs
+    );
 
     HandlerRuntime::replace_all(loaded_handlers);
 
