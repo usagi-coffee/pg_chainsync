@@ -10,7 +10,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::ensure;
+use anyhow::{bail, ensure};
 
 use solana_client::rpc_config::RpcTransactionConfig;
 use solana_client::rpc_response::{Response, RpcLogsResponse};
@@ -20,6 +20,7 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use solana_transaction_status_client_types::{
     UiCompiledInstruction, UiInstruction, UiTransactionEncoding,
+    UiTransactionTokenBalance, option_serializer::OptionSerializer,
 };
 
 use crate::svm::*;

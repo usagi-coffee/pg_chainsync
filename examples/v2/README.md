@@ -6,7 +6,7 @@ Files:
 
 - `handlers/ohlc-1m/handler.toml`
 - `handlers/ohlc-1m/queries/upsert_ohlc_1m.sql`
-- `handlers/ohlc-1m/module-src` (Rust `cdylib` source)
+- `../../handlers/ohlc-1m` (Rust `cdylib` source)
 - `ohlc_schema.sql`
 - `run_ohlc.sql`
 
@@ -15,7 +15,7 @@ Files:
 1. Copy `examples/v2/handlers/ohlc-1m` into your `chainsync.config_dir`.
 2. Build module:
    - `./handlers/ohlc-1m/build_handler.sh`
-   - Optional local module test: `cd handlers/ohlc-1m/module-src && cargo test`
+   - Optional local module test: `cargo test -p ohlc_handler`
 3. Set env vars used by handler config:
    - `EVM_WS_URL`
    - `POOL_ADDRESS`

@@ -1,19 +1,19 @@
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::collections::hash_map::DefaultHasher;
 use std::env;
 use std::fs;
 use std::fs::OpenOptions;
+use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use pgrx::JsonB;
-use pgrx::datum::DatumWithOid;
-use pgrx::prelude::*;
 use serde::{Deserialize, Serialize};
+use tokio::sync::OnceCell;
 
 use crate::plugin;
-use crate::types::JobOptions;
+use crate::types::{Job, JobOptions};
 
 #[derive(Deserialize, Clone)]
 struct HandlerHeader {
@@ -65,6 +65,12 @@ pub struct RuntimeStatus {
 struct LoadedHandler {
     id: String,
     options: JobOptions,
+}
+
+fn stable_job_id(name: &str) -> i64 {
+    let mut hasher = DefaultHasher::new();
+    name.hash(&mut hasher);
+    (hasher.finish() & 0x7fff_ffff_ffff_ffff) as i64
 }
 
 fn resolve_env(input: &str) -> Result<String> {
@@ -324,23 +330,27 @@ pub fn sync_from_handlers(config_dir: &Path) -> Result<Vec<RuntimeStatus>> {
     let handler_dirs = discover_handler_dirs(config_dir)?;
     let mut seen = HashSet::new();
     let mut statuses = Vec::new();
+    let mut loaded_jobs = Vec::new();
+    let previous_job_names = Job::query_all()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|job| job.name)
+        .collect::<HashSet<_>>();
 
     for handler_dir in handler_dirs {
         let result = parse_handler(&handler_dir).and_then(|handler| {
             if !seen.insert(handler.id.clone()) {
                 bail!("duplicate handler.id {}", handler.id);
             }
-
-            let options = serde_json::to_value(handler.options)?;
-            Spi::run_with_args(
-                "INSERT INTO chainsync.jobs (name, options, status) VALUES ($1, $2, 'STOPPED') \
-                 ON CONFLICT (name) DO UPDATE SET options = EXCLUDED.options, status = 'STOPPED'",
-                &vec![
-                    DatumWithOid::from(handler.id.clone()),
-                    DatumWithOid::from(JsonB(options)),
-                ],
-            )?;
-
+            loaded_jobs.push(Job {
+                id: stable_job_id(&handler.id),
+                name: handler.id.clone(),
+                status: "STOPPED".to_string(),
+                options: handler.options,
+                evm: OnceCell::const_new(),
+                svm_ws: OnceCell::const_new(),
+                svm_rpc: OnceCell::const_new(),
+            });
             Ok(handler.id)
         });
 
@@ -371,27 +381,12 @@ pub fn sync_from_handlers(config_dir: &Path) -> Result<Vec<RuntimeStatus>> {
         }
     }
 
-    let mut stale_ids: Vec<String> = Vec::new();
-    Spi::connect(|client| -> Result<(), pgrx::spi::Error> {
-        let mut table =
-            client.select("SELECT name FROM chainsync.jobs", None, &vec![])?;
-        while table.next().is_some() {
-            let name = table
-                .get_by_name::<String, &'static str>("name")
-                .unwrap()
-                .unwrap();
-            if !seen.contains(&name) {
-                stale_ids.push(name);
-            }
-        }
-        Ok(())
-    })?;
+    let stale_ids: Vec<String> = previous_job_names
+        .into_iter()
+        .filter(|name| !seen.contains(name))
+        .collect();
 
     for stale in stale_ids {
-        Spi::run_with_args(
-            "DELETE FROM chainsync.jobs WHERE name = $1",
-            &vec![DatumWithOid::from(stale.clone())],
-        )?;
         let status = RuntimeStatus {
             job_id: stale,
             status: "REMOVED".into(),
@@ -400,6 +395,8 @@ pub fn sync_from_handlers(config_dir: &Path) -> Result<Vec<RuntimeStatus>> {
         write_handler_status(config_dir, &status)?;
         statuses.push(status);
     }
+
+    Job::replace_all(loaded_jobs);
 
     Ok(statuses)
 }

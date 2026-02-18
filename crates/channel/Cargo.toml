@@ -1,0 +1,8 @@
+[package]
+name = "channel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["sync", "rt"] }
+tokio-stream = "0.1"

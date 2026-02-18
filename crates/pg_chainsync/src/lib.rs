@@ -131,8 +131,6 @@ mod chainsync {
     }
 }
 
-extension_sql_file!("../sql/types.sql", name = "types_schema");
-
 use worker::{
     CONFIG_DIR, DATABASE, EVM_BLOCKTICK_RESET, EVM_TASKS, EVM_WS_PERMITS,
     RESTART_COUNT, SIGNALS, SVM_RPC_PERMITS, SVM_SIGNATURES_BUFFER, SVM_TASKS,

@@ -1,35 +1,13 @@
 use std::collections::HashMap;
-use std::ffi::c_char;
 use std::fs;
 use std::sync::Mutex;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use once_cell::sync::Lazy;
+use pg_chainsync_sdk::{
+    export_plugin, ModuleResponse, Mutation, PluginHandler,
+};
 use serde::{Deserialize, Serialize};
-
-#[repr(C)]
-pub struct PluginMetadataV1 {
-    pub abi_major: u16,
-    pub abi_minor: u16,
-    pub name: *const c_char,
-    pub version: *const c_char,
-}
-
-unsafe impl Sync for PluginMetadataV1 {}
-
-static NAME: &[u8] = b"ohlc_handler\0";
-static VERSION: &[u8] = b"0.1.0\0";
-
-#[no_mangle]
-pub extern "C" fn chainsync_plugin_meta_v1() -> *const PluginMetadataV1 {
-    static META: PluginMetadataV1 = PluginMetadataV1 {
-        abi_major: 1,
-        abi_minor: 0,
-        name: NAME.as_ptr() as *const c_char,
-        version: VERSION.as_ptr() as *const c_char,
-    };
-    &META
-}
 
 #[derive(Default, Serialize, Deserialize, Clone)]
 struct Candle {
@@ -64,19 +42,7 @@ struct InputEvent {
     ingest_unix: Option<u64>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum Output {
-    Ignore,
-    Error { message: String },
-    Done { mutations: Vec<Mutation> },
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Mutation {
-    id: String,
-    payload: serde_json::Value,
-}
+struct OhlcHandler;
 
 static STATE: Lazy<Mutex<State>> = Lazy::new(|| Mutex::new(State::default()));
 
@@ -96,7 +62,10 @@ fn state_path(job_id: i64, event_state_path: Option<&str>) -> String {
     format!("/tmp/ohlc_state_{}.json", job_id)
 }
 
-fn load_state_if_needed(job_id: i64, event_state_path: Option<&str>) -> Result<()> {
+fn load_state_if_needed(
+    job_id: i64,
+    event_state_path: Option<&str>,
+) -> Result<()> {
     let path = state_path(job_id, event_state_path);
     let content = match fs::read_to_string(&path) {
         Ok(v) => v,
@@ -161,9 +130,12 @@ fn decode_swap_price_and_volume(
     }
 
     let amount0_in = u128::from_str_radix(&hex[0..64], 16).unwrap_or(0) as f64;
-    let amount1_in = u128::from_str_radix(&hex[64..128], 16).unwrap_or(0) as f64;
-    let amount0_out = u128::from_str_radix(&hex[128..192], 16).unwrap_or(0) as f64;
-    let amount1_out = u128::from_str_radix(&hex[192..256], 16).unwrap_or(0) as f64;
+    let amount1_in =
+        u128::from_str_radix(&hex[64..128], 16).unwrap_or(0) as f64;
+    let amount0_out =
+        u128::from_str_radix(&hex[128..192], 16).unwrap_or(0) as f64;
+    let amount1_out =
+        u128::from_str_radix(&hex[192..256], 16).unwrap_or(0) as f64;
 
     let base_raw = amount0_in + amount0_out;
     let quote_raw = amount1_in + amount1_out;
@@ -178,19 +150,19 @@ fn decode_swap_price_and_volume(
     Ok((quote / base, base, quote))
 }
 
-fn handle_event(bytes: &[u8]) -> Result<Output> {
-    let event: InputEvent = serde_json::from_slice(bytes)?;
+fn process_event(input: serde_json::Value) -> Result<ModuleResponse> {
+    let event: InputEvent = serde_json::from_value(input)?;
     let job_id = event.job_id.unwrap_or(0);
     load_state_if_needed(job_id, event.state_path.as_deref())?;
 
     if event.event != "evm_log" {
-        return Ok(Output::Ignore);
+        return Ok(ModuleResponse::Ignore);
     }
 
     let pair_id = event.address.unwrap_or_else(|| "unknown_pair".into());
     let data = match event.data {
         Some(v) => v,
-        None => return Ok(Output::Ignore),
+        None => return Ok(ModuleResponse::Ignore),
     };
     let now = event.ingest_unix.unwrap_or_else(|| {
         std::time::SystemTime::now()
@@ -201,28 +173,27 @@ fn handle_event(bytes: &[u8]) -> Result<Output> {
 
     let (base_decimals, quote_decimals) =
         lookup_decimals(event.prefetched.as_ref());
-    let (price, vol_base, vol_quote) = decode_swap_price_and_volume(
-        &data,
-        base_decimals,
-        quote_decimals,
-    )?;
+    let (price, vol_base, vol_quote) =
+        decode_swap_price_and_volume(&data, base_decimals, quote_decimals)?;
     let bucket_start = (now / 60) * 60;
 
     let mut to_emit: Option<serde_json::Value> = None;
 
     {
         let mut state = STATE.lock().expect("state lock");
-        let entry = state.active.entry(pair_id.clone()).or_insert_with(|| CandleState {
-            bucket_start_unix: bucket_start,
-            candle: Candle {
-                open: price,
-                high: price,
-                low: price,
-                close: price,
-                volume_base: 0.0,
-                volume_quote: 0.0,
-                trades: 0,
-            },
+        let entry = state.active.entry(pair_id.clone()).or_insert_with(|| {
+            CandleState {
+                bucket_start_unix: bucket_start,
+                candle: Candle {
+                    open: price,
+                    high: price,
+                    low: price,
+                    close: price,
+                    volume_base: 0.0,
+                    volume_quote: 0.0,
+                    trades: 0,
+                },
+            }
         });
 
         if entry.bucket_start_unix != bucket_start {
@@ -264,63 +235,25 @@ fn handle_event(bytes: &[u8]) -> Result<Output> {
     persist_state(job_id, event.state_path.as_deref())?;
 
     match to_emit {
-        Some(payload) => Ok(Output::Done {
+        Some(payload) => Ok(ModuleResponse::Done {
             mutations: vec![Mutation {
                 id: "upsert_ohlc_1m".into(),
                 payload,
             }],
         }),
-        None => Ok(Output::Ignore),
+        None => Ok(ModuleResponse::Ignore),
     }
 }
 
-#[no_mangle]
-pub extern "C" fn chainsync_handle_event_v1(
-    input_ptr: *const u8,
-    input_len: usize,
-    out_ptr: *mut *mut u8,
-    out_len: *mut usize,
-) -> i32 {
-    if input_ptr.is_null() || out_ptr.is_null() || out_len.is_null() {
-        return 1;
-    }
-
-    let input = unsafe { std::slice::from_raw_parts(input_ptr, input_len) };
-    let output = match handle_event(input) {
-        Ok(v) => v,
-        Err(err) => Output::Error {
-            message: err.to_string(),
-        },
-    };
-
-    let encoded = match serde_json::to_vec(&output) {
-        Ok(v) => v,
-        Err(_) => return 2,
-    };
-
-    let mut boxed = encoded.into_boxed_slice();
-    let ptr = boxed.as_mut_ptr();
-    let len = boxed.len();
-    std::mem::forget(boxed);
-
-    unsafe {
-        *out_ptr = ptr;
-        *out_len = len;
-    }
-
-    0
-}
-
-#[no_mangle]
-pub extern "C" fn chainsync_plugin_free_buffer(ptr: *mut u8, len: usize) {
-    if ptr.is_null() || len == 0 {
-        return;
-    }
-
-    unsafe {
-        let _ = Vec::from_raw_parts(ptr, len, len);
+impl PluginHandler for OhlcHandler {
+    fn handle_event(
+        input: serde_json::Value,
+    ) -> Result<ModuleResponse, String> {
+        process_event(input).map_err(|e| e.to_string())
     }
 }
+
+export_plugin!(OhlcHandler, "ohlc_handler", "0.1.0");
 
 #[cfg(test)]
 mod tests {
@@ -373,22 +306,14 @@ mod tests {
         let _ = std::fs::remove_file(&state_path);
 
         let first = sample_event(1_700_000_000, &state_path);
-        let out1 = handle_event(
-            serde_json::to_vec(&first).expect("encode first").as_slice(),
-        )
-        .expect("handle first");
-        assert!(matches!(out1, Output::Ignore));
+        let out1 = process_event(first).expect("handle first");
+        assert!(matches!(out1, ModuleResponse::Ignore));
 
         let second = sample_event(1_700_000_061, &state_path);
-        let out2 = handle_event(
-            serde_json::to_vec(&second)
-                .expect("encode second")
-                .as_slice(),
-        )
-        .expect("handle second");
+        let out2 = process_event(second).expect("handle second");
 
         match out2 {
-            Output::Done { mutations } => {
+            ModuleResponse::Done { mutations } => {
                 assert_eq!(mutations.len(), 1);
                 assert_eq!(mutations[0].id, "upsert_ohlc_1m");
                 assert_eq!(

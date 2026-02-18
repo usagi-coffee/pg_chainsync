@@ -2,12 +2,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MODULE_DIR="$SCRIPT_DIR/module-src"
+REPO_ROOT="$SCRIPT_DIR/../../../.."
 
 (
-  cd "$MODULE_DIR"
-  cargo build --release
+  cd "$REPO_ROOT"
+  cargo build --release -p ohlc_handler
 )
 
-cp "$MODULE_DIR/target/release/libohlc_handler.so" "$SCRIPT_DIR/handler.so"
+cp "$REPO_ROOT/target/release/libohlc_handler.so" "$SCRIPT_DIR/handler.so"
 echo "Built $SCRIPT_DIR/handler.so"

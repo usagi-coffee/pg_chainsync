@@ -3,6 +3,15 @@
 ## Mission
 Build and evolve `pg_chainsync` as a filesystem-first PGRX extension where handler logic is implemented in native Rust modules with a binary protocol and host-managed DB execution.
 
+## Monorepo structure
+
+- `crates/pg_chainsync`: extension runtime and worker implementation
+- `crates/evm`: shared EVM primitives and connection helpers
+- `crates/svm`: shared SVM primitives and connection helpers
+- `crates/channel`: shared channel primitives
+- `crates/pg_chainsync_sdk`: safe plugin SDK and export macro
+- `handlers/*`: example handler crates
+
 ## Core architecture (must preserve)
 
 - Handler definitions live in `chainsync.config_dir`.

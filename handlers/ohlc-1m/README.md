@@ -5,9 +5,9 @@ Build the module and place it as `handler.so` in the handler directory.
 ## Build
 
 ```bash
-cd examples/v2/handlers/ohlc-1m/module-src
+cd handlers/ohlc-1m
 cargo build --release
-cp target/release/libohlc_handler.so ../handler.so
+cp target/release/libohlc_handler.so ../../examples/v2/handlers/ohlc-1m/handler.so
 ```
 
 Or use:

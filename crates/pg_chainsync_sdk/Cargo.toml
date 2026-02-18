@@ -1,5 +1,5 @@
 [package]
-name = "chainsync_sdk"
+name = "pg_chainsync_sdk"
 version = "0.1.0"
 edition = "2021"
 

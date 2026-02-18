@@ -11,6 +11,15 @@
 - Workers and DB executor communicate over an internal typed bus.
 - Each handler has isolated runtime artifacts in its own directory.
 
+## Monorepo layout
+
+- `crates/pg_chainsync`: PGRX extension crate
+- `crates/evm`: internal EVM primitives crate
+- `crates/svm`: internal SVM primitives crate
+- `crates/channel`: internal channel primitives crate
+- `crates/pg_chainsync_sdk`: plugin SDK crate (`export_plugin!`, response types)
+- `handlers/ohlc-1m`: example handler crate
+
 ## Design decisions
 
 - No SQL status APIs such as `list_jobs`/`job_status`.
@@ -33,8 +42,8 @@
 
 ```bash
 cargo install --locked cargo-pgrx
-cargo build --release
-cargo pgrx package
+cargo build --release -p pg_chainsync
+cargo pgrx package --manifest-path crates/pg_chainsync/Cargo.toml
 ```
 
 Copy extension artifacts according to your `pg_config` installation paths.
@@ -311,7 +320,7 @@ Typical flow:
 ## Development
 
 ```bash
-cargo fmt
+cargo fmt --all
 cargo check
 ```
 

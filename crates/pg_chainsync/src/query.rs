@@ -3,6 +3,7 @@ use pgrx::prelude::*;
 
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::Arc;
+use std::sync::{OnceLock, RwLock};
 
 use anyhow::anyhow;
 
@@ -26,68 +27,50 @@ pub const SVM_TRANSACTION_COMPOSITE_TYPE: &str = "chainsync.SvmTransaction";
 pub const SVM_LOG_COMPOSITE_TYPE: &str = "chainsync.SvmLog";
 pub const SVM_ACCOUNT_COMPOSITE_TYPE: &str = "chainsync.SvmAccount";
 
+static JOBS: OnceLock<RwLock<Vec<Job>>> = OnceLock::new();
+
+fn jobs_store() -> &'static RwLock<Vec<Job>> {
+    JOBS.get_or_init(|| RwLock::new(Vec::new()))
+}
+
+fn options_for_job(job: i32) -> Result<pgrx::JsonB, anyhow::Error> {
+    let jobs = jobs_store().read().expect("jobs store read");
+    let Some(found) = jobs.iter().find(|j| j.id == job as i64) else {
+        return Err(anyhow!("job {} not found", job));
+    };
+    Ok(pgrx::JsonB(serde_json::to_value(&found.options)?))
+}
+
 impl Job {
-    pub fn register(name: String, options: pgrx::JsonB) -> i64 {
-        match Spi::get_one_with_args(
-            "INSERT INTO chainsync.jobs (name, options) VALUES ($1, $2) RETURNING id",
-            &vec![DatumWithOid::from(name), DatumWithOid::from(options)],
-        ) {
-            Ok(id) => id.unwrap(),
-            Err(_) => -1,
+    pub fn replace_all(mut jobs: Vec<Job>) {
+        for job in &mut jobs {
+            job.evm = OnceCell::const_new();
+            job.svm_rpc = OnceCell::const_new();
+            job.svm_ws = OnceCell::const_new();
         }
+        let mut guard = jobs_store().write().expect("jobs store write");
+        *guard = jobs;
     }
 
     pub fn update(id: i64, status: JobStatus) -> Result<(), anyhow::Error> {
         let status_text: String = status.into();
-
-        Spi::run_with_args(
-            "UPDATE chainsync.jobs SET status = $1 WHERE id = $2",
-            &vec![DatumWithOid::from(status_text), DatumWithOid::from(id)],
-        )
-        .map_err(|e| e.into())
+        let mut jobs = jobs_store().write().expect("jobs store write");
+        let Some(job) = jobs.iter_mut().find(|job| job.id == id) else {
+            return Err(anyhow!("job {} not found", id));
+        };
+        job.status = status_text;
+        Ok(())
     }
 
     pub fn query_all() -> Result<Vec<Job>, anyhow::Error> {
-        Spi::connect(|client| {
-            let mut table =
-                client.select("SELECT * FROM chainsync.jobs", None, &vec![])?;
-
-            let mut jobs: Vec<Job> = Vec::new();
-            while table.next().is_some() {
-                let options = table
-                    .get_by_name::<pgrx::JsonB, &'static str>("options")
-                    .unwrap()
-                    .unwrap();
-
-                jobs.push(Job {
-                    id: table
-                        .get_by_name::<i64, &'static str>("id")
-                        .unwrap()
-                        .unwrap(),
-                    name: table
-                        .get_by_name::<String, &'static str>("name")
-                        .unwrap()
-                        .unwrap(),
-                    options: serde_json::from_value(options.0.clone())
-                        .expect("Invalid options"),
-                    status: table
-                        .get_by_name::<String, &'static str>("status")
-                        .unwrap()
-                        .unwrap(),
-                    evm: OnceCell::const_new(),
-                    svm_rpc: OnceCell::const_new(),
-                    svm_ws: OnceCell::const_new(),
-                });
-            }
-
-            Ok(jobs)
-        })
+        Ok(jobs_store().read().expect("jobs store read").clone())
     }
 
     pub fn handler(handler: &Arc<str>, job: i32) -> Result<(), anyhow::Error> {
+        let options = options_for_job(job)?;
         Spi::run_with_args(
-            format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $1))", handler).as_str(),
-            &vec![DatumWithOid::from(job)],
+            format!("SELECT {}($1, $2)", handler).as_str(),
+            &vec![DatumWithOid::from(job), DatumWithOid::from(options)],
         )
         .map_err(|e| e.into())
     }
@@ -96,9 +79,10 @@ impl Job {
         handler: S,
         job: i32,
     ) -> Result<R, anyhow::Error> {
+        let options = options_for_job(job)?;
         Spi::get_one_with_args::<R>(
-            format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $1))", handler).as_str(),
-            &vec![DatumWithOid::from(job)],
+            format!("SELECT {}($1, $2)", handler).as_str(),
+            &vec![DatumWithOid::from(job), DatumWithOid::from(options)],
         )
         .map_err(|e| e.into())
         .and_then(|opt| opt.ok_or_else(|| anyhow!("did not return anything")))
@@ -113,9 +97,10 @@ impl Job {
         handler: S,
         job: i32,
     ) -> Result<R, anyhow::Error> {
+        let options = options_for_job(job)?;
         Spi::get_one_with_args::<R>(
-            format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2))", handler).as_str(),
-            &vec![DatumWithOid::from(arg), DatumWithOid::from(job as i32)]
+            format!("SELECT {}($1, $2)", handler).as_str(),
+            &vec![DatumWithOid::from(arg), DatumWithOid::from(options)],
         )
         .map_err(|e| e.into())
         .and_then(|opt| opt.ok_or_else(|| anyhow!("did not return anything")))
@@ -136,12 +121,13 @@ impl PgHandler for u64 {
         handler: &str,
         job: i64,
     ) -> Result<PostgresReturn, anyhow::Error> {
+        let options = options_for_job(job as i32)?;
         Spi::get_one_with_args::<i64>(
-          format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
-          &vec![
-            DatumWithOid::from(*self as i64),
-            DatumWithOid::from(job)
-          ]
+            format!("SELECT {}($1, $2)", handler).as_str(),
+            &vec![
+                DatumWithOid::from(*self as i64),
+                DatumWithOid::from(options),
+            ],
         )
         .map(|e| PostgresReturn::Boolean(e.is_some()))
         .map_err(|e| e.into())
@@ -154,6 +140,7 @@ impl PgHandler for EvmBlock {
         handler: &str,
         job: i64,
     ) -> Result<PostgresReturn, anyhow::Error> {
+        let options = options_for_job(job as i32)?;
         let mut data =
             PgHeapTuple::new_composite_type(EVM_BLOCK_COMPOSITE_TYPE).unwrap();
 
@@ -205,10 +192,10 @@ impl PgHandler for EvmBlock {
 
         let oid = data.composite_type_oid().unwrap();
         Spi::run_with_args(
-            format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
+            format!("SELECT {}($1, $2)", handler).as_str(),
             &vec![
-              unsafe { DatumWithOid::new(data, oid) },
-              DatumWithOid::from(job),
+                unsafe { DatumWithOid::new(data, oid) },
+                DatumWithOid::from(options),
             ],
         )
         .map(|_| PostgresReturn::Void)
@@ -222,6 +209,7 @@ impl PgHandler for EvmLog {
         handler: &str,
         job: i64,
     ) -> Result<PostgresReturn, anyhow::Error> {
+        let options = options_for_job(job as i32)?;
         let mut data =
             PgHeapTuple::new_composite_type(EVM_LOG_COMPOSITE_TYPE).unwrap();
 
@@ -261,10 +249,10 @@ impl PgHandler for EvmLog {
 
         let oid = data.composite_type_oid().unwrap();
         Spi::run_with_args(
-            format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
+            format!("SELECT {}($1, $2)", handler).as_str(),
             &vec![
                 unsafe { DatumWithOid::new(data, oid) },
-                DatumWithOid::from(job),
+                DatumWithOid::from(options),
             ],
         )
         .map(|_| PostgresReturn::Void)
@@ -278,6 +266,7 @@ impl PgHandler for SvmBlock {
         handler: &str,
         job: i64,
     ) -> Result<PostgresReturn, anyhow::Error> {
+        let options = options_for_job(job as i32)?;
         let mut data =
             PgHeapTuple::new_composite_type(SVM_BLOCK_COMPOSITE_TYPE).unwrap();
 
@@ -308,10 +297,10 @@ impl PgHandler for SvmBlock {
 
         let oid = data.composite_type_oid().unwrap();
         Spi::run_with_args(
-            format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
+            format!("SELECT {}($1, $2)", handler).as_str(),
             &vec![
-              unsafe { DatumWithOid::new(data, oid) },
-              DatumWithOid::from(job),
+                unsafe { DatumWithOid::new(data, oid) },
+                DatumWithOid::from(options),
             ],
         )
         .map(|_| PostgresReturn::Void)
@@ -325,6 +314,7 @@ impl PgHandler for SvmLog {
         handler: &str,
         job: i64,
     ) -> Result<PostgresReturn, anyhow::Error> {
+        let options = options_for_job(job as i32)?;
         let mut data =
             PgHeapTuple::new_composite_type(SVM_LOG_COMPOSITE_TYPE).unwrap();
 
@@ -337,10 +327,10 @@ impl PgHandler for SvmLog {
 
         let oid = data.composite_type_oid().unwrap();
         Spi::run_with_args(
-            format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
+            format!("SELECT {}($1, $2)", handler).as_str(),
             &vec![
-              unsafe { DatumWithOid::new(data, oid) },
-              DatumWithOid::from(job),
+                unsafe { DatumWithOid::new(data, oid) },
+                DatumWithOid::from(options),
             ],
         )
         .map(|_| PostgresReturn::Void)
@@ -354,6 +344,7 @@ impl PgHandler for SvmTransaction {
         handler: &str,
         job: i64,
     ) -> Result<PostgresReturn, anyhow::Error> {
+        let options = options_for_job(job as i32)?;
         let mut data =
             PgHeapTuple::new_composite_type(SVM_TRANSACTION_COMPOSITE_TYPE)
                 .unwrap();
@@ -374,11 +365,11 @@ impl PgHandler for SvmTransaction {
 
         let oid = data.composite_type_oid().unwrap();
         Spi::run_with_args(
-            format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
+            format!("SELECT {}($1, $2)", handler).as_str(),
             &vec![
-              unsafe { DatumWithOid::new(data, oid) },
-              DatumWithOid::from(job),
-            ]
+                unsafe { DatumWithOid::new(data, oid) },
+                DatumWithOid::from(options),
+            ],
         )
         .map(|_| PostgresReturn::Void)
         .map_err(|e| e.into())
@@ -391,6 +382,7 @@ impl PgHandler for SolanaInstruction<'_> {
         handler: &str,
         job: i64,
     ) -> Result<PostgresReturn, anyhow::Error> {
+        let options = options_for_job(job as i32)?;
         let mut data =
             PgHeapTuple::new_composite_type(SVM_INSTRUCTION_COMPOSITE_TYPE)
                 .unwrap();
@@ -422,10 +414,10 @@ impl PgHandler for SolanaInstruction<'_> {
 
         let oid = data.composite_type_oid().unwrap();
         Spi::run_with_args(
-            format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
+            format!("SELECT {}($1, $2)", handler).as_str(),
             &vec![
-              unsafe { DatumWithOid::new(data, oid) },
-              DatumWithOid::from(job),
+                unsafe { DatumWithOid::new(data, oid) },
+                DatumWithOid::from(options),
             ],
         )
         .map(|_| PostgresReturn::Void)
@@ -439,6 +431,7 @@ impl PgHandler for SolanaInnerInstruction<'_> {
         handler: &str,
         job: i64,
     ) -> Result<PostgresReturn, anyhow::Error> {
+        let options = options_for_job(job as i32)?;
         let mut data =
             PgHeapTuple::new_composite_type(SVM_INSTRUCTION_COMPOSITE_TYPE)
                 .unwrap();
@@ -473,10 +466,10 @@ impl PgHandler for SolanaInnerInstruction<'_> {
 
         let oid = data.composite_type_oid().unwrap();
         Spi::run_with_args(
-            format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
+            format!("SELECT {}($1, $2)", handler).as_str(),
             &vec![
-              unsafe { DatumWithOid::new(data, oid) },
-              DatumWithOid::from(job),
+                unsafe { DatumWithOid::new(data, oid) },
+                DatumWithOid::from(options),
             ],
         )
         .map(|_| PostgresReturn::Void)
@@ -490,6 +483,7 @@ impl PgHandler for SvmAccount {
         handler: &str,
         job: i64,
     ) -> Result<PostgresReturn, anyhow::Error> {
+        let options = options_for_job(job as i32)?;
         let mut data =
             PgHeapTuple::new_composite_type(SVM_ACCOUNT_COMPOSITE_TYPE)
                 .unwrap();
@@ -509,13 +503,13 @@ impl PgHandler for SvmAccount {
 
         let oid = data.composite_type_oid().unwrap();
         Spi::run_with_args(
-          format!("SELECT {}($1, (SELECT options FROM chainsync.jobs WHERE id = $2)::JSONB)", handler).as_str(),
-          &vec![
-            unsafe { DatumWithOid::new(data, oid) },
-            DatumWithOid::from(job),
-          ],
-      )
-      .map(|_| PostgresReturn::Void)
-      .map_err(|e| e.into())
+            format!("SELECT {}($1, $2)", handler).as_str(),
+            &vec![
+                unsafe { DatumWithOid::new(data, oid) },
+                DatumWithOid::from(options),
+            ],
+        )
+        .map(|_| PostgresReturn::Void)
+        .map_err(|e| e.into())
     }
 }

@@ -1,8 +1,3 @@
-pub mod blocks;
-pub mod logs;
-pub mod tasks;
-pub mod transactions;
-
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -13,31 +8,26 @@ use solana_sdk::message::VersionedMessage;
 use solana_sdk::pubkey;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
-use solana_transaction_status_client_types::EncodedConfirmedTransactionWithStatusMeta;
-use solana_transaction_status_client_types::TransactionDetails;
-use solana_transaction_status_client_types::UiConfirmedBlock;
-use solana_transaction_status_client_types::UiInnerInstructions;
-use solana_transaction_status_client_types::UiInstruction;
-use solana_transaction_status_client_types::UiTransactionTokenBalance;
 use solana_transaction_status_client_types::option_serializer::OptionSerializer;
-
-use crate::types::Job;
+use solana_transaction_status_client_types::{
+    EncodedConfirmedTransactionWithStatusMeta, TransactionDetails, UiConfirmedBlock,
+    UiInnerInstructions, UiInstruction, UiTransactionTokenBalance,
+};
+use tokio::sync::OnceCell;
 
 pub type SvmPubSub = solana_client::nonblocking::pubsub_client::PubsubClient;
 pub type SvmPubSubError = solana_client::pubsub_client::PubsubClientError;
 pub type SvmRpc = solana_client::nonblocking::rpc_client::RpcClient;
 
 pub type SvmBlock = UiConfirmedBlock;
-pub type SvmLog = solana_client::rpc_response::Response<
-    solana_client::rpc_response::RpcLogsResponse,
->;
+pub type SvmLog =
+    solana_client::rpc_response::Response<solana_client::rpc_response::RpcLogsResponse>;
 
 pub type SvmTransactionDetails = TransactionDetails;
 pub type RawSvmTransaction = EncodedConfirmedTransactionWithStatusMeta;
 
 const SPL_TOKEN_PROGRAM: Pubkey =
     pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-
 const SPL_INITIALIZE_ACCOUNT: u8 = 1;
 const SPL_INITIALIZE_ACCOUNT3: u8 = 18;
 
@@ -67,59 +57,31 @@ pub struct SvmTransaction {
     pub failed: bool,
 }
 
-impl Job {
-    pub async fn connect_svm_ws(
-        &self,
-    ) -> anyhow::Result<&Arc<SvmPubSub>, SvmPubSubError> {
-        let url = self
-            .options
-            .ws
-            .as_ref()
-            .expect("Websocket URL was not provided");
+pub async fn connect_ws<'a>(
+    cell: &'a OnceCell<Arc<SvmPubSub>>,
+    url: &str,
+) -> anyhow::Result<&'a Arc<SvmPubSub>, SvmPubSubError> {
+    cell.get_or_try_init(|| async {
+        let r = SvmPubSub::new(url);
+        r.await.map(Arc::new)
+    })
+    .await
+}
 
-        self.svm_ws
-            .get_or_try_init(|| async {
-                let r = SvmPubSub::new(&url);
-                r.await.map(Arc::new)
-            })
-            .await
-    }
+pub async fn reconnect_ws(url: &str) -> anyhow::Result<SvmPubSub, SvmPubSubError> {
+    SvmPubSub::new(url).await
+}
 
-    pub async fn reconnect_svm_ws(
-        &self,
-    ) -> anyhow::Result<SvmPubSub, SvmPubSubError> {
-        let url = self
-            .options
-            .ws
-            .as_ref()
-            .expect("Websocket URL was not provided");
+pub async fn connect_rpc<'a>(
+    cell: &'a OnceCell<Arc<SvmRpc>>,
+    url: String,
+) -> anyhow::Result<&'a Arc<SvmRpc>> {
+    cell.get_or_try_init(|| async { Ok(Arc::new(SvmRpc::new(url))) })
+        .await
+}
 
-        SvmPubSub::new(&url).await
-    }
-
-    pub async fn connect_svm_rpc(&self) -> anyhow::Result<&Arc<SvmRpc>> {
-        let url = self
-            .options
-            .rpc
-            .as_ref()
-            .expect("RPC URL was not provided")
-            .clone();
-
-        self.svm_rpc
-            .get_or_try_init(|| async { Ok(Arc::new(SvmRpc::new(url))) })
-            .await
-    }
-
-    pub async fn reconnect_svm_rpc(&self) -> SvmRpc {
-        let url = self
-            .options
-            .rpc
-            .as_ref()
-            .expect("RPC URL was not provided")
-            .clone();
-
-        SvmRpc::new(url)
-    }
+pub fn reconnect_rpc(url: String) -> SvmRpc {
+    SvmRpc::new(url)
 }
 
 impl TryInto<SvmTransaction> for RawSvmTransaction {
@@ -138,14 +100,11 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
             bail!("meta was not in transaction");
         };
 
-        let OptionSerializer::Some(loaded_addresses) = meta.loaded_addresses
-        else {
+        let OptionSerializer::Some(loaded_addresses) = meta.loaded_addresses else {
             bail!("loaded addresses was not in transaction");
         };
 
-        let OptionSerializer::Some(inner_instructions) =
-            meta.inner_instructions
-        else {
+        let OptionSerializer::Some(inner_instructions) = meta.inner_instructions else {
             bail!("inner instructions were not in transaction");
         };
 
@@ -168,46 +127,31 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
                 .into_iter()
                 .flat_map(|inner| inner.instructions.iter())
             {
-                if let UiInstruction::Compiled(inner_instruction) =
-                    inner_instruction
-                    && let Ok(inner_program) = Pubkey::from_str(
-                        &accounts[inner_instruction.program_id_index as usize],
-                    )
+                if let UiInstruction::Compiled(inner_instruction) = inner_instruction
+                    && let Ok(inner_program) =
+                        Pubkey::from_str(&accounts[inner_instruction.program_id_index as usize])
                     && inner_program == SPL_TOKEN_PROGRAM
-                    && let Ok(slice) =
-                        bs58::decode(&inner_instruction.data).into_vec()
+                    && let Ok(slice) = bs58::decode(&inner_instruction.data).into_vec()
                 {
                     if slice[0] == SPL_INITIALIZE_ACCOUNT {
                         initialized_accounts.push(SvmInitializedAccount {
-                            address: accounts
-                                [inner_instruction.accounts[0] as usize]
-                                .to_owned(),
-                            mint: accounts
-                                [inner_instruction.accounts[1] as usize]
-                                .to_owned(),
-                            owner: accounts
-                                [inner_instruction.accounts[2] as usize]
-                                .to_owned(),
+                            address: accounts[inner_instruction.accounts[0] as usize].to_owned(),
+                            mint: accounts[inner_instruction.accounts[1] as usize].to_owned(),
+                            owner: accounts[inner_instruction.accounts[2] as usize].to_owned(),
                         });
                     } else if slice[0] == SPL_INITIALIZE_ACCOUNT3 {
                         initialized_accounts.push(SvmInitializedAccount {
-                            address: accounts
-                                [inner_instruction.accounts[0] as usize]
-                                .to_owned(),
-                            mint: accounts
-                                [inner_instruction.accounts[1] as usize]
-                                .to_owned(),
+                            address: accounts[inner_instruction.accounts[0] as usize].to_owned(),
+                            mint: accounts[inner_instruction.accounts[1] as usize].to_owned(),
                             owner: bs58::encode(&slice[1..33]).into_string(),
                         });
                     }
                 }
             }
 
-            // We care only about SPL Token program
-            if let Ok(program) =
-                Pubkey::from_str(&accounts[inst.program_id_index as usize])
+            if let Ok(program) = Pubkey::from_str(&accounts[inst.program_id_index as usize])
                 && program == SPL_TOKEN_PROGRAM
-                && let Some(discriminator) = inst.data.get(0)
+                && let Some(discriminator) = inst.data.first()
             {
                 if discriminator == &SPL_INITIALIZE_ACCOUNT {
                     initialized_accounts.push(SvmInitializedAccount {
