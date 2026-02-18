@@ -3,10 +3,11 @@ resolver = "2"
 members = [
   "crates/evm",
   "crates/svm",
-  "crates/pg_chainsync",
+  "crates/extension",
   "crates/channel",
-  "crates/pg_chainsync_sdk",
+  "crates/sdk",
   "handlers/ohlc-1m",
+  "handlers/erc20-transfer",
 ]
 
 [profile.dev]

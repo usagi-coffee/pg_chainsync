@@ -34,7 +34,7 @@ struct CandleState {
 #[derive(Deserialize)]
 struct InputEvent {
     event: String,
-    job_id: Option<i64>,
+    handler_id: Option<i64>,
     state_path: Option<String>,
     prefetched: Option<serde_json::Value>,
     address: Option<String>,
@@ -46,7 +46,7 @@ struct OhlcHandler;
 
 static STATE: Lazy<Mutex<State>> = Lazy::new(|| Mutex::new(State::default()));
 
-fn state_path(job_id: i64, event_state_path: Option<&str>) -> String {
+fn state_path(handler_id: i64, event_state_path: Option<&str>) -> String {
     if let Some(path) = event_state_path {
         return path.to_string();
     }
@@ -56,17 +56,17 @@ fn state_path(job_id: i64, event_state_path: Option<&str>) -> String {
     }
 
     if let Ok(root) = std::env::var("CHAINSYNC_STATE_ROOT") {
-        return format!("{}/{}_state.json", root, job_id);
+        return format!("{}/{}_state.json", root, handler_id);
     }
 
-    format!("/tmp/ohlc_state_{}.json", job_id)
+    format!("/tmp/ohlc_state_{}.json", handler_id)
 }
 
 fn load_state_if_needed(
-    job_id: i64,
+    handler_id: i64,
     event_state_path: Option<&str>,
 ) -> Result<()> {
-    let path = state_path(job_id, event_state_path);
+    let path = state_path(handler_id, event_state_path);
     let content = match fs::read_to_string(&path) {
         Ok(v) => v,
         Err(_) => return Ok(()),
@@ -78,8 +78,8 @@ fn load_state_if_needed(
     Ok(())
 }
 
-fn persist_state(job_id: i64, event_state_path: Option<&str>) -> Result<()> {
-    let path = state_path(job_id, event_state_path);
+fn persist_state(handler_id: i64, event_state_path: Option<&str>) -> Result<()> {
+    let path = state_path(handler_id, event_state_path);
     let tmp = format!("{}.tmp", path);
 
     let guard = STATE.lock().expect("state lock");
@@ -152,8 +152,8 @@ fn decode_swap_price_and_volume(
 
 fn process_event(input: serde_json::Value) -> Result<ModuleResponse> {
     let event: InputEvent = serde_json::from_value(input)?;
-    let job_id = event.job_id.unwrap_or(0);
-    load_state_if_needed(job_id, event.state_path.as_deref())?;
+    let handler_id = event.handler_id.unwrap_or(0);
+    load_state_if_needed(handler_id, event.state_path.as_deref())?;
 
     if event.event != "evm_log" {
         return Ok(ModuleResponse::Ignore);
@@ -232,7 +232,7 @@ fn process_event(input: serde_json::Value) -> Result<ModuleResponse> {
         candle.trades += 1;
     }
 
-    persist_state(job_id, event.state_path.as_deref())?;
+    persist_state(handler_id, event.state_path.as_deref())?;
 
     match to_emit {
         Some(payload) => Ok(ModuleResponse::Done {
@@ -253,7 +253,12 @@ impl PluginHandler for OhlcHandler {
     }
 }
 
-export_plugin!(OhlcHandler, "ohlc_handler", "0.1.0");
+export_plugin!(
+    OhlcHandler,
+    "ohlc_handler",
+    "0.1.0",
+    include_str!("../handler.toml")
+);
 
 #[cfg(test)]
 mod tests {
@@ -284,7 +289,7 @@ mod tests {
     ) -> serde_json::Value {
         serde_json::json!({
             "event": "evm_log",
-            "job_id": 42,
+            "handler_id": 42,
             "state_path": state_path.to_string_lossy(),
             "prefetched": {
                 "pool_meta": [

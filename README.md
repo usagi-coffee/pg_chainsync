@@ -1,23 +1,23 @@
 # pg_chainsync v2
 
-`pg_chainsync` v2 is a PGRX extension for blockchain sync in PostgreSQL with filesystem-native handler configs, handler-local Rust modules, binary module ABI, and host-managed database execution.
+`pg_chainsync` v2 is a PGRX extension for blockchain sync in PostgreSQL with filesystem-loaded Rust modules (`.so`), embedded handler TOML, binary module ABI, and host-managed database execution.
 
 ## Architecture at a glance
 
-- Handlers are TOML files in `chainsync.config_dir`.
-- Modules are Rust `.so` files colocated with each handler directory.
+- Handlers are discovered from `*.so` files in `chainsync.config_dir`.
+- Each module `.so` embeds its own `handler.toml` config.
 - Event workers run module logic.
 - A dedicated DB executor thread owns SPI execution.
 - Workers and DB executor communicate over an internal typed bus.
-- Each handler has isolated runtime artifacts in its own directory.
+- Runtime artifacts are stored under `chainsync/status`, `chainsync/logs`, and `chainsync/state`.
 
 ## Monorepo layout
 
-- `crates/pg_chainsync`: PGRX extension crate
+- `crates/extension`: PGRX extension crate
 - `crates/evm`: internal EVM primitives crate
 - `crates/svm`: internal SVM primitives crate
 - `crates/channel`: internal channel primitives crate
-- `crates/pg_chainsync_sdk`: plugin SDK crate (`export_plugin!`, response types)
+- `crates/sdk`: plugin SDK crate (`export_plugin!`, response types)
 - `handlers/ohlc-1m`: example handler crate
 
 ## Design decisions
@@ -43,7 +43,7 @@
 ```bash
 cargo install --locked cargo-pgrx
 cargo build --release -p pg_chainsync
-cargo pgrx package --manifest-path crates/pg_chainsync/Cargo.toml
+cargo pgrx package --manifest-path crates/extension/Cargo.toml
 ```
 
 Copy extension artifacts according to your `pg_config` installation paths.
@@ -75,48 +75,39 @@ SELECT chainsync.reload();
 ```text
 /etc/pg_chainsync/
   handlers/
-    evm-transfer-stream/
-      handler.toml
-      handler.so
-      queries/
-        token_meta_by_address.sql
-        upsert_transfer.sql
-    svm-program-cron/
-      handler.toml
-      handler.so
-      queries/
-        ...
-    _runtime/
-      evm-transfer-stream/
-        status.json
-        logs/
-          loader.log
-      svm-program-cron/
-        status.json
-        logs/
-          loader.log
+    evm-transfer-stream.so
+    svm-program-stream.so
+    status/
+      evm-transfer-stream.json
+      svm-program-stream.json
+    logs/
+      evm-transfer-stream.log
+      svm-program-stream.log
+    state/
+      evm-transfer-stream.bin
+      svm-program-stream.bin
 ```
 
 ## Handler format
 
-Each handler directory contains one `handler.toml`.
+`handler.toml` is embedded inside each module `.so` and exposed via `chainsync_handler_toml_v1`.
 
 ### Required keys
 
 - `[handler].id`
 - `[handler].chain` = `"evm" | "svm"`
-- `[handler].mode` = `"stream" | "oneshot" | "cron"`
-- Module file `handler.so` must exist in the same handler directory
+- `[handler].mode` = `"stream"`
+- Module file is the `.so` itself in `chainsync.config_dir`
 
 ### Optional keys
 
-- top-level: `rpc`, `ws`, `preload`, `oneshot`, `cron`, `setup_handler`, `success_handler`, `failure_handler`
+- top-level: `rpc`, `ws`
 
 ### Validation
 
 - `handler.chain = "evm"` requires `[evm]`
 - `handler.chain = "svm"` requires `[svm]`
-- `handler.mode = "cron"` requires `cron`
+- `handler.mode` must be `"stream"` in v2
 - `${ENV_VAR}` placeholders are resolved from process environment
 
 ### Example handler TOML
@@ -133,26 +124,30 @@ ws = "${EVM_WS_URL}"
 address = "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
 event = "Transfer(address,address,uint256)"
 
-[queries.lookups.token_meta_by_address]
-sql = "queries/token_meta_by_address.sql"
-
 [queries.mutations.upsert_transfer]
-sql = "queries/upsert_transfer.sql"
+sql_inline = """
+INSERT INTO erc20_transfers (contract, tx_hash, log_index, amount_raw)
+VALUES (($1->>'contract')::text, ($1->>'tx_hash')::text, ($1->>'log_index')::bigint, ($1->>'amount_raw')::numeric)
+ON CONFLICT (contract, tx_hash, log_index) DO UPDATE
+SET amount_raw = EXCLUDED.amount_raw;
+"""
 
 [runtime]
-prelookups = ["token_meta_by_address"]
+prelookups = []
 ```
+
+In SO-only mode, queries must use `sql_inline` (no external `queries/*.sql` files).
 
 ## Runtime artifacts per handler
 
-- `<config_dir>/_runtime/<job_id>/status.json`
-- `<config_dir>/_runtime/<job_id>/logs/loader.log`
+- `<data_directory>/chainsync/status/<handler_id>.json`
+- `<data_directory>/chainsync/logs/<module_name>.log`
 
-`loader.log` is JSONL and records states (`LOADED`, `ERROR`, `REMOVED`) and reload/validation events.
+`<module_name>.log` is JSONL and records states (`REGISTERED`, `UPDATED`, `ERROR`, `REMOVED`) and reload/validation events.
 
 Handler setup state is stored under:
 
-- `<config_dir>/_runtime/<job_id>/state.bin`
+- `<data_directory>/chainsync/state/<handler_id>.bin`
 
 `setup` initializes/recovers this state before event processing.
 
@@ -279,13 +274,13 @@ Flow:
 
 ## Queries and prepared plans
 
-Each handler defines lookup/mutation IDs directly in `handler.toml`.
+Each handler defines lookup/mutation IDs directly in embedded `handler.toml`.
 
 At reload/startup:
 
 - host loads query definitions from `handler.toml`
-- resolves `${ENV_VAR}` placeholders in SQL files
-- validates IDs/files
+- resolves `${ENV_VAR}` placeholders in inline SQL
+- validates IDs
 - prepares plans (`SPI_prepare`) and caches handles
 
 At runtime:
@@ -312,10 +307,10 @@ Typical flow:
 
 ## Operational flow
 
-1. Create/update handler directory (`handler.toml` + `queries/*`).
-2. Deploy module `.so`.
+1. Build module `.so` (with embedded `handler.toml`).
+2. Copy `.so` into `chainsync.config_dir`.
 3. Run `SELECT chainsync.reload();`.
-4. Check `_runtime/<job_id>/status.json` and `logs/loader.log`.
+4. Check `chainsync/status/<handler_id>.json` and `chainsync/logs/<module_name>.log`.
 5. Restart worker if needed.
 
 ## Development
@@ -342,7 +337,7 @@ bun run scripts/dev-handler.ts ohlc_handler ohlc-1m
 What it does:
 
 1. Builds the handler crate.
-2. Copies `lib*.so` to `<handlers_dir>/<handler_id>/handler.so`.
+2. Copies `lib*.so` to `<handlers_dir>/<handler_id>.so`.
 3. Executes `SELECT chainsync.reload();` through `psql`.
 
 Defaults:

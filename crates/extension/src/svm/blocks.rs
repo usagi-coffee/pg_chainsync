@@ -20,14 +20,14 @@ use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 
 use bus::BusReader;
 
-use crate::types::Job;
+use crate::types::HandlerRuntime;
 
 use crate::channel::Channel;
 use crate::types::*;
 
-fn ingress_key(job: &Job) -> String {
-    let rpc = job.options.rpc.as_deref().unwrap_or("<missing-rpc>");
-    let Some(options) = &job.options.svm else {
+fn ingress_key(handler: &HandlerRuntime) -> String {
+    let rpc = handler.options.rpc.as_deref().unwrap_or("<missing-rpc>");
+    let Some(options) = &handler.options.svm else {
         return format!("rpc={}:svm=none", rpc);
     };
 
@@ -41,32 +41,28 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
     'blocks: loop {
         let mut handles = vec![];
 
-        let (tx, rx) = oneshot::channel::<Vec<Job>>();
-        channel.send(Message::Jobs(tx));
+        let (tx, rx) = oneshot::channel::<Vec<HandlerRuntime>>();
+        channel.send(Message::Handlers(tx));
 
-        let Ok(jobs) = rx.await else {
-            warning!("sync: svm: blocks: failed to get jobs");
+        let Ok(handlers) = rx.await else {
+            warning!("sync: ingress: svm:blocks: failed to load route table");
             return;
         };
 
-        let jobs = jobs
-            .svm_jobs()
-            .block_jobs()
+        let handlers = handlers
+            .svm_handlers()
+            .block_handlers()
             .into_iter()
             .map(Arc::new)
             .collect::<Vec<_>>();
 
-        log!("sync: svm: blocks: found {} jobs", jobs.len());
-
-        let mut groups: HashMap<String, Vec<Arc<Job>>> = HashMap::new();
-        for job in jobs {
-            groups.entry(ingress_key(&job)).or_default().push(job);
+        let mut groups: HashMap<String, Vec<Arc<HandlerRuntime>>> = HashMap::new();
+        for handler in handlers {
+            groups.entry(ingress_key(&handler)).or_default().push(handler);
         }
 
-        log!("sync: svm: blocks: shared ingress groups: {}", groups.len());
-
-        for (key, group_jobs) in groups {
-            let Some(primary) = group_jobs.first().cloned() else {
+        for (key, group_handlers) in groups {
+            let Some(primary) = group_handlers.first().cloned() else {
                 continue;
             };
             let channel = channel.clone();
@@ -75,7 +71,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                 'group: loop {
                     if retries >= 10 {
                         warning!(
-                            "sync: svm: blocks: {}: too many retries, stopping shared group",
+                            "sync: ingress: svm:blocks: {}: too many retries, stopping lane",
                             key
                         );
                         return;
@@ -83,7 +79,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 
                     if let Err(error) = primary.connect_svm_ws().await {
                         warning!(
-                            "sync: svm: blocks: {}: failed to connect ws with {}",
+                            "sync: ingress: svm:blocks: {}: ws connect failed: {}",
                             key,
                             error
                         );
@@ -95,7 +91,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 
                     if let Err(error) = primary.connect_svm_rpc().await {
                         warning!(
-                            "sync: svm: blocks: {}: failed to connect rpc with {}",
+                            "sync: ingress: svm:blocks: {}: rpc connect failed: {}",
                             key,
                             error
                         );
@@ -109,7 +105,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         Ok(stream) => StreamNotifyClose::new(stream),
                         Err(error) => {
                             warning!(
-                                "sync: svm: blocks: {}: failed to build shared stream with {}",
+                                "sync: ingress: svm:blocks: {}: stream build failed: {}",
                                 key,
                                 error
                             );
@@ -121,29 +117,22 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         }
                     };
 
-                    for job in &group_jobs {
-                        channel.send(Message::UpdateJob(
-                            job.id,
-                            JobStatus::Running,
-                        ));
-                    }
-
-                    log!("sync: svm: blocks: {}: started shared listener", key);
+                    log!("sync: ingress: svm:blocks: {}: lane online", key);
                     loop {
                         match stream.next().await {
                             Some(Some(block)) => {
-                                for job in &group_jobs {
+                                for handler in &group_handlers {
                                     if let Err(error) = handle_block(
-                                        job,
+                                        handler,
                                         block.clone(),
                                         &channel,
                                     )
                                     .await
                                     {
                                         warning!(
-                                            "sync: svm: blocks: {}: {}: failed to handle shared block with {}",
+                                            "sync: ingress: svm:blocks: {}: route={} dispatch failed: {}",
                                             key,
-                                            &job.name,
+                                            &handler.name,
                                             error
                                         );
                                     }
@@ -151,7 +140,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                             }
                             _ => {
                                 warning!(
-                                    "sync: svm: blocks: {}: shared stream ended, restarting",
+                                    "sync: ingress: svm:blocks: {}: stream ended, reconnecting",
                                     key
                                 );
 
@@ -169,7 +158,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
             match signals.try_recv() {
                 Ok(signal) => match signal {
                     Signal::RestartBlocks => {
-                        log!("sync: svm: blocks: restarting jobs");
+                        log!("sync: ingress: svm:blocks: reload signal received, restarting lane");
                         for handle in handles {
                             handle.abort();
                         }
@@ -187,23 +176,24 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 }
 
 pub async fn handle_block(
-    job: &Arc<Job>,
+    handler: &Arc<HandlerRuntime>,
     block: Response<RpcBlockUpdate>,
     channel: &Channel,
 ) -> Result<(), anyhow::Error> {
     let Some(block) = block.value.block else {
-        bail!("sync: svm: blocks: {}: block is empty", &job.name);
+        bail!("sync: ingress: svm:blocks: {}: empty block payload", &handler.name);
     };
 
     let Some(block_height) = block.block_height else {
-        bail!("sync: svm: blocks: {}: block height is empty", &job.name);
+        bail!("sync: ingress: svm:blocks: {}: missing block height", &handler.name);
     };
 
-    log!("sync: svm: blocks: {}: found {}", &job.name, block_height);
     ensure!(
-        channel.send(Message::SvmBlock(block, job.clone())),
-        "sync: svm: blocks: {}: failed to send",
-        &job.name
+        channel.send(Message::SvmBlock(block, handler.clone())),
+        "sync: ingress: svm:blocks: {}: enqueue block {} failed",
+        &handler.name
+        ,
+        block_height
     );
 
     Ok(())
@@ -251,13 +241,13 @@ pub fn build_subscribe_config(options: &SvmOptions) -> RpcBlockSubscribeConfig {
 }
 
 pub async fn build_stream<'a>(
-    job: &'a Job,
+    handler: &'a HandlerRuntime,
 ) -> anyhow::Result<
     Pin<Box<dyn Stream<Item = Response<RpcBlockUpdate>> + 'a + Send>>,
 > {
-    let options = job.options.svm.as_ref().expect("SVM options are required");
+    let options = handler.options.svm.as_ref().expect("SVM options are required");
     let filter = build_filter(options);
-    let provider = job.connect_svm_ws().await.context("Invalid provider")?;
+    let provider = handler.connect_svm_ws().await.context("Invalid provider")?;
     let sub = provider
         .block_subscribe(filter, Some(build_subscribe_config(options)))
         .await?;

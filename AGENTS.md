@@ -5,21 +5,21 @@ Build and evolve `pg_chainsync` as a filesystem-first PGRX extension where handl
 
 ## Monorepo structure
 
-- `crates/pg_chainsync`: extension runtime and worker implementation
+- `crates/extension`: extension runtime and worker implementation
 - `crates/evm`: shared EVM primitives and connection helpers
 - `crates/svm`: shared SVM primitives and connection helpers
 - `crates/channel`: shared channel primitives
-- `crates/pg_chainsync_sdk`: safe plugin SDK and export macro
+- `crates/sdk`: safe plugin SDK and export macro
 - `handlers/*`: example handler crates
 
 ## Core architecture (must preserve)
 
 - Handler definitions live in `chainsync.config_dir`.
-- Module binary is handler-local and loaded from `<handler_dir>/handler.so`.
+- Module binary is loaded directly from `<config_dir>/*.so`.
 - Module workers execute business logic.
 - A dedicated DB executor thread is the single SPI owner.
 - Worker/DB communication is a typed internal bus.
-- Runtime status and logs are filesystem artifacts under `_runtime/<job_id>/`.
+- Runtime artifacts are filesystem data under `chainsync/status`, `chainsync/logs`, and `chainsync/state`.
 - Shared ingress layer deduplicates upstream subscriptions and decoded events, then fans out to bound handlers.
 
 ## Hard constraints
@@ -63,7 +63,7 @@ Protocol requirements:
 
 ## Query and mutation model
 
-- Handler-local SQL files under `queries/*.sql`, with IDs declared directly in `handler.toml`.
+- Queries are declared inline in embedded `handler.toml` (`sql_inline`) inside the module `.so`.
 - Host loads and validates query definitions on reload/startup.
 - Host prepares plans and caches handles.
 - Module references only stable IDs (`query_id`/`statement_id`) plus typed params.
@@ -91,7 +91,7 @@ Protocol requirements:
 
 - One SPI owner thread only.
 - All DB writes are host-side and allowlisted.
-- Emit deterministic per-handler runtime artifacts (`status.json`, `loader.log`).
+- Emit deterministic runtime artifacts (`status/<handler_id>.json`, `logs/<module_name>.log`).
 - On config/plugin/ABI errors, fail closed for that handler and log reason.
 - One slow/failing handler must not block ingress or sibling handlers (queue isolation/backpressure required).
 

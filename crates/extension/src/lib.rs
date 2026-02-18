@@ -63,51 +63,36 @@ mod chainsync {
     }
 
     #[pg_extern]
-    fn run_evm_task(task: i64) -> i64 {
-        if let Err(_) = EVM_TASKS.exclusive().push(task) {
-            panic!("failed to enqueue the task")
-        }
-
-        task
-    }
-
-    #[pg_extern]
-    fn run_svm_task(task: i64) -> i64 {
-        if let Err(_) = SVM_TASKS.exclusive().push(task) {
-            panic!("failed to enqueue the task")
-        }
-
-        task
-    }
-
-    #[pg_extern]
     fn reload() -> pgrx::JsonB {
-        let statuses = Spi::connect(|_| {
+        let outcome = Spi::connect(|_| {
             let config_dir = config::resolve_config_dir()?;
             config::sync_from_handlers(&config_dir)
         })
         .expect("reload failed");
 
-        if SIGNALS
-            .exclusive()
-            .push(crate::types::Signal::RestartBlocks as u8)
-            .is_err()
+        if outcome.restart_blocks
+            && SIGNALS
+                .exclusive()
+                .push(crate::types::Signal::RestartBlocks as u8)
+                .is_err()
         {
             warning!("failed to send block restart signal");
         }
-        if SIGNALS
-            .exclusive()
-            .push(crate::types::Signal::RestartLogs as u8)
-            .is_err()
+        if outcome.restart_logs
+            && SIGNALS
+                .exclusive()
+                .push(crate::types::Signal::RestartLogs as u8)
+                .is_err()
         {
             warning!("failed to send log restart signal");
         }
 
-        let payload = statuses
+        let payload = outcome
+            .statuses
             .into_iter()
             .map(|status: RuntimeStatus| {
                 json!({
-                    "job_id": status.job_id,
+                    "handler_id": status.handler_id,
                     "status": status.status,
                     "last_error": status.last_error,
                 })
@@ -118,17 +103,14 @@ mod chainsync {
 }
 
 use worker::{
-    CONFIG_DIR, DATABASE, EVM_BLOCKTICK_RESET, EVM_TASKS, EVM_WS_PERMITS,
-    RESTART_COUNT, SIGNALS, SVM_RPC_PERMITS, SVM_SIGNATURES_BUFFER, SVM_TASKS,
-    WORKER_STATUS,
+    CONFIG_DIR, DATABASE, EVM_BLOCKTICK_RESET, EVM_WS_PERMITS, RESTART_COUNT,
+    SIGNALS, SVM_RPC_PERMITS, SVM_SIGNATURES_BUFFER, WORKER_STATUS,
 };
 
 #[pg_guard]
 pub extern "C-unwind" fn _PG_init() {
     pg_shmem_init!(WORKER_STATUS);
     pg_shmem_init!(RESTART_COUNT);
-    pg_shmem_init!(EVM_TASKS);
-    pg_shmem_init!(SVM_TASKS);
     pg_shmem_init!(SIGNALS);
 
     GucRegistry::define_string_guc(
@@ -172,8 +154,8 @@ pub extern "C-unwind" fn _PG_init() {
 
     GucRegistry::define_int_guc(
         c"chainsync.svm_ws_permits",
-        c"number of permits per rpc key in a single task",
-        c"number of permits per rpc ket in a single task",
+        c"number of permits per rpc key in a single handler",
+        c"number of permits per rpc key in a single handler",
         &SVM_RPC_PERMITS,
         1,
         999,
@@ -183,8 +165,8 @@ pub extern "C-unwind" fn _PG_init() {
 
     GucRegistry::define_int_guc(
         c"chainsync.svm_signatures_buffer",
-        c"number of signatures to buffer in a single task",
-        c"number of signatures to buffer in a single task",
+        c"number of signatures to buffer in a single handler",
+        c"number of signatures to buffer in a single handler",
         &SVM_SIGNATURES_BUFFER,
         1,
         100000000,

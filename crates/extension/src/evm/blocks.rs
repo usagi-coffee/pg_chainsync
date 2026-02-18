@@ -14,13 +14,13 @@ use bus::BusReader;
 use alloy::providers::Provider;
 use alloy::pubsub::SubscriptionStream;
 
-use crate::types::Job;
+use crate::types::HandlerRuntime;
 
 use crate::channel::Channel;
 use crate::types::*;
 
-fn ingress_key(job: &Job) -> String {
-    let ws = job.options.ws.as_deref().unwrap_or("<missing-ws>");
+fn ingress_key(handler: &HandlerRuntime) -> String {
+    let ws = handler.options.ws.as_deref().unwrap_or("<missing-ws>");
     format!("ws={}", ws)
 }
 
@@ -28,32 +28,28 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
     'blocks: loop {
         let mut handles = vec![];
 
-        let (tx, rx) = oneshot::channel::<Vec<Job>>();
-        channel.send(Message::Jobs(tx));
+        let (tx, rx) = oneshot::channel::<Vec<HandlerRuntime>>();
+        channel.send(Message::Handlers(tx));
 
-        let Ok(jobs) = rx.await else {
-            warning!("sync: evm: blocks: failed to get jobs");
+        let Ok(handlers) = rx.await else {
+            warning!("sync: ingress: evm:blocks: failed to load route table");
             return;
         };
 
-        let jobs = jobs
-            .evm_jobs()
-            .block_jobs()
+        let handlers = handlers
+            .evm_handlers()
+            .block_handlers()
             .into_iter()
             .map(Arc::new)
             .collect::<Vec<_>>();
 
-        log!("sync: evm: blocks: found {} jobs", jobs.len());
-
-        let mut groups: HashMap<String, Vec<Arc<Job>>> = HashMap::new();
-        for job in jobs {
-            groups.entry(ingress_key(&job)).or_default().push(job);
+        let mut groups: HashMap<String, Vec<Arc<HandlerRuntime>>> = HashMap::new();
+        for handler in handlers {
+            groups.entry(ingress_key(&handler)).or_default().push(handler);
         }
 
-        log!("sync: evm: blocks: shared ingress groups: {}", groups.len());
-
-        for (key, group_jobs) in groups {
-            let Some(primary) = group_jobs.first().cloned() else {
+        for (key, group_handlers) in groups {
+            let Some(primary) = group_handlers.first().cloned() else {
                 continue;
             };
             let channel = channel.clone();
@@ -62,7 +58,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                 'group: loop {
                     if retries >= 10 {
                         warning!(
-                            "sync: evm: blocks: {}: too many retries, stopping shared group",
+                            "sync: ingress: evm:blocks: {}: too many retries, stopping lane",
                             key
                         );
                         return;
@@ -70,7 +66,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 
                     if let Err(error) = primary.connect_evm().await {
                         warning!(
-                            "sync: evm: blocks: {}: failed to connect provider with {}",
+                            "sync: ingress: evm:blocks: {}: provider connect failed: {}",
                             key,
                             error
                         );
@@ -84,7 +80,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         Ok(stream) => StreamNotifyClose::new(stream),
                         Err(error) => {
                             warning!(
-                                "sync: evm: blocks: {}: failed to build shared stream with {}",
+                                "sync: ingress: evm:blocks: {}: stream build failed: {}",
                                 key,
                                 error
                             );
@@ -96,29 +92,22 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         }
                     };
 
-                    for job in &group_jobs {
-                        channel.send(Message::UpdateJob(
-                            job.id,
-                            JobStatus::Running,
-                        ));
-                    }
-
-                    log!("sync: evm: blocks: {}: started shared listener", key);
+                    log!("sync: ingress: evm:blocks: {}: lane online", key);
                     loop {
                         match stream.next().await {
                             Some(Some(block)) => {
-                                for job in &group_jobs {
+                                for handler in &group_handlers {
                                     if let Err(error) = handle_block(
-                                        job,
+                                        handler,
                                         block.clone(),
                                         &channel,
                                     )
                                     .await
                                     {
                                         warning!(
-                                            "sync: evm: blocks: {}: {}: failed to handle shared block with {}",
+                                            "sync: ingress: evm:blocks: {}: route={} dispatch failed: {}",
                                             key,
-                                            &job.name,
+                                            &handler.name,
                                             error
                                         );
                                     }
@@ -128,7 +117,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                             }
                             _ => {
                                 warning!(
-                                    "sync: evm: blocks: {}: shared stream ended, restarting",
+                                    "sync: ingress: evm:blocks: {}: stream ended, reconnecting",
                                     key
                                 );
 
@@ -146,7 +135,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
             match signals.try_recv() {
                 Ok(signal) => match signal {
                     Signal::RestartBlocks => {
-                        log!("sync: evm: blocks: restarting jobs");
+                        log!("sync: ingress: evm:blocks: reload signal received, restarting lane");
                         for handle in handles {
                             handle.abort();
                         }
@@ -164,26 +153,23 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 }
 
 pub async fn handle_block(
-    job: &Arc<Job>,
+    handler: &Arc<HandlerRuntime>,
     block: alloy::rpc::types::Header<AnyHeader>,
     channel: &Channel,
 ) -> Result<(), anyhow::Error> {
-    let number = block.number;
-    log!("sync: evm: blocks: {}: found {}", &job.name, number);
-
     ensure!(
-        channel.send(Message::EvmBlock(block, job.clone())),
-        "sync: evm: blocks: {}: failed to send block to channel",
-        &job.name
+        channel.send(Message::EvmBlock(block, handler.clone())),
+        "sync: ingress: evm:blocks: {}: enqueue failed",
+        &handler.name
     );
 
     Ok(())
 }
 
 pub async fn build_stream(
-    job: &Job,
+    handler: &HandlerRuntime,
 ) -> anyhow::Result<SubscriptionStream<alloy::rpc::types::Header<AnyHeader>>> {
-    let provider = job.connect_evm().await.context("Invalid provider")?;
+    let provider = handler.connect_evm().await.context("Invalid provider")?;
     let sub = provider.subscribe_blocks().await?;
     Ok(sub.into_stream())
 }
@@ -191,22 +177,22 @@ pub async fn build_stream(
 // Attempts to fetch a block by its number, retrying if necessary.
 pub async fn try_block(
     block: u64,
-    job: &Arc<Job>,
+    handler: &Arc<HandlerRuntime>,
 ) -> Result<AnyRpcBlock, anyhow::Error> {
     let mut retries = 0;
     loop {
         if retries > 20 {
             bail!(
-                "sync: evm: {}: too many retries to get the block...",
-                &job.name
+                "sync: ingress: evm:blocks: {}: too many retries fetching block",
+                &handler.name
             );
         }
 
         // Reconnect ws on every block retry
-        let Ok(client) = job.reconnect_evm().await else {
+        let Ok(client) = handler.reconnect_evm().await else {
             warning!(
-                "sync: evm: {}: failed to connect to evm at await block handler",
-                &job.name
+                "sync: ingress: evm:blocks: {}: reconnect failed during await_block",
+                &handler.name
             );
             tokio::time::sleep(Duration::from_millis(1000)).await;
             retries = retries + 1;
@@ -218,8 +204,8 @@ pub async fn try_block(
         }
 
         log!(
-            "sync: evm: {}: could not find block {}, retrying",
-            &job.name,
+            "sync: ingress: evm:blocks: {}: block {} not available yet, retrying",
+            &handler.name,
             block
         );
 

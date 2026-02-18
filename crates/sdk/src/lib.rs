@@ -33,10 +33,11 @@ pub trait PluginHandler {
 
 #[macro_export]
 macro_rules! export_plugin {
-    ($handler:ty, $name:literal, $version:literal) => {
+    ($handler:ty, $name:literal, $version:literal, $handler_toml:expr) => {
         static __CHAINSYNC_NAME: &[u8] = concat!($name, "\0").as_bytes();
         static __CHAINSYNC_VERSION: &[u8] =
             concat!($version, "\0").as_bytes();
+        static __CHAINSYNC_HANDLER_TOML: &str = $handler_toml;
 
         #[no_mangle]
         pub extern "C" fn chainsync_plugin_meta_v1(
@@ -107,6 +108,19 @@ macro_rules! export_plugin {
             unsafe {
                 let _ = ::std::vec::Vec::from_raw_parts(ptr, len, len);
             }
+        }
+
+        #[no_mangle]
+        pub extern "C" fn chainsync_handler_toml_v1(
+            out_len: *mut usize,
+        ) -> *const u8 {
+            let bytes = __CHAINSYNC_HANDLER_TOML.as_bytes();
+            if !out_len.is_null() {
+                unsafe {
+                    *out_len = bytes.len();
+                }
+            }
+            bytes.as_ptr()
         }
     };
 }

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock};
 
 use anyhow::{Context, Result};
@@ -10,7 +9,7 @@ use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
 use serde_json::Value;
 
-use crate::types::Job;
+use crate::types::HandlerRuntime;
 
 fn resolve_env_sql(input: &str) -> Result<String> {
     let mut out = String::with_capacity(input.len());
@@ -34,23 +33,23 @@ fn resolve_env_sql(input: &str) -> Result<String> {
     Ok(out)
 }
 
-fn stable_name(job_id: i64, kind: &str, query_id: &str) -> String {
+fn stable_name(handler_id: i64, kind: &str, query_id: &str) -> String {
     let mut hasher = DefaultHasher::new();
     kind.hash(&mut hasher);
     query_id.hash(&mut hasher);
     let digest = hasher.finish();
-    format!("chainsync_q_{}_{}_{}", job_id, kind, digest)
+    format!("chainsync_q_{}_{}_{}", handler_id, kind, digest)
 }
 
 #[derive(Default, Clone)]
-struct JobPrepared {
+struct HandlerPrepared {
     lookups: HashMap<String, String>,
     mutations: HashMap<String, String>,
 }
 
-static PREPARED: OnceLock<RwLock<HashMap<i64, JobPrepared>>> = OnceLock::new();
+static PREPARED: OnceLock<RwLock<HashMap<i64, HandlerPrepared>>> = OnceLock::new();
 
-fn prepared_store() -> &'static RwLock<HashMap<i64, JobPrepared>> {
+fn prepared_store() -> &'static RwLock<HashMap<i64, HandlerPrepared>> {
     PREPARED.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
@@ -70,39 +69,30 @@ fn prepare_lookup_statement(name: &str, sql: &str) -> Result<()> {
     prepare_named_statement(name, &wrapped)
 }
 
-pub fn prepare_job_queries(job: &Job) -> Result<usize> {
-    let Some(handler_dir) = &job.options.handler_dir else {
-        return Ok(0);
-    };
-    let base = PathBuf::from(handler_dir);
+pub fn prepare_handler_queries(handler: &HandlerRuntime) -> Result<usize> {
     let mut prepared = 0usize;
 
-    let mut job_prepared = JobPrepared::default();
+    let mut handler_prepared = HandlerPrepared::default();
 
-    if let Some(lookups) = &job.options.lookup_queries {
-        for (query_id, rel_path) in lookups {
-            let sql_path = base.join(rel_path);
-            let sql = std::fs::read_to_string(&sql_path)
-                .with_context(|| format!("reading {}", sql_path.display()))?;
-            let sql = resolve_env_sql(&sql)
-                .with_context(|| format!("resolving {}", sql_path.display()))?;
-            let name = stable_name(job.id, "lookup", query_id);
+    if let Some(lookups) = &handler.options.lookup_queries {
+        for (query_id, sql_text) in lookups {
+            let sql = resolve_env_sql(sql_text)
+                .with_context(|| format!("resolving lookup sql '{}'", query_id))?;
+            let name = stable_name(handler.id, "lookup", query_id);
             prepare_lookup_statement(&name, &sql)?;
-            job_prepared.lookups.insert(query_id.clone(), name);
+            handler_prepared.lookups.insert(query_id.clone(), name);
             prepared += 1;
         }
     }
 
-    if let Some(mutations) = &job.options.mutation_queries {
-        for (query_id, rel_path) in mutations {
-            let sql_path = base.join(rel_path);
-            let sql = std::fs::read_to_string(&sql_path)
-                .with_context(|| format!("reading {}", sql_path.display()))?;
-            let sql = resolve_env_sql(&sql)
-                .with_context(|| format!("resolving {}", sql_path.display()))?;
-            let name = stable_name(job.id, "mutation", query_id);
+    if let Some(mutations) = &handler.options.mutation_queries {
+        for (query_id, sql_text) in mutations {
+            let sql = resolve_env_sql(sql_text).with_context(|| {
+                format!("resolving mutation sql '{}'", query_id)
+            })?;
+            let name = stable_name(handler.id, "mutation", query_id);
             prepare_named_statement(&name, &sql)?;
-            job_prepared.mutations.insert(query_id.clone(), name);
+            handler_prepared.mutations.insert(query_id.clone(), name);
             prepared += 1;
         }
     }
@@ -110,39 +100,39 @@ pub fn prepare_job_queries(job: &Job) -> Result<usize> {
     prepared_store()
         .write()
         .expect("prepared plans lock")
-        .insert(job.id, job_prepared);
+        .insert(handler.id, handler_prepared);
 
     Ok(prepared)
 }
 
-pub fn prepare_all_jobs(jobs: &[Job]) -> Result<usize> {
+pub fn prepare_all_handlers(handlers: &[HandlerRuntime]) -> Result<usize> {
     let mut total = 0usize;
     prepared_store()
         .write()
         .expect("prepared plans lock")
         .clear();
-    for job in jobs {
-        total += prepare_job_queries(job)
-            .with_context(|| format!("preparing queries for {}", job.name))?;
+    for handler in handlers {
+        total += prepare_handler_queries(handler)
+            .with_context(|| format!("preparing queries for {}", handler.name))?;
     }
     Ok(total)
 }
 
 pub fn execute_mutation(
-    job_id: i64,
+    handler_id: i64,
     mutation_id: &str,
     payload: JsonB,
 ) -> Result<()> {
     let sql_name = {
         let guard = prepared_store().read().expect("prepared plans lock");
-        let Some(job) = guard.get(&job_id) else {
-            anyhow::bail!("no prepared queries for job {}", job_id);
+        let Some(handler) = guard.get(&handler_id) else {
+            anyhow::bail!("no prepared queries for handler {}", handler_id);
         };
-        let Some(name) = job.mutations.get(mutation_id) else {
+        let Some(name) = handler.mutations.get(mutation_id) else {
             anyhow::bail!(
-                "mutation id '{}' not prepared for job {}",
+                "mutation id '{}' not prepared for handler {}",
                 mutation_id,
-                job_id
+                handler_id
             );
         };
         name.clone()
@@ -156,17 +146,17 @@ pub fn execute_mutation(
     Ok(())
 }
 
-pub fn execute_lookup(job_id: i64, lookup_id: &str) -> Result<Value> {
+pub fn execute_lookup(handler_id: i64, lookup_id: &str) -> Result<Value> {
     let sql_name = {
         let guard = prepared_store().read().expect("prepared plans lock");
-        let Some(job) = guard.get(&job_id) else {
-            anyhow::bail!("no prepared queries for job {}", job_id);
+        let Some(handler) = guard.get(&handler_id) else {
+            anyhow::bail!("no prepared queries for handler {}", handler_id);
         };
-        let Some(name) = job.lookups.get(lookup_id) else {
+        let Some(name) = handler.lookups.get(lookup_id) else {
             anyhow::bail!(
-                "lookup id '{}' not prepared for job {}",
+                "lookup id '{}' not prepared for handler {}",
                 lookup_id,
-                job_id
+                handler_id
             );
         };
         name.clone()

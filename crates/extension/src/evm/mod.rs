@@ -1,8 +1,8 @@
-use crate::types::Job;
+use crate::types::HandlerRuntime;
 
 pub use evm_core::{EvmBlock, EvmLog, EvmLogResponse, EvmPubSub, EvmPubSubError};
 
-impl Job {
+impl HandlerRuntime {
     pub async fn connect_evm(&self) -> anyhow::Result<&EvmPubSub, EvmPubSubError> {
         let url = self
             .options
@@ -24,4 +24,3 @@ impl Job {
 
 pub mod blocks;
 pub mod logs;
-pub mod tasks;

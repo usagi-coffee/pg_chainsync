@@ -29,31 +29,12 @@ impl SharedSignalQueue {
 
 unsafe impl PGRXSharedMemory for SharedSignalQueue {}
 
-#[derive(Default)]
-pub struct SharedTaskQueue(heapless::Vec<i64, 32>);
-
-impl SharedTaskQueue {
-    pub fn push(&mut self, value: i64) -> Result<(), i64> {
-        self.0.push(value)
-    }
-
-    pub fn pop(&mut self) -> Option<i64> {
-        self.0.pop()
-    }
-}
-
-unsafe impl PGRXSharedMemory for SharedTaskQueue {}
-
 pub static WORKER_STATUS: PgLwLock<WorkerStatus> =
     unsafe { PgLwLock::new(c"worker_status") };
 pub static RESTART_COUNT: PgLwLock<i32> =
     unsafe { PgLwLock::new(c"restart_count") };
 pub static SIGNALS: PgLwLock<SharedSignalQueue> =
     unsafe { PgLwLock::new(c"signals") };
-pub static EVM_TASKS: PgLwLock<SharedTaskQueue> =
-    unsafe { PgLwLock::new(c"evm_tasks") };
-pub static SVM_TASKS: PgLwLock<SharedTaskQueue> =
-    unsafe { PgLwLock::new(c"svm_tasks") };
 
 pub static DATABASE: GucSetting<Option<CString>> =
     GucSetting::<Option<CString>>::new(Some(c"postgres"));

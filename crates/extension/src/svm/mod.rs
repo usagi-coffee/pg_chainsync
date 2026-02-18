@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use crate::types::Job;
+use crate::types::HandlerRuntime;
 
 pub use svm_core::{
     RawSvmTransaction, SvmAccount, SvmBlock, SvmInitializedAccount, SvmLog, SvmPubSub,
     SvmPubSubError, SvmRpc, SvmTransaction, SvmTransactionDetails,
 };
 
-impl Job {
+impl HandlerRuntime {
     pub async fn connect_svm_ws(
         &self,
     ) -> anyhow::Result<&Arc<SvmPubSub>, SvmPubSubError> {
@@ -53,5 +53,3 @@ impl Job {
 
 pub mod blocks;
 pub mod logs;
-pub mod tasks;
-pub mod transactions;

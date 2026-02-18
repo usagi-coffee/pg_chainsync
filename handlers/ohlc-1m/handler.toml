@@ -1,0 +1,46 @@
+[handler]
+id = "ohlc-1m"
+chain = "evm"
+mode = "stream"
+
+ws = "${EVM_WS_URL}"
+
+[evm]
+# Example Uniswap V2 Swap event
+# event = "Swap(address,uint256,uint256,uint256,uint256,address)"
+# address = "${POOL_ADDRESS}"
+
+[queries.mutations.upsert_ohlc_1m]
+sql_inline = """
+INSERT INTO ohlc_1m (
+  pair_id,
+  bucket_start_unix,
+  open,
+  high,
+  low,
+  close,
+  volume_base,
+  volume_quote,
+  trades
+)
+VALUES (
+  ($1->>'pair_id')::text,
+  ($1->>'bucket_start_unix')::bigint,
+  ($1->>'open')::double precision,
+  ($1->>'high')::double precision,
+  ($1->>'low')::double precision,
+  ($1->>'close')::double precision,
+  ($1->>'volume_base')::double precision,
+  ($1->>'volume_quote')::double precision,
+  ($1->>'trades')::bigint
+)
+ON CONFLICT (pair_id, bucket_start_unix) DO UPDATE
+SET
+  open = EXCLUDED.open,
+  high = EXCLUDED.high,
+  low = EXCLUDED.low,
+  close = EXCLUDED.close,
+  volume_base = EXCLUDED.volume_base,
+  volume_quote = EXCLUDED.volume_quote,
+  trades = EXCLUDED.trades;
+"""
