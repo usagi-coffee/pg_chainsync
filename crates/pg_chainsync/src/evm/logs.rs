@@ -50,7 +50,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
         channel.send(Message::Jobs(tx));
 
         let Ok(jobs) = rx.await else {
-            warning!("sync: evm: logs: failed to get jobs");
+            warning!("sync: evm: logs: failed to get handlers");
             return;
         };
 
@@ -61,7 +61,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
             .map(Arc::new)
             .collect::<Vec<_>>();
 
-        log!("sync: evm: logs: found {} jobs", jobs.len());
+        log!("sync: evm: logs: found {} handlers", jobs.len());
 
         let mut groups: HashMap<String, Vec<Arc<Job>>> = HashMap::new();
         for job in jobs {
@@ -165,7 +165,7 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
             match signals.try_recv() {
                 Ok(signal) => match signal {
                     Signal::RestartLogs => {
-                        log!("sync: evm: logs: restarting jobs");
+                        log!("sync: evm: logs: restarting handlers");
                         for handle in handles {
                             handle.abort();
                         }

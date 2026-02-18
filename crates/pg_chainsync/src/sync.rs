@@ -133,11 +133,10 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
         error!("sync: database name was not provided");
     }
 
-    if let Some(config_dir) = CONFIG_DIR.get()
-        && let Ok(config_dir) = config_dir.to_str()
-        && let Err(error) = anyhow_pg_try!(|| {
-            config::sync_from_handlers(std::path::Path::new(config_dir))
-        })
+    if let Err(error) = anyhow_pg_try!(|| {
+        let config_dir = config::resolve_config_dir()?;
+        config::sync_from_handlers(&config_dir)
+    })
     {
         warning!("sync: failed to sync handlers with {}", error);
     }

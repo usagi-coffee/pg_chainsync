@@ -11,12 +11,17 @@ name = "pgrx_embed_pg_chainsync"
 path = "./src/bin/pgrx_embed.rs"
 
 [features]
-default = ["pg17"]
+default = ["pg18"]
+pg13 = ["pgrx/pg13", "pgrx-tests/pg13"]
+pg14 = ["pgrx/pg14", "pgrx-tests/pg14"]
+pg15 = ["pgrx/pg15", "pgrx-tests/pg15"]
+pg16 = ["pgrx/pg16", "pgrx-tests/pg16"]
 pg17 = ["pgrx/pg17", "pgrx-tests/pg17"]
+pg18 = ["pgrx/pg18", "pgrx-tests/pg18"]
 pg_test = []
 
 [dependencies]
-pgrx = "0.15.0"
+pgrx = "0.17.0"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 serde_json = { version = "1.0" }
@@ -41,4 +46,4 @@ evm_core = { package = "evm", path = "../evm" }
 svm_core = { package = "svm", path = "../svm" }
 
 [dev-dependencies]
-pgrx-tests = "0.15.0"
+pgrx-tests = "0.17.0"

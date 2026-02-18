@@ -234,7 +234,22 @@ impl JobOptions {
 
     pub fn is_log_job(&self) -> bool {
         if let Some(options) = &self.evm {
-            return options.log_handler.is_some();
+            if options.log_handler.is_some() {
+                return true;
+            }
+
+            // v2 module handlers do not use SQL log_handler callbacks.
+            // Route EVM stream handlers (event/topic/address filtered) into log ingress.
+            if self.handler_dir.is_some() {
+                return options.event.is_some()
+                    || options.topic0.is_some()
+                    || options.topic1.is_some()
+                    || options.topic2.is_some()
+                    || options.topic3.is_some()
+                    || options.address.is_some();
+            }
+
+            return false;
         } else if let Some(options) = &self.svm {
             return options.log_handler.is_some();
         }

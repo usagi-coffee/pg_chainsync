@@ -9,11 +9,13 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use pgrx::Spi;
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 
 use crate::plugin;
 use crate::types::{Job, JobOptions};
+use crate::worker::CONFIG_DIR;
 
 #[derive(Deserialize, Clone)]
 struct HandlerHeader {
@@ -326,7 +328,23 @@ fn write_handler_status(
     Ok(())
 }
 
+pub fn resolve_config_dir() -> Result<PathBuf> {
+    if let Some(config_dir) = CONFIG_DIR.get()
+        && let Ok(config_dir) = config_dir.to_str()
+        && !config_dir.trim().is_empty()
+    {
+        return Ok(PathBuf::from(config_dir));
+    }
+
+    let data_dir = Spi::get_one::<String>("SHOW data_directory")?
+        .context("SHOW data_directory returned no value")?;
+    Ok(PathBuf::from(data_dir).join("chainsync").join("handlers"))
+}
+
 pub fn sync_from_handlers(config_dir: &Path) -> Result<Vec<RuntimeStatus>> {
+    fs::create_dir_all(config_dir).with_context(|| {
+        format!("creating config directory {}", config_dir.display())
+    })?;
     let handler_dirs = discover_handler_dirs(config_dir)?;
     let mut seen = HashSet::new();
     let mut statuses = Vec::new();

@@ -1,7 +1,6 @@
 use pgrx::prelude::*;
 use pgrx::{
-    GucContext, GucFlags, GucRegistry, PgSharedMemoryInitialization,
-    pg_shmem_init,
+    GucContext, GucFlags, GucRegistry, pg_shmem_init,
 };
 
 #[macro_use]
@@ -82,23 +81,10 @@ mod chainsync {
     }
 
     #[pg_extern]
-    fn register(name: &str, options: pgrx::JsonB) -> i64 {
-        let _ = name;
-        let _ = options;
-        panic!(
-            "chainsync.register is removed in v2. Define handlers under chainsync.config_dir and call chainsync.reload()"
-        );
-    }
-
-    #[pg_extern]
     fn reload() -> pgrx::JsonB {
-        let config_dir = CONFIG_DIR
-            .get()
-            .and_then(|v| v.to_str().ok().map(|s| s.to_string()))
-            .expect("chainsync.config_dir must be configured");
-
         let statuses = Spi::connect(|_| {
-            config::sync_from_handlers(std::path::Path::new(&config_dir))
+            let config_dir = config::resolve_config_dir()?;
+            config::sync_from_handlers(&config_dir)
         })
         .expect("reload failed");
 

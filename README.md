@@ -54,7 +54,8 @@ Copy extension artifacts according to your `pg_config` installation paths.
 shared_preload_libraries = 'pg_chainsync'
 
 chainsync.database = 'postgres'
-chainsync.config_dir = '/etc/pg_chainsync/handlers'
+# optional, defaults to <data_directory>/chainsync/handlers
+# chainsync.config_dir = '/etc/pg_chainsync/handlers'
 ```
 
 Restart PostgreSQL after config changes.
@@ -323,6 +324,39 @@ Typical flow:
 cargo fmt --all
 cargo check
 ```
+
+## Handler developer workflow
+
+Use the helper script for a fast build-deploy-reload loop:
+
+```bash
+bun run scripts/dev-handler.ts <cargo_package> <handler_id>
+```
+
+Example:
+
+```bash
+bun run scripts/dev-handler.ts ohlc_handler ohlc-1m
+```
+
+What it does:
+
+1. Builds the handler crate.
+2. Copies `lib*.so` to `<handlers_dir>/<handler_id>/handler.so`.
+3. Executes `SELECT chainsync.reload();` through `psql`.
+
+Defaults:
+
+- `CHAINSYNC_HANDLERS_DIR`:
+  if unset, script resolves `SHOW data_directory` and uses `<data_directory>/chainsync/handlers`
+- `PGURL=postgresql:///postgres`
+
+Flags:
+
+- `--debug` build debug profile instead of release
+- `--no-reload` skip database reload
+
+This keeps extension restarts out of the hot path while iterating on handler logic.
 
 ## License
 
