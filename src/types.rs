@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::str;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -202,8 +203,16 @@ pub struct JobOptions {
     pub setup_handler: Option<Arc<str>>,
     pub success_handler: Option<Arc<str>>,
     pub failure_handler: Option<Arc<str>>,
-    /// Native plugin module name loaded from chainsync.plugin_dir
-    pub module: Option<Arc<str>>,
+    /// Lookup query id -> SQL path (relative to handler dir)
+    pub lookup_queries: Option<BTreeMap<String, String>>,
+    /// Mutation query id -> SQL path (relative to handler dir)
+    pub mutation_queries: Option<BTreeMap<String, String>>,
+    /// Query ids to prefetch before first module call
+    pub prelookups: Option<Vec<String>>,
+    /// Absolute handler directory path loaded from config scanner
+    pub handler_dir: Option<String>,
+    /// Durable state file path for this handler
+    pub state_path: Option<String>,
 
     pub evm: Option<EvmOptions>,
     pub svm: Option<SvmOptions>,

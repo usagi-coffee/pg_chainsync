@@ -3,6 +3,14 @@ name = "pg_chainsync"
 version = "0.0.0"
 edition = "2024"
 
+[workspace]
+resolver = "2"
+members = [
+  ".",
+  "crates/chainsync_sdk",
+  "examples/v2/handlers/ohlc-1m/module-src",
+]
+
 [lib]
 crate-type = ["cdylib", "lib"]
 
@@ -36,7 +44,6 @@ solana-account-decoder-client-types = "2"
 chrono = "0.4"
 bs58 = "0.5"
 derive_more = "2.0.1"
-indexmap = "2.9.0"
 
 [dev-dependencies]
 pgrx-tests = "0.15.0"

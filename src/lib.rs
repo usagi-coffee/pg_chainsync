@@ -9,7 +9,10 @@ pub mod worker;
 
 pub mod channel;
 pub mod config;
+pub mod module_protocol;
+pub mod module_runtime;
 pub mod plugin;
+pub mod prepared;
 pub mod query;
 pub mod types;
 
@@ -83,7 +86,7 @@ mod chainsync {
         let _ = name;
         let _ = options;
         panic!(
-            "chainsync.register is removed in v2. Define jobs in chainsync.config_dir and call chainsync.reload()"
+            "chainsync.register is removed in v2. Define handlers under chainsync.config_dir and call chainsync.reload()"
         );
     }
 
@@ -93,16 +96,9 @@ mod chainsync {
             .get()
             .and_then(|v| v.to_str().ok().map(|s| s.to_string()))
             .expect("chainsync.config_dir must be configured");
-        let plugin_dir = PLUGIN_DIR
-            .get()
-            .and_then(|v| v.to_str().ok().map(|s| s.to_string()))
-            .expect("chainsync.plugin_dir must be configured");
 
         let statuses = Spi::connect(|_| {
-            config::sync_from_toml(
-                std::path::Path::new(&config_dir),
-                std::path::Path::new(&plugin_dir),
-            )
+            config::sync_from_handlers(std::path::Path::new(&config_dir))
         })
         .expect("reload failed");
 
@@ -139,8 +135,8 @@ extension_sql_file!("../sql/types.sql", name = "types_schema");
 
 use worker::{
     CONFIG_DIR, DATABASE, EVM_BLOCKTICK_RESET, EVM_TASKS, EVM_WS_PERMITS,
-    PLUGIN_DIR, RESTART_COUNT, SIGNALS, SVM_RPC_PERMITS, SVM_SIGNATURES_BUFFER,
-    SVM_TASKS, WORKER_STATUS,
+    RESTART_COUNT, SIGNALS, SVM_RPC_PERMITS, SVM_SIGNATURES_BUFFER, SVM_TASKS,
+    WORKER_STATUS,
 };
 
 #[pg_guard]
@@ -161,17 +157,9 @@ pub extern "C-unwind" fn _PG_init() {
     );
     GucRegistry::define_string_guc(
         c"chainsync.config_dir",
-        c"directory with .toml job files",
-        c"directory with .toml job files",
+        c"directory with handler folders and handler.toml files",
+        c"directory with handler folders and handler.toml files",
         &CONFIG_DIR,
-        GucContext::Postmaster,
-        GucFlags::default(),
-    );
-    GucRegistry::define_string_guc(
-        c"chainsync.plugin_dir",
-        c"directory with native chainsync modules",
-        c"directory with native chainsync modules",
-        &PLUGIN_DIR,
         GucContext::Postmaster,
         GucFlags::default(),
     );

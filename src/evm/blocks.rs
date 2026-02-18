@@ -3,6 +3,7 @@ use pgrx::{log, warning};
 
 use anyhow::{Context, bail, ensure};
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tokio::time::Duration;
@@ -17,6 +18,11 @@ use crate::types::Job;
 
 use crate::channel::Channel;
 use crate::types::*;
+
+fn ingress_key(job: &Job) -> String {
+    let ws = job.options.ws.as_deref().unwrap_or("<missing-ws>");
+    format!("ws={}", ws)
+}
 
 pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
     'blocks: loop {
@@ -39,23 +45,33 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 
         log!("sync: evm: blocks: found {} jobs", jobs.len());
 
+        let mut groups: HashMap<String, Vec<Arc<Job>>> = HashMap::new();
         for job in jobs {
+            groups.entry(ingress_key(&job)).or_default().push(job);
+        }
+
+        log!("sync: evm: blocks: shared ingress groups: {}", groups.len());
+
+        for (key, group_jobs) in groups {
+            let Some(primary) = group_jobs.first().cloned() else {
+                continue;
+            };
             let channel = channel.clone();
             let handle = tokio::spawn(async move {
                 let mut retries = 0;
-                'job: loop {
+                'group: loop {
                     if retries >= 10 {
                         warning!(
-                            "sync: evm: blocks: {}: too many retries, stopping job",
-                            &job.name
+                            "sync: evm: blocks: {}: too many retries, stopping shared group",
+                            key
                         );
                         return;
                     }
 
-                    if let Err(error) = job.connect_evm().await {
+                    if let Err(error) = primary.connect_evm().await {
                         warning!(
-                            "sync: evm: blocks: {}: failed to connect with provider with {}",
-                            &job.name,
+                            "sync: evm: blocks: {}: failed to connect provider with {}",
+                            key,
                             error
                         );
 
@@ -64,12 +80,12 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         continue;
                     };
 
-                    let mut stream = match build_stream(&job).await {
+                    let mut stream = match build_stream(&primary).await {
                         Ok(stream) => StreamNotifyClose::new(stream),
                         Err(error) => {
                             warning!(
-                                "sync: evm: blocks: {}: failed to build stream with {}",
-                                &job.name,
+                                "sync: evm: blocks: {}: failed to build shared stream with {}",
+                                key,
                                 error
                             );
 
@@ -80,32 +96,43 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         }
                     };
 
-                    channel
-                        .send(Message::UpdateJob(job.id, JobStatus::Running));
+                    for job in &group_jobs {
+                        channel.send(Message::UpdateJob(
+                            job.id,
+                            JobStatus::Running,
+                        ));
+                    }
 
-                    log!("sync: evm: blocks: {}: started listening", &job.name);
+                    log!("sync: evm: blocks: {}: started shared listener", key);
                     loop {
                         match stream.next().await {
                             Some(Some(block)) => {
-                                if let Err(error) =
-                                    handle_block(&job, block, &channel).await
-                                {
-                                    warning!(
-                                        "sync: evm: blocks: {}: failed to handle block with {}",
-                                        &job.name,
-                                        error
-                                    );
+                                for job in &group_jobs {
+                                    if let Err(error) = handle_block(
+                                        job,
+                                        block.clone(),
+                                        &channel,
+                                    )
+                                    .await
+                                    {
+                                        warning!(
+                                            "sync: evm: blocks: {}: {}: failed to handle shared block with {}",
+                                            key,
+                                            &job.name,
+                                            error
+                                        );
+                                    }
                                 }
 
                                 retries = 0;
                             }
                             _ => {
                                 warning!(
-                                    "sync: evm: blocks: {}: stream has ended, restarting provider",
-                                    &job.name
+                                    "sync: evm: blocks: {}: shared stream ended, restarting",
+                                    key
                                 );
 
-                                continue 'job;
+                                continue 'group;
                             }
                         }
                     }

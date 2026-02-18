@@ -171,7 +171,7 @@ Required buffer free function:
 pub extern "C" fn chainsync_plugin_free_buffer(ptr: *mut u8, len: usize)
 ```
 
-- Use binary serialization (`rkyv` recommended; `postcard`/`bincode` acceptable).
+- Use binary serialization (`rkyv` recommended).
 - Host enforces strict ABI major version match.
 
 ## Safe plugin development via SDK
@@ -256,9 +256,10 @@ Flow:
 
 1. Event arrives.
 2. Host runs handler-configured prelookup query IDs via prepared SPI plans.
-3. Host builds `Event { event, prefetched }`.
-4. Module receives enriched first call and can skip extra lookup roundtrip.
-5. Module may still emit `NeedLookup` for cache misses or secondary data.
+3. Host caches prelookup results per handler worker process.
+4. Host builds event payload with `prefetched` and `state_path`.
+5. Module receives enriched first call and can skip extra lookup roundtrip.
+6. Module may still emit `NeedLookup` for cache misses or secondary data.
 
 ### Mutation path
 
@@ -273,6 +274,7 @@ Each handler defines lookup/mutation IDs directly in `handler.toml`.
 At reload/startup:
 
 - host loads query definitions from `handler.toml`
+- resolves `${ENV_VAR}` placeholders in SQL files
 - validates IDs/files
 - prepares plans (`SPI_prepare`) and caches handles
 

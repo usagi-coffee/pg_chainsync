@@ -8,6 +8,7 @@ use solana_transaction_status_client_types::{
     TransactionDetails, UiTransactionEncoding,
 };
 
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -23,6 +24,18 @@ use crate::types::Job;
 
 use crate::channel::Channel;
 use crate::types::*;
+
+fn ingress_key(job: &Job) -> String {
+    let rpc = job.options.rpc.as_deref().unwrap_or("<missing-rpc>");
+    let Some(options) = &job.options.svm else {
+        return format!("rpc={}:svm=none", rpc);
+    };
+
+    format!(
+        "rpc={}|mentions={:?}|tx_details={:?}",
+        rpc, options.mentions, options.transaction_details
+    )
+}
 
 pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
     'blocks: loop {
@@ -45,23 +58,33 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 
         log!("sync: svm: blocks: found {} jobs", jobs.len());
 
+        let mut groups: HashMap<String, Vec<Arc<Job>>> = HashMap::new();
         for job in jobs {
+            groups.entry(ingress_key(&job)).or_default().push(job);
+        }
+
+        log!("sync: svm: blocks: shared ingress groups: {}", groups.len());
+
+        for (key, group_jobs) in groups {
+            let Some(primary) = group_jobs.first().cloned() else {
+                continue;
+            };
             let channel = channel.clone();
             let handle = tokio::spawn(async move {
                 let mut retries = 0;
-                'job: loop {
+                'group: loop {
                     if retries >= 10 {
                         warning!(
-                            "sync: svm: blocks: {}: too many retries, stopping job",
-                            &job.name
+                            "sync: svm: blocks: {}: too many retries, stopping shared group",
+                            key
                         );
                         return;
                     }
 
-                    if let Err(error) = job.connect_svm_ws().await {
+                    if let Err(error) = primary.connect_svm_ws().await {
                         warning!(
-                            "sync: svm: blocks: {}: failed to connect with provider with {}",
-                            &job.name,
+                            "sync: svm: blocks: {}: failed to connect ws with {}",
+                            key,
                             error
                         );
 
@@ -70,10 +93,10 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         continue;
                     };
 
-                    if let Err(error) = job.connect_svm_rpc().await {
+                    if let Err(error) = primary.connect_svm_rpc().await {
                         warning!(
-                            "sync: svm: blocks: {}: failed to connect with provider with {}",
-                            &job.name,
+                            "sync: svm: blocks: {}: failed to connect rpc with {}",
+                            key,
                             error
                         );
 
@@ -82,12 +105,12 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         continue;
                     };
 
-                    let mut stream = match build_stream(&job).await {
+                    let mut stream = match build_stream(&primary).await {
                         Ok(stream) => StreamNotifyClose::new(stream),
                         Err(error) => {
                             warning!(
-                                "sync: svm: blocks: {}: failed to build stream with {}",
-                                &job.name,
+                                "sync: svm: blocks: {}: failed to build shared stream with {}",
+                                key,
                                 error
                             );
 
@@ -98,30 +121,41 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         }
                     };
 
-                    channel
-                        .send(Message::UpdateJob(job.id, JobStatus::Running));
+                    for job in &group_jobs {
+                        channel.send(Message::UpdateJob(
+                            job.id,
+                            JobStatus::Running,
+                        ));
+                    }
 
-                    log!("sync: svm: blocks: {}: started listening", &job.name);
+                    log!("sync: svm: blocks: {}: started shared listener", key);
                     loop {
                         match stream.next().await {
                             Some(Some(block)) => {
-                                if let Err(error) =
-                                    handle_block(&job, block, &channel).await
-                                {
-                                    warning!(
-                                        "sync: svm: blocks: {}: failed to handle block with {}",
-                                        &job.name,
-                                        error
-                                    );
+                                for job in &group_jobs {
+                                    if let Err(error) = handle_block(
+                                        job,
+                                        block.clone(),
+                                        &channel,
+                                    )
+                                    .await
+                                    {
+                                        warning!(
+                                            "sync: svm: blocks: {}: {}: failed to handle shared block with {}",
+                                            key,
+                                            &job.name,
+                                            error
+                                        );
+                                    }
                                 }
                             }
                             _ => {
                                 warning!(
-                                    "sync: svm: blocks: {}: stream has ended, restarting provider",
-                                    &job.name
+                                    "sync: svm: blocks: {}: shared stream ended, restarting",
+                                    key
                                 );
 
-                                continue 'job;
+                                continue 'group;
                             }
                         }
                     }

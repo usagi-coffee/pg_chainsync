@@ -1,6 +1,7 @@
 use pgrx::{log, warning};
 use tokio::task::yield_now;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{bail, ensure};
@@ -20,6 +21,26 @@ use bus::BusReader;
 use crate::channel::Channel;
 use crate::evm::blocks::try_block;
 use crate::types::*;
+
+fn ingress_key(job: &Job) -> String {
+    let ws = job.options.ws.as_deref().unwrap_or("<missing-ws>");
+    let Some(options) = &job.options.evm else {
+        return format!("ws={}:evm=none", ws);
+    };
+
+    format!(
+        "ws={}|address={:?}|event={:?}|t0={:?}|t1={:?}|t2={:?}|t3={:?}|from={:?}|to={:?}",
+        ws,
+        options.address,
+        options.event,
+        options.topic0,
+        options.topic1,
+        options.topic2,
+        options.topic3,
+        options.from_block,
+        options.to_block
+    )
+}
 
 pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
     'logs: loop {
@@ -42,24 +63,34 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
 
         log!("sync: evm: logs: found {} jobs", jobs.len());
 
+        let mut groups: HashMap<String, Vec<Arc<Job>>> = HashMap::new();
         for job in jobs {
+            groups.entry(ingress_key(&job)).or_default().push(job);
+        }
+
+        log!("sync: evm: logs: shared ingress groups: {}", groups.len());
+
+        for (key, group_jobs) in groups {
+            let Some(primary) = group_jobs.first().cloned() else {
+                continue;
+            };
             let channel = channel.clone();
             let handle = tokio::spawn(async move {
                 let mut retries = 0;
-                'job: loop {
+                'group: loop {
                     if retries >= 10 {
                         warning!(
-                            "sync: evm: logs: {}: too many retries, stopping job",
-                            &job.name
+                            "sync: evm: logs: {}: too many retries, stopping shared group",
+                            key
                         );
 
                         return;
                     }
 
-                    if let Err(error) = job.connect_evm().await {
+                    if let Err(error) = primary.connect_evm().await {
                         warning!(
-                            "sync: evm: logs: {}: failed to connect with provider with {}",
-                            &job.name,
+                            "sync: evm: logs: {}: failed to connect provider with {}",
+                            key,
                             error
                         );
 
@@ -68,12 +99,12 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         continue;
                     };
 
-                    let mut stream = match build_stream(&job).await {
+                    let mut stream = match build_stream(&primary).await {
                         Ok(stream) => StreamNotifyClose::new(stream),
                         Err(error) => {
                             warning!(
-                                "sync: evm: logs: {}: failed to build stream with {}",
-                                &job.name,
+                                "sync: evm: logs: {}: failed to build shared stream with {}",
+                                key,
                                 error
                             );
 
@@ -84,32 +115,43 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                         }
                     };
 
-                    channel
-                        .send(Message::UpdateJob(job.id, JobStatus::Running));
+                    for job in &group_jobs {
+                        channel.send(Message::UpdateJob(
+                            job.id,
+                            JobStatus::Running,
+                        ));
+                    }
 
-                    log!("sync: evm: logs: {}: started listening", &job.name);
+                    log!("sync: evm: logs: {}: started shared listener", key);
                     loop {
                         match stream.next().await {
-                            Some(Some(log)) => {
-                                if let Err(error) =
-                                    handle_evm_log(&job, log, &channel).await
-                                {
-                                    warning!(
-                                        "sync: evm: logs: {}: failed to handle log with {}",
-                                        &job.name,
-                                        error
-                                    );
+                            Some(Some(event_log)) => {
+                                for job in &group_jobs {
+                                    if let Err(error) = handle_evm_log(
+                                        job,
+                                        event_log.clone(),
+                                        &channel,
+                                    )
+                                    .await
+                                    {
+                                        warning!(
+                                            "sync: evm: logs: {}: {}: failed to handle shared log with {}",
+                                            key,
+                                            &job.name,
+                                            error
+                                        );
+                                    }
                                 }
 
                                 retries = 0;
                             }
                             _ => {
                                 warning!(
-                                    "sync: evm: logs: {}: stream has ended, restarting provider",
-                                    &job.name
+                                    "sync: evm: logs: {}: shared stream ended, restarting",
+                                    key
                                 );
 
-                                continue 'job;
+                                continue 'group;
                             }
                         }
                     }

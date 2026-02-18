@@ -64,3 +64,27 @@ pub fn validate_plugin(path: &Path) -> Result<PluginMetadata> {
         })
     }
 }
+
+pub fn validate_handler_exports(path: &Path) -> Result<()> {
+    // SAFETY: library loading and symbol resolution are read-only checks.
+    unsafe {
+        let library = Library::new(path)
+            .with_context(|| format!("loading plugin {}", path.display()))?;
+        let _handle: libloading::Symbol<
+            unsafe extern "C" fn(
+                input_ptr: *const u8,
+                input_len: usize,
+                out_ptr: *mut *mut u8,
+                out_len: *mut usize,
+            ) -> i32,
+        > = library
+            .get(b"chainsync_handle_event_v1\0")
+            .context("missing symbol chainsync_handle_event_v1")?;
+        let _free: libloading::Symbol<
+            unsafe extern "C" fn(ptr: *mut u8, len: usize),
+        > = library
+            .get(b"chainsync_plugin_free_buffer\0")
+            .context("missing symbol chainsync_plugin_free_buffer")?;
+    }
+    Ok(())
+}

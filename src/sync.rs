@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{OnceLock, RwLock};
 
 use pgrx::bgworkers::*;
 use pgrx::log;
@@ -20,11 +21,94 @@ use bus::Bus;
 use crate::channel::*;
 use crate::config;
 use crate::evm;
+use crate::module_protocol;
+use crate::module_runtime;
+use crate::prepared;
 use crate::query::PgHandler;
 use crate::svm;
 use crate::types::*;
 use crate::worker;
 use crate::worker::*;
+use alloy::core::hex;
+use serde_json::json;
+
+static PRELOOKUP_CACHE: OnceLock<RwLock<HashMap<i64, serde_json::Value>>> =
+    OnceLock::new();
+
+fn prelookup_cache() -> &'static RwLock<HashMap<i64, serde_json::Value>> {
+    PRELOOKUP_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn resolve_prefetched(
+    job: &Arc<Job>,
+) -> Result<Option<serde_json::Value>, anyhow::Error> {
+    let Some(prelookups) = &job.options.prelookups else {
+        return Ok(None);
+    };
+    if prelookups.is_empty() {
+        return Ok(None);
+    }
+
+    if let Some(cached) = prelookup_cache()
+        .read()
+        .expect("prelookup cache read")
+        .get(&job.id)
+        .cloned()
+    {
+        return Ok(Some(cached));
+    }
+
+    let mut values = serde_json::Map::new();
+    for lookup_id in prelookups {
+        let value = prepared::execute_lookup(job.id, lookup_id)?;
+        values.insert(lookup_id.clone(), value);
+    }
+
+    let prefetched = serde_json::Value::Object(values);
+    prelookup_cache()
+        .write()
+        .expect("prelookup cache write")
+        .insert(job.id, prefetched.clone());
+    Ok(Some(prefetched))
+}
+
+fn invoke_handler_module(
+    job: &Arc<Job>,
+    mut payload: serde_json::Value,
+) -> Result<(), anyhow::Error> {
+    if let Some(prefetched) = resolve_prefetched(job)?
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("prefetched".into(), prefetched);
+    }
+    if let Some(state_path) = &job.options.state_path
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert(
+            "state_path".into(),
+            serde_json::Value::String(state_path.clone()),
+        );
+    }
+
+    let bytes = serde_json::to_vec(&payload)?;
+    let out = module_runtime::invoke(job, &bytes)?;
+    let response = module_protocol::decode_response(&out)?;
+
+    match response {
+        module_protocol::ModuleResponse::Ignore => Ok(()),
+        module_protocol::ModuleResponse::Error { message } => {
+            anyhow::bail!("module returned error: {}", message);
+        }
+        module_protocol::ModuleResponse::Done { mutations } => {
+            for mutation in mutations {
+                let payload =
+                    module_protocol::payload_to_jsonb(mutation.payload)?;
+                prepared::execute_mutation(job.id, &mutation.id, payload)?;
+            }
+            Ok(())
+        }
+    }
+}
 
 #[pg_guard]
 #[unsafe(no_mangle)]
@@ -49,21 +133,13 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
         error!("sync: database name was not provided");
     }
 
-    if let (Some(config_dir), Some(plugin_dir)) =
-        (CONFIG_DIR.get(), PLUGIN_DIR.get())
+    if let Some(config_dir) = CONFIG_DIR.get()
+        && let Ok(config_dir) = config_dir.to_str()
+        && let Err(error) = anyhow_pg_try!(|| {
+            config::sync_from_handlers(std::path::Path::new(config_dir))
+        })
     {
-        if let (Ok(config_dir), Ok(plugin_dir)) =
-            (config_dir.to_str(), plugin_dir.to_str())
-        {
-            if let Err(error) = anyhow_pg_try!(|| {
-                config::sync_from_toml(
-                    std::path::Path::new(config_dir),
-                    std::path::Path::new(plugin_dir),
-                )
-            }) {
-                warning!("sync: failed to sync toml jobs with {}", error);
-            }
-        }
+        warning!("sync: failed to sync handlers with {}", error);
     }
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -72,6 +148,10 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
         .expect("sync: Failed to create async runtime");
 
     log!("sync: worker has started!");
+    prelookup_cache()
+        .write()
+        .expect("prelookup cache write")
+        .clear();
 
     let jobs = match anyhow_pg_try!(|| Job::query_all()) {
         Ok(jobs) => jobs,
@@ -88,6 +168,12 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
     }
 
     log!("sync: {} jobs found", jobs.len());
+    match prepared::prepare_all_jobs(&jobs) {
+        Ok(total) => log!("sync: prepared {} handler queries", total),
+        Err(error) => {
+            warning!("sync: failed to prepare handler queries with {}", error)
+        }
+    }
 
     *WORKER_STATUS.exclusive() = WorkerStatus::RUNNING;
 
@@ -326,19 +412,31 @@ async fn handle_message(mut stream: MessageStream) {
                     &block.number
                 );
 
-                let Some(handler) = &options.block_handler else {
-                    error!("sync: evm: blocks: {}: missing handler", job.name);
-                };
-
-                let id = job.id;
-                if let Err(error) =
-                    anyhow_pg_try!(|| block.call_handler(&handler, id))
-                {
-                    warning!(
-                        "sync: evm: blocks: {}: block handler failed with {}",
-                        job.id,
-                        error
-                    );
+                if let Some(handler) = &options.block_handler {
+                    let id = job.id;
+                    if let Err(error) =
+                        anyhow_pg_try!(|| block.call_handler(handler, id))
+                    {
+                        warning!(
+                            "sync: evm: blocks: {}: block handler failed with {}",
+                            job.id,
+                            error
+                        );
+                    }
+                } else {
+                    let payload = json!({
+                        "event": "evm_block",
+                        "job_id": job.id,
+                        "number": block.number,
+                        "hash": format!("{:#x}", block.hash),
+                    });
+                    if let Err(error) = invoke_handler_module(&job, payload) {
+                        warning!(
+                            "sync: evm: blocks: {}: module invocation failed with {}",
+                            job.id,
+                            error
+                        );
+                    }
                 }
             }
             Message::EvmLog(log, job) => {
@@ -354,19 +452,44 @@ async fn handle_message(mut stream: MessageStream) {
                     log.log_index.as_ref().unwrap()
                 );
 
-                let Some(handler) = &options.log_handler else {
-                    error!("sync: evm: logs: {}: missing handler", job.name);
-                };
-
-                let id = job.id;
-                if let Err(error) =
-                    anyhow_pg_try!(|| log.call_handler(&handler, id))
-                {
-                    warning!(
-                        "sync: evm: logs: {}: log handler failed with {}",
-                        job.id,
-                        error
-                    );
+                if let Some(handler) = &options.log_handler {
+                    let id = job.id;
+                    if let Err(error) =
+                        anyhow_pg_try!(|| log.call_handler(handler, id))
+                    {
+                        warning!(
+                            "sync: evm: logs: {}: log handler failed with {}",
+                            job.id,
+                            error
+                        );
+                    }
+                } else {
+                    let topics = log
+                        .topics()
+                        .iter()
+                        .map(|topic| format!("{:#x}", topic))
+                        .collect::<Vec<_>>();
+                    let payload = json!({
+                        "event": "evm_log",
+                        "job_id": job.id,
+                        "block_number": log.block_number,
+                        "transaction_hash": log.transaction_hash.as_ref().map(|v| format!("{:#x}", v)),
+                        "log_index": log.log_index,
+                        "address": format!("{:#x}", log.address()),
+                        "topics": topics,
+                        "data": hex::encode(log.data().data.clone()),
+                        "ingest_unix": std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0),
+                    });
+                    if let Err(error) = invoke_handler_module(&job, payload) {
+                        warning!(
+                            "sync: evm: logs: {}: module invocation failed with {}",
+                            job.id,
+                            error
+                        );
+                    }
                 }
             }
             Message::SvmBlock(block, job) => {
@@ -381,19 +504,31 @@ async fn handle_message(mut stream: MessageStream) {
                     block.block_height.as_ref().unwrap()
                 );
 
-                let Some(handler) = &options.block_handler else {
-                    error!("sync: svm: blocks: {}: missing handler", job.name);
-                };
-
-                let id = job.id;
-                if let Err(error) =
-                    anyhow_pg_try!(|| block.call_handler(&handler, id))
-                {
-                    warning!(
-                        "sync: evm: blocks: {}: block handler failed with {}",
-                        job.id,
-                        error
-                    );
+                if let Some(handler) = &options.block_handler {
+                    let id = job.id;
+                    if let Err(error) =
+                        anyhow_pg_try!(|| block.call_handler(handler, id))
+                    {
+                        warning!(
+                            "sync: evm: blocks: {}: block handler failed with {}",
+                            job.id,
+                            error
+                        );
+                    }
+                } else {
+                    let payload = json!({
+                        "event": "svm_block",
+                        "job_id": job.id,
+                        "block_height": block.block_height,
+                        "block_hash": block.blockhash,
+                    });
+                    if let Err(error) = invoke_handler_module(&job, payload) {
+                        warning!(
+                            "sync: svm: blocks: {}: module invocation failed with {}",
+                            job.id,
+                            error
+                        );
+                    }
                 }
             }
             Message::SvmLog(log, job) => {
@@ -409,19 +544,32 @@ async fn handle_message(mut stream: MessageStream) {
                     log.context.slot
                 );
 
-                let Some(handler) = &options.log_handler else {
-                    error!("sync: svm: logs: {}: missing handler", job.name);
-                };
-
-                let id = job.id;
-                if let Err(error) =
-                    anyhow_pg_try!(|| log.call_handler(&handler, id))
-                {
-                    warning!(
-                        "sync: svm: logs: {}: log handler failed with {}",
-                        job.id,
-                        error
-                    );
+                if let Some(handler) = &options.log_handler {
+                    let id = job.id;
+                    if let Err(error) =
+                        anyhow_pg_try!(|| log.call_handler(handler, id))
+                    {
+                        warning!(
+                            "sync: svm: logs: {}: log handler failed with {}",
+                            job.id,
+                            error
+                        );
+                    }
+                } else {
+                    let payload = json!({
+                        "event": "svm_log",
+                        "job_id": job.id,
+                        "slot": log.context.slot,
+                        "signature": log.value.signature,
+                        "logs": log.value.logs,
+                    });
+                    if let Err(error) = invoke_handler_module(&job, payload) {
+                        warning!(
+                            "sync: svm: logs: {}: module invocation failed with {}",
+                            job.id,
+                            error
+                        );
+                    }
                 }
             }
             Message::SvmTransaction(message, job) => {
@@ -443,22 +591,30 @@ async fn handle_message(mut stream: MessageStream) {
                     &account.address
                 );
 
-                let Some(handler) = &options.account_handler else {
-                    error!(
-                        "sync: svm: accounts: {}: missing handler",
-                        job.name
-                    );
-                };
-
-                let id = job.id;
-                if let Err(error) =
-                    anyhow_pg_try!(|| account.call_handler(&handler, id))
-                {
-                    warning!(
-                        "sync: svm: accounts: {}: account handler failed with {}",
-                        job.id,
-                        error
-                    );
+                if let Some(handler) = &options.account_handler {
+                    let id = job.id;
+                    if let Err(error) =
+                        anyhow_pg_try!(|| account.call_handler(handler, id))
+                    {
+                        warning!(
+                            "sync: svm: accounts: {}: account handler failed with {}",
+                            job.id,
+                            error
+                        );
+                    }
+                } else {
+                    let payload = json!({
+                        "event": "svm_account",
+                        "job_id": job.id,
+                        "address": account.address,
+                    });
+                    if let Err(error) = invoke_handler_module(&job, payload) {
+                        warning!(
+                            "sync: svm: accounts: {}: module invocation failed with {}",
+                            job.id,
+                            error
+                        );
+                    }
                 }
             }
             Message::Handler(handler, sender, job) => {

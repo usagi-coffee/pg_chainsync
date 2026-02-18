@@ -1,0 +1,19 @@
+[handler]
+id = "ohlc-1m"
+chain = "evm"
+mode = "stream"
+
+ws = "${EVM_WS_URL}"
+
+[evm]
+address = "${POOL_ADDRESS}"
+event = "Swap(address,uint256,uint256,uint256,uint256,address)"
+
+[queries.mutations.upsert_ohlc_1m]
+sql = "queries/upsert_ohlc_1m.sql"
+
+[queries.lookups.pool_meta]
+sql = "queries/pool_meta.sql"
+
+[runtime]
+prelookups = ["pool_meta"]

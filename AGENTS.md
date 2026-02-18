@@ -69,7 +69,7 @@ Protocol requirements:
 ## First-call enrichment model
 
 - Support handler-configured `prelookups` resolved by host before first module call.
-- Pass prefetched values in first `Event` input payload.
+- Pass prefetched values and handler `state_path` in module input payload.
 - Keep `NeedLookup` path available for misses or conditional secondary data.
 
 ## Lifecycle model
