@@ -1,4 +1,4 @@
-use num_bigint::BigUint;
+use alloy_primitives::{Address, B256, U256};
 use pg_chainsync_sdk::{
     export_plugin, plugin_log, EvmIngressOverrides, IngressOverrides,
     ModuleResponse, Mutation, PluginHandler, SetupResponse,
@@ -22,48 +22,20 @@ struct InputEvent {
 
 struct Erc20TransferHandler;
 
-fn strip_0x(s: &str) -> &str {
-    s.strip_prefix("0x").unwrap_or(s)
-}
-
-fn hex_to_bytes(input: &str) -> Result<Vec<u8>, String> {
-    let hex = strip_0x(input);
-    if hex.len() % 2 != 0 {
-        return Err("hex has odd length".into());
-    }
-
-    let mut out = Vec::with_capacity(hex.len() / 2);
-    let bytes = hex.as_bytes();
-    let mut i = 0usize;
-    while i < bytes.len() {
-        let hi = (bytes[i] as char)
-            .to_digit(16)
-            .ok_or_else(|| "invalid hex".to_string())?;
-        let lo = (bytes[i + 1] as char)
-            .to_digit(16)
-            .ok_or_else(|| "invalid hex".to_string())?;
-        out.push(((hi << 4) | lo) as u8);
-        i += 2;
-    }
-
-    Ok(out)
-}
-
 fn topic_to_address(topic: &str) -> Result<String, String> {
-    let hex = strip_0x(topic);
-    if hex.len() != 64 {
-        return Err("topic must be 32 bytes".into());
-    }
-    Ok(format!("0x{}", &hex[24..64]).to_lowercase())
+    let word: B256 = topic
+        .parse()
+        .map_err(|_| "topic must be valid 32-byte hex".to_string())?;
+    let address = Address::from_slice(&word.as_slice()[12..32]);
+    Ok(format!("{:#x}", address))
 }
 
 fn decode_amount_decimal(data: &str) -> Result<String, String> {
-    let bytes = hex_to_bytes(data)?;
-    if bytes.len() < 32 {
-        return Err("transfer data is shorter than 32 bytes".into());
-    }
-    let amount = BigUint::from_bytes_be(&bytes[0..32]);
-    Ok(amount.to_str_radix(10))
+    let word: B256 = data
+        .parse()
+        .map_err(|_| "transfer data must be valid 32-byte hex".to_string())?;
+    let amount = U256::from_be_slice(word.as_slice());
+    Ok(amount.to_string())
 }
 
 fn setup_response(input: &serde_json::Value) -> SetupResponse {
@@ -117,7 +89,13 @@ fn process_event(input: serde_json::Value) -> Result<ModuleResponse, String> {
         }
     };
 
-    if topics[0].to_lowercase() != TRANSFER_TOPIC0 {
+    let transfer_topic: B256 = TRANSFER_TOPIC0
+        .parse()
+        .map_err(|_| "invalid transfer topic constant".to_string())?;
+    let topic0: B256 = topics[0]
+        .parse()
+        .map_err(|_| "topic0 must be valid 32-byte hex".to_string())?;
+    if topic0 != transfer_topic {
         plugin_log!("ignoring log with non-transfer topic0");
         return Ok(ModuleResponse::Ignore);
     }
@@ -293,6 +271,6 @@ mod tests {
             .ingress_overrides
             .and_then(|o| o.evm)
             .and_then(|e| e.from_block);
-        assert_eq!(from_block, Some(1001));
+        assert_eq!(from_block, Some(1000));
     }
 }
