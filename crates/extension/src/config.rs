@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::env;
@@ -9,16 +10,18 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use pgrx::{Spi, log, warning};
+use pgrx::{JsonB, Spi, log, warning};
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 
+use crate::module_runtime;
 use crate::plugin;
-use crate::types::{HandlerRuntime, HandlerOptions};
+use crate::types::{HandlerOptions, HandlerRuntime};
 
 #[derive(Deserialize, Clone)]
 struct HandlerHeader {
     id: String,
+    plugin: String,
     chain: String,
     mode: String,
 }
@@ -51,6 +54,31 @@ struct HandlerToml {
     svm: Option<crate::types::SvmOptions>,
 }
 
+#[derive(Debug, Deserialize)]
+struct SetupResponse {
+    ingress_overrides: Option<IngressOverrides>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IngressOverrides {
+    ws: Option<String>,
+    rpc: Option<String>,
+    evm: Option<EvmIngressOverrides>,
+    svm: Option<SvmIngressOverrides>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EvmIngressOverrides {
+    from_block: Option<i64>,
+    to_block: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SvmIngressOverrides {
+    from_slot: Option<u64>,
+    to_slot: Option<u64>,
+}
+
 #[derive(Serialize)]
 pub struct RuntimeStatus {
     pub handler_id: String,
@@ -64,6 +92,11 @@ pub struct SyncOutcome {
     pub statuses: Vec<RuntimeStatus>,
     pub restart_blocks: bool,
     pub restart_logs: bool,
+}
+
+struct LoadedPlugin {
+    path: PathBuf,
+    content_hash: String,
 }
 
 struct LoadedHandler {
@@ -105,23 +138,89 @@ fn resolve_opt(value: Option<String>) -> Result<Option<String>> {
     value.map(|v| resolve_env(&v)).transpose()
 }
 
-fn discover_handler_modules(config_dir: &Path) -> Result<Vec<PathBuf>> {
-    let mut modules = Vec::new();
-    for entry in fs::read_dir(config_dir)
-        .with_context(|| format!("reading dir {}", config_dir.display()))?
+fn hash_file(path: &Path) -> Result<String> {
+    let mut hasher = DefaultHasher::new();
+    let bytes =
+        fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    path.to_string_lossy().hash(&mut hasher);
+    bytes.hash(&mut hasher);
+    Ok(format!("{:016x}", hasher.finish()))
+}
+
+fn discover_plugins(chainsync_dir: &Path) -> Result<HashMap<String, LoadedPlugin>> {
+    let plugins_dir = chainsync_dir.join("plugins");
+    fs::create_dir_all(&plugins_dir)
+        .with_context(|| format!("creating {}", plugins_dir.display()))?;
+
+    let mut plugins = HashMap::new();
+    for entry in fs::read_dir(&plugins_dir)
+        .with_context(|| format!("reading dir {}", plugins_dir.display()))?
     {
         let entry = entry?;
         let path = entry.path();
         if !path.is_file() {
             continue;
         }
-        if path.extension().and_then(|ext| ext.to_str()) == Some("so") {
-            modules.push(path);
+        if path.extension().and_then(|ext| ext.to_str()) != Some("so") {
+            continue;
+        }
+
+        plugin::validate_plugin(&path)
+            .with_context(|| format!("invalid plugin {}", path.display()))?;
+        plugin::validate_handler_exports(&path).with_context(|| {
+            format!("invalid plugin exports {}", path.display())
+        })?;
+
+        let plugin_name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .context("plugin filename is not valid utf8")?
+            .to_string();
+
+        if plugins.contains_key(&plugin_name) {
+            bail!("duplicate plugin '{}'", plugin_name);
+        }
+
+        plugins.insert(
+            plugin_name,
+            LoadedPlugin {
+                path: path.clone(),
+                content_hash: hash_file(&path)?,
+            },
+        );
+    }
+
+    if plugins.is_empty() {
+        warning!(
+            "sync: plugins: no plugin modules found in {}",
+            plugins_dir.display()
+        );
+    }
+
+    Ok(plugins)
+}
+
+fn discover_handler_files(chainsync_dir: &Path) -> Result<Vec<PathBuf>> {
+    let handlers_dir = chainsync_dir.join("handlers");
+    fs::create_dir_all(&handlers_dir)
+        .with_context(|| format!("creating {}", handlers_dir.display()))?;
+
+    let mut handler_files = Vec::new();
+    for entry in fs::read_dir(&handlers_dir)
+        .with_context(|| format!("reading dir {}", handlers_dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) == Some("toml") {
+            handler_files.push(path);
         }
     }
 
-    modules.sort();
-    Ok(modules)
+    handler_files.sort();
+    Ok(handler_files)
 }
 
 fn materialize_query_sql(
@@ -146,7 +245,7 @@ fn materialize_query_sql(
             }
             if let Some(path) = &def.sql {
                 bail!(
-                    "lookup query '{}' uses sql='{}', but SO-only mode requires sql_inline",
+                    "lookup query '{}' uses sql='{}', but v2 requires sql_inline in handler TOML",
                     id,
                     path
                 );
@@ -170,7 +269,7 @@ fn materialize_query_sql(
             }
             if let Some(path) = &def.sql {
                 bail!(
-                    "mutation query '{}' uses sql='{}', but SO-only mode requires sql_inline",
+                    "mutation query '{}' uses sql='{}', but v2 requires sql_inline in handler TOML",
                     id,
                     path
                 );
@@ -207,27 +306,22 @@ fn validate_prelookups(
     Ok(())
 }
 
-fn hash_handler_module(handler_module: &Path) -> Result<String> {
-    let mut hasher = DefaultHasher::new();
-    let bytes = fs::read(handler_module)
-        .with_context(|| format!("reading {}", handler_module.display()))?;
-    handler_module.to_string_lossy().hash(&mut hasher);
-    bytes.hash(&mut hasher);
-    Ok(format!("{:016x}", hasher.finish()))
-}
-
-fn parse_handler(config_dir: &Path, handler_module: &Path) -> Result<LoadedHandler> {
-    let source = plugin::read_handler_toml(handler_module).with_context(|| {
-        format!("reading embedded handler.toml from {}", handler_module.display())
-    })?;
-    let parsed: HandlerToml = toml::from_str(&source).with_context(|| {
-        format!("parsing embedded handler.toml from {}", handler_module.display())
-    })?;
+fn parse_handler(
+    chainsync_dir: &Path,
+    handler_file: &Path,
+    plugins: &HashMap<String, LoadedPlugin>,
+) -> Result<LoadedHandler> {
+    let source = fs::read_to_string(handler_file)
+        .with_context(|| format!("reading {}", handler_file.display()))?;
+    let parsed: HandlerToml = toml::from_str(&source)
+        .with_context(|| format!("parsing {}", handler_file.display()))?;
 
     if parsed.handler.id.trim().is_empty() {
         bail!("handler.id is empty");
     }
-
+    if parsed.handler.plugin.trim().is_empty() {
+        bail!("handler.plugin is empty");
+    }
     if parsed.handler.chain != "evm" && parsed.handler.chain != "svm" {
         bail!("handler.chain must be one of: evm, svm");
     }
@@ -242,26 +336,17 @@ fn parse_handler(config_dir: &Path, handler_module: &Path) -> Result<LoadedHandl
     {
         bail!("handler.chain=evm requires top-level ws");
     }
-
     if parsed.handler.mode != "stream" {
         bail!("handler.mode must be 'stream' in v2");
     }
 
-    if !handler_module.is_file() {
-        bail!("missing module binary {}", handler_module.display());
-    }
-
-    let metadata = plugin::validate_plugin(handler_module)
-        .with_context(|| format!("invalid module {}", handler_module.display()))?;
-    plugin::validate_handler_exports(handler_module).with_context(|| {
-        format!("invalid handler exports {}", handler_module.display())
+    let plugin = plugins.get(&parsed.handler.plugin).with_context(|| {
+        format!(
+            "handler.plugin '{}' not found in {}/plugins",
+            parsed.handler.plugin,
+            chainsync_dir.display()
+        )
     })?;
-    let _ = (
-        metadata.abi_major,
-        metadata.abi_minor,
-        metadata.name,
-        metadata.version,
-    );
 
     let (lookup_queries, mutation_queries) = match parsed.queries {
         Some(ref queries) => materialize_query_sql(queries)?,
@@ -270,17 +355,16 @@ fn parse_handler(config_dir: &Path, handler_module: &Path) -> Result<LoadedHandl
 
     let prelookups = parsed.runtime.and_then(|runtime| runtime.prelookups);
     validate_prelookups(&prelookups, &lookup_queries)?;
-    let content_hash = hash_handler_module(handler_module)?;
 
-    let module_name = handler_module
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("unknown")
-        .to_string();
+    let mut content_hasher = DefaultHasher::new();
+    source.hash(&mut content_hasher);
+    plugin.content_hash.hash(&mut content_hasher);
+    let content_hash = format!("{:016x}", content_hasher.finish());
 
+    let handler_id = parsed.handler.id.clone();
     Ok(LoadedHandler {
-        id: parsed.handler.id.clone(),
-        module_name,
+        id: handler_id.clone(),
+        module_name: handler_id.clone(),
         content_hash: content_hash.clone(),
         options: HandlerOptions {
             rpc: resolve_opt(parsed.rpc)?,
@@ -288,14 +372,19 @@ fn parse_handler(config_dir: &Path, handler_module: &Path) -> Result<LoadedHandl
             lookup_queries,
             mutation_queries,
             prelookups,
-            module_path: Some(handler_module.to_string_lossy().into_owned()),
+            plugin_path: Some(plugin.path.to_string_lossy().into_owned()),
             content_hash: Some(content_hash),
             state_path: Some(
-                config_dir
-                    .parent()
-                    .unwrap_or(config_dir)
+                chainsync_dir
                     .join("state")
-                    .join(format!("{}.bin", &parsed.handler.id))
+                    .join(format!("{}.bin", handler_id))
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            log_path: Some(
+                chainsync_dir
+                    .join("logs")
+                    .join(format!("{}.log", handler_id))
                     .to_string_lossy()
                     .into_owned(),
             ),
@@ -306,21 +395,18 @@ fn parse_handler(config_dir: &Path, handler_module: &Path) -> Result<LoadedHandl
 }
 
 fn write_handler_status(
-    config_dir: &Path,
+    chainsync_dir: &Path,
     status: &RuntimeStatus,
 ) -> Result<()> {
-    let chainsync_dir = config_dir.parent().unwrap_or(config_dir);
     let logs_dir = chainsync_dir.join("logs");
     fs::create_dir_all(&logs_dir)
         .with_context(|| format!("creating logs directory {}", logs_dir.display()))?;
     let state_dir = chainsync_dir.join("state");
-    fs::create_dir_all(&state_dir)
-        .with_context(|| format!("creating state directory {}", state_dir.display()))?;
-    let log_name = status
-        .module_name
-        .as_deref()
-        .unwrap_or(status.handler_id.as_str());
-    let log_path = logs_dir.join(format!("{}.log", log_name));
+    fs::create_dir_all(&state_dir).with_context(|| {
+        format!("creating state directory {}", state_dir.display())
+    })?;
+
+    let log_path = logs_dir.join(format!("{}.log", status.handler_id));
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -338,6 +424,90 @@ fn write_handler_status(
         .with_context(|| format!("writing {}", log_path.display()))?;
 
     Ok(())
+}
+
+fn run_handler_setup(handler: &HandlerRuntime) -> Result<Option<IngressOverrides>> {
+    let prefetched = setup_prefetched(&handler.options)?;
+    let payload = serde_json::json!({
+        "handler_id": handler.id,
+        "handler_name": handler.name,
+        "state_path": handler.options.state_path,
+        "log_path": handler.options.log_path,
+        "prefetched": prefetched,
+    });
+    let bytes = serde_json::to_vec(&payload)?;
+    let response = module_runtime::setup(handler, &bytes)?;
+    if response.is_null() {
+        return Ok(None);
+    }
+    let parsed: SetupResponse = serde_json::from_value(response)
+        .context("invalid setup response shape")?;
+    Ok(parsed.ingress_overrides)
+}
+
+fn setup_prefetched(options: &HandlerOptions) -> Result<Option<serde_json::Value>> {
+    let Some(prelookups) = &options.prelookups else {
+        return Ok(None);
+    };
+    if prelookups.is_empty() {
+        return Ok(None);
+    }
+    let Some(lookups) = &options.lookup_queries else {
+        return Ok(None);
+    };
+
+    let mut values = serde_json::Map::new();
+    for lookup_id in prelookups {
+        let sql = lookups.get(lookup_id).with_context(|| {
+            format!("setup prelookup '{}' not found in lookup queries", lookup_id)
+        })?;
+        let normalized = sql.trim().trim_end_matches(';');
+        let wrapped = format!(
+            "SELECT COALESCE(jsonb_agg(t), '[]'::jsonb) FROM ({}) AS t",
+            normalized
+        );
+        let result = Spi::get_one::<JsonB>(&wrapped)
+            .with_context(|| format!("executing setup prelookup '{}'", lookup_id))?
+            .context(format!(
+                "setup prelookup '{}' did not return jsonb",
+                lookup_id
+            ))?;
+        values.insert(lookup_id.clone(), result.0);
+    }
+
+    Ok(Some(serde_json::Value::Object(values)))
+}
+
+fn apply_ingress_overrides(
+    options: &mut HandlerOptions,
+    overrides: IngressOverrides,
+) {
+    if let Some(ws) = overrides.ws {
+        options.ws = Some(ws);
+    }
+    if let Some(rpc) = overrides.rpc {
+        options.rpc = Some(rpc);
+    }
+    if let Some(evm_overrides) = overrides.evm
+        && let Some(evm) = options.evm.as_mut()
+    {
+        if evm_overrides.from_block.is_some() {
+            evm.from_block = evm_overrides.from_block;
+        }
+        if evm_overrides.to_block.is_some() {
+            evm.to_block = evm_overrides.to_block;
+        }
+    }
+    if let Some(svm_overrides) = overrides.svm
+        && let Some(svm) = options.svm.as_mut()
+    {
+        if svm_overrides.from_slot.is_some() {
+            svm.from_slot = svm_overrides.from_slot;
+        }
+        if svm_overrides.to_slot.is_some() {
+            svm.to_slot = svm_overrides.to_slot;
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -402,20 +572,22 @@ fn routing_snapshots(handlers: &[HandlerRuntime]) -> Vec<RoutingSnapshot> {
 pub fn resolve_config_dir() -> Result<PathBuf> {
     let data_dir = Spi::get_one::<String>("SHOW data_directory")?
         .context("SHOW data_directory returned no value")?;
-    Ok(PathBuf::from(data_dir).join("chainsync").join("handlers"))
+    Ok(PathBuf::from(data_dir).join("chainsync"))
 }
 
-pub fn sync_from_handlers(config_dir: &Path) -> Result<SyncOutcome> {
-    fs::create_dir_all(config_dir).with_context(|| {
-        format!("creating config directory {}", config_dir.display())
-    })?;
-    let handler_modules = discover_handler_modules(config_dir)?;
-    if handler_modules.is_empty() {
+pub fn sync_from_handlers(chainsync_dir: &Path) -> Result<SyncOutcome> {
+    fs::create_dir_all(chainsync_dir)
+        .with_context(|| format!("creating {}", chainsync_dir.display()))?;
+    let plugins = discover_plugins(chainsync_dir)?;
+    let handler_files = discover_handler_files(chainsync_dir)?;
+
+    if handler_files.is_empty() {
         warning!(
-            "sync: handlers: no handler modules found in {}",
-            config_dir.display()
+            "sync: handlers: no handler TOML files found in {}",
+            chainsync_dir.join("handlers").display()
         );
     }
+
     let mut seen = HashSet::new();
     let mut statuses = Vec::new();
     let mut loaded_handlers = Vec::new();
@@ -434,72 +606,83 @@ pub fn sync_from_handlers(config_dir: &Path) -> Result<SyncOutcome> {
         })
         .collect::<BTreeMap<_, _>>();
     let previous_snapshots = routing_snapshots(&previous_handlers);
-    for handler_module in handler_modules {
-        let result = parse_handler(config_dir, &handler_module).and_then(|handler| {
-            if !seen.insert(handler.id.clone()) {
-                bail!("duplicate handler.id {}", handler.id);
-            }
-            let was_known = previous_handler_names.contains(&handler.id);
-            let previous_hash = previous_hashes.get(&handler.id);
-            let changed =
-                !matches!(previous_hash, Some(existing) if existing == &handler.content_hash);
 
-            loaded_handlers.push(HandlerRuntime {
-                id: stable_handler_id(&handler.id),
-                name: handler.id.clone(),
-                status: "STOPPED".to_string(),
-                options: handler.options,
-                evm: OnceCell::const_new(),
-                svm_ws: OnceCell::const_new(),
-                svm_rpc: OnceCell::const_new(),
-            });
+    for handler_file in handler_files {
+        let result =
+            parse_handler(chainsync_dir, &handler_file, &plugins).and_then(
+                |handler| {
+                    if !seen.insert(handler.id.clone()) {
+                        bail!("duplicate handler.id {}", handler.id);
+                    }
+                    let was_known =
+                        previous_handler_names.contains(&handler.id);
+                    let previous_hash = previous_hashes.get(&handler.id);
+                    let changed = !matches!(
+                        previous_hash,
+                        Some(existing) if existing == &handler.content_hash
+                    );
 
-            if !was_known {
-                log!("sync: handlers: registered {}", handler.id);
-                let status = RuntimeStatus {
-                    handler_id: handler.id.clone(),
-                    module_name: Some(handler.module_name.clone()),
-                    status: "REGISTERED".into(),
-                    last_error: None,
-                };
-                write_handler_status(config_dir, &status)?;
-                statuses.push(status);
-            } else if changed {
-                log!("sync: handlers: updated {}", handler.id);
-                let status = RuntimeStatus {
-                    handler_id: handler.id.clone(),
-                    module_name: Some(handler.module_name.clone()),
-                    status: "UPDATED".into(),
-                    last_error: None,
-                };
-                write_handler_status(config_dir, &status)?;
-                statuses.push(status);
-            }
+                    let mut runtime = HandlerRuntime {
+                        id: stable_handler_id(&handler.id),
+                        name: handler.id.clone(),
+                        status: "STOPPED".to_string(),
+                        options: handler.options,
+                        evm: OnceCell::const_new(),
+                        svm_ws: OnceCell::const_new(),
+                        svm_rpc: OnceCell::const_new(),
+                    };
+                    if let Some(overrides) =
+                        run_handler_setup(&runtime).with_context(|| {
+                        format!("running setup for handler {}", runtime.name)
+                    })? {
+                        apply_ingress_overrides(&mut runtime.options, overrides);
+                    }
+                    loaded_handlers.push(runtime);
 
-            Ok(handler.id)
-        });
+                    if !was_known {
+                        log!("sync: handlers: registered {}", handler.id);
+                        let status = RuntimeStatus {
+                            handler_id: handler.id.clone(),
+                            module_name: Some(handler.module_name.clone()),
+                            status: "REGISTERED".into(),
+                            last_error: None,
+                        };
+                        write_handler_status(chainsync_dir, &status)?;
+                        statuses.push(status);
+                    } else if changed {
+                        log!("sync: handlers: updated {}", handler.id);
+                        let status = RuntimeStatus {
+                            handler_id: handler.id.clone(),
+                            module_name: Some(handler.module_name.clone()),
+                            status: "UPDATED".into(),
+                            last_error: None,
+                        };
+                        write_handler_status(chainsync_dir, &status)?;
+                        statuses.push(status);
+                    }
+
+                    Ok(handler.id)
+                },
+            );
 
         if let Err(error) = result {
             warning!(
-                "sync: handlers: failed to load module {}: {}",
-                handler_module.display(),
+                "sync: handlers: failed to load {}: {}",
+                handler_file.display(),
                 error
             );
-            let fallback_id = handler_module
+            let fallback_id = handler_file
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("unknown")
                 .to_string();
             let status = RuntimeStatus {
                 handler_id: fallback_id,
-                module_name: handler_module
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.to_string()),
+                module_name: None,
                 status: "ERROR".into(),
                 last_error: Some(error.to_string()),
             };
-            write_handler_status(config_dir, &status)?;
+            write_handler_status(chainsync_dir, &status)?;
             statuses.push(status);
         }
     }
@@ -508,7 +691,6 @@ pub fn sync_from_handlers(config_dir: &Path) -> Result<SyncOutcome> {
         .into_iter()
         .filter(|name| !seen.contains(name))
         .collect();
-
     for stale in stale_ids {
         log!("sync: handlers: deregistered {}", stale);
         let status = RuntimeStatus {
@@ -517,7 +699,7 @@ pub fn sync_from_handlers(config_dir: &Path) -> Result<SyncOutcome> {
             status: "REMOVED".into(),
             last_error: None,
         };
-        write_handler_status(config_dir, &status)?;
+        write_handler_status(chainsync_dir, &status)?;
         statuses.push(status);
     }
 

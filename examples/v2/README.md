@@ -6,7 +6,7 @@ Files:
 
 - `handlers/ohlc-1m/handler.toml`
 - `handlers/ohlc-1m/queries/upsert_ohlc_1m.sql`
-- `../../handlers/ohlc-1m` (Rust `cdylib` source)
+- `../../plugins/ohlc-1m` (Rust `cdylib` source)
 - `ohlc_schema.sql`
 - `run_ohlc.sql`
 

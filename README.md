@@ -1,14 +1,14 @@
 # pg_chainsync v2
 
-`pg_chainsync` v2 is a PGRX extension for blockchain sync in PostgreSQL with filesystem-loaded Rust modules (`.so`), embedded handler TOML, binary module ABI, and host-managed database execution.
+`pg_chainsync` v2 is a PGRX extension for blockchain sync in PostgreSQL with filesystem-loaded Rust plugins (`.so`), filesystem handler TOML instances, binary module ABI, and host-managed database execution.
 
 ## Architecture at a glance
 
-- Handlers are discovered from `*.so` files in `<data_directory>/chainsync/handlers`.
-- Each module `.so` embeds its own `handler.toml` config.
+- Handlers are discovered from `*.toml` files in `<data_directory>/chainsync/handlers`.
+- Plugins are discovered from `*.so` files in `<data_directory>/chainsync/plugins`.
+- Each handler references a plugin via `[handler].plugin`.
 - Event workers run module logic.
-- A dedicated DB executor thread owns SPI execution.
-- Workers and DB executor communicate over an internal typed bus.
+- Host runtime executes SPI operations inside PostgreSQL transaction boundaries.
 - Runtime artifacts are stored under `chainsync/logs` and `chainsync/state`.
 
 ## Monorepo layout
@@ -18,7 +18,7 @@
 - `crates/svm`: internal SVM primitives crate
 - `crates/channel`: internal channel primitives crate
 - `crates/sdk`: plugin SDK crate (`export_plugin!`, response types)
-- `handlers/ohlc-1m`: example handler crate
+- `plugins/ohlc-1m`: example plugin crate
 
 ## Design decisions
 
@@ -34,7 +34,7 @@
 
 ## Requirements
 
-- PostgreSQL 17
+- PostgreSQL 18 (recommended)
 - Rust toolchain (see `rust-toolchain.toml`)
 - `cargo-pgrx`
 
@@ -74,32 +74,30 @@ SELECT chainsync.reload();
 <data_directory>/
   chainsync/
     handlers/
-      evm-transfer-stream.so
-      svm-program-stream.so
+      evm-transfer-mainnet.toml
+      evm-transfer-base.toml
+    plugins/
+      erc20-transfer.so
+      ohlc-1m.so
     logs/
-      evm-transfer-stream.log
-      svm-program-stream.log
+      evm-transfer-mainnet.log
+      evm-transfer-base.log
     state/
-      evm-transfer-stream.bin
-      svm-program-stream.bin
-    logs/
-      evm-transfer-stream.log
-      svm-program-stream.log
-    state/
-      evm-transfer-stream.bin
-      svm-program-stream.bin
+      evm-transfer-mainnet.bin
+      evm-transfer-base.bin
 ```
 
 ## Handler format
 
-`handler.toml` is embedded inside each module `.so` and exposed via `chainsync_handler_toml_v1`.
+`handler.toml` is loaded from `<data_directory>/chainsync/handlers/*.toml`.
 
 ### Required keys
 
 - `[handler].id`
+- `[handler].plugin`
 - `[handler].chain` = `"evm" | "svm"`
 - `[handler].mode` = `"stream"`
-- Module file is the `.so` itself in `<data_directory>/chainsync/handlers`
+- Plugin file is `<data_directory>/chainsync/plugins/<handler.plugin>.so`
 
 ### Optional keys
 
@@ -117,6 +115,7 @@ SELECT chainsync.reload();
 ```toml
 [handler]
 id = "evm-transfer-stream"
+plugin = "erc20-transfer"
 chain = "evm"
 mode = "stream"
 
@@ -138,13 +137,13 @@ SET amount_raw = EXCLUDED.amount_raw;
 prelookups = []
 ```
 
-In SO-only mode, queries must use `sql_inline` (no external `queries/*.sql` files).
+In file-based handler mode, queries must use `sql_inline` (no external `queries/*.sql` files).
 
 ## Runtime artifacts per handler
 
-- `<data_directory>/chainsync/logs/<module_name>.log`
+- `<data_directory>/chainsync/logs/<handler_id>.log`
 
-`<module_name>.log` is JSONL and records states (`REGISTERED`, `UPDATED`, `ERROR`, `REMOVED`) and reload/validation events.
+`<handler_id>.log` is JSONL and records states (`REGISTERED`, `UPDATED`, `ERROR`, `REMOVED`) and reload/validation events.
 
 Handler setup state is stored under:
 
@@ -199,17 +198,9 @@ Plugin crates should only implement typed business logic.
 
 ## Host/module protocol
 
-The protocol is multi-step and typed.
+Current plugin response model:
 
-### Input side
-
-- `Event { event, prefetched }`
-- `Resume { resume_token, lookup_result }`
-
-### Output side
-
-- `NeedLookup { query_id, params, resume_token }`
-- `Done { idempotency_key, mutations }`
+- `Done { mutations }`
 - `Ignore`
 - `Error { message }`
 
@@ -241,13 +232,7 @@ Notes:
 ## Database access model
 
 Plugins do not run SQL directly.
-
-### Query path
-
-1. Module emits `NeedLookup { query_id, params, resume_token }`.
-2. DB executor thread resolves `query_id` in handler query registry.
-3. DB executor executes prepared SPI plan with typed params.
-4. DB executor returns `lookup_result` to module with `resume_token`.
+Host executes allowlisted lookup/mutation queries declared in handler TOML.
 
 ## Prelookup enrichment (first-call context)
 
@@ -265,7 +250,7 @@ Flow:
 3. Host caches prelookup results per handler worker process.
 4. Host builds event payload with `prefetched` and `state_path`.
 5. Module receives enriched first call and can skip extra lookup roundtrip.
-6. Module may still emit `NeedLookup` for cache misses or secondary data.
+6. Module uses `prefetched` values directly when available.
 
 ### Mutation path
 
@@ -275,7 +260,7 @@ Flow:
 
 ## Queries and prepared plans
 
-Each handler defines lookup/mutation IDs directly in embedded `handler.toml`.
+Each handler defines lookup/mutation IDs directly in file-based `handler.toml`.
 
 At reload/startup:
 
@@ -294,10 +279,9 @@ At runtime:
 Typical flow:
 
 1. Event arrives for ERC-20 transfer.
-2. Module decodes topics/data and emits `NeedLookup(token_meta_by_address)`.
-3. DB executor returns token decimals.
-4. Module emits `Done` with `upsert_transfer` mutation + idempotency key.
-5. DB executor writes transactionally.
+2. Host enriches payload with prelookup results (for example recovery checkpoint).
+3. Module decodes topics/data and emits `Done` with `upsert_transfer`.
+4. Host applies mutation query transactionally.
 
 ## Performance notes
 
@@ -308,10 +292,10 @@ Typical flow:
 
 ## Operational flow
 
-1. Build module `.so` (with embedded `handler.toml`).
-2. Copy `.so` into `<data_directory>/chainsync/handlers`.
+1. Build plugin `.so`.
+2. Copy plugin `.so` into `<data_directory>/chainsync/plugins` and handler TOML into `<data_directory>/chainsync/handlers`.
 3. Run `SELECT chainsync.reload();`.
-4. Check `chainsync/logs/<module_name>.log`.
+4. Check `chainsync/logs/<handler_id>.log`.
 5. Restart worker if needed.
 
 ## Development
@@ -337,14 +321,15 @@ bun run scripts/dev-handler.ts ohlc_handler ohlc-1m
 
 What it does:
 
-1. Builds the handler crate.
-2. Copies `lib*.so` to `<handlers_dir>/<handler_id>.so`.
-3. Executes `SELECT chainsync.reload();` through `psql`.
+1. Builds the plugin crate.
+2. Copies `lib*.so` to `<chainsync_dir>/plugins/<plugin_name>.so`.
+3. Copies source `handler.toml` to `<chainsync_dir>/handlers/<handler_id>.toml`.
+4. Executes `SELECT chainsync.reload();` through `psql`.
 
 Defaults:
 
-- `CHAINSYNC_HANDLERS_DIR`:
-  if unset, script resolves `SHOW data_directory` and uses `<data_directory>/chainsync/handlers`
+- `CHAINSYNC_DIR`:
+  if unset, script resolves `SHOW data_directory` and uses `<data_directory>/chainsync`
 - `PGURL=postgresql:///postgres`
 
 Flags:

@@ -101,12 +101,14 @@ pub struct HandlerOptions {
     pub mutation_queries: Option<BTreeMap<String, String>>,
     /// Query ids to prefetch before first module call
     pub prelookups: Option<Vec<String>>,
-    /// Absolute module path loaded from config scanner
-    pub module_path: Option<String>,
+    /// Absolute plugin path loaded from config scanner
+    pub plugin_path: Option<String>,
     /// Content hash for handler module .so (embedded config included in binary).
     pub content_hash: Option<String>,
     /// Durable state file path for this handler
     pub state_path: Option<String>,
+    /// Per-handler log file path
+    pub log_path: Option<String>,
 
     pub evm: Option<EvmOptions>,
     pub svm: Option<SvmOptions>,

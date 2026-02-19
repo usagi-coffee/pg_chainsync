@@ -9,9 +9,15 @@ type Mode =
   | { kind: "by_handler_id"; handlerId: string }
   | { kind: "all" };
 
-type HandlerSpec = {
+type PluginSpec = {
   cargoPackage: string;
+  pluginName: string;
+};
+
+type HandlerConfig = {
   handlerId: string;
+  pluginName: string;
+  handlerTomlPath: string;
 };
 
 function usage(): never {
@@ -119,46 +125,79 @@ function parseHandlerId(handlerToml: string): string {
   return idMatch[1]!;
 }
 
-async function discoverHandlers(repoRoot: string): Promise<HandlerSpec[]> {
-  const handlersRoot = `${repoRoot}handlers`;
-  const entries = await readdir(handlersRoot, { withFileTypes: true });
-  const out: HandlerSpec[] = [];
+function parsePluginName(handlerToml: string): string {
+  const handlerSection = handlerToml.match(/\[handler\][\s\S]*?(?:\n\[|$)/);
+  if (!handlerSection) {
+    throw new Error("missing [handler] section");
+  }
+  const pluginMatch = handlerSection[0].match(
+    /(?:^|\n)\s*plugin\s*=\s*"([^"]+)"/,
+  );
+  if (!pluginMatch) {
+    throw new Error("missing handler.plugin in handler.toml");
+  }
+  return pluginMatch[1]!;
+}
+
+async function discoverPlugins(repoRoot: string): Promise<PluginSpec[]> {
+  const pluginsRoot = `${repoRoot}plugins`;
+  const entries = await readdir(pluginsRoot, { withFileTypes: true });
+  const out: PluginSpec[] = [];
 
   for (const entry of entries) {
     if (!entry.isDirectory()) {
       continue;
     }
-    const dir = `${handlersRoot}/${entry.name}`;
+    const dir = `${pluginsRoot}/${entry.name}`;
     const cargoTomlPath = `${dir}/Cargo.toml`;
-    const handlerTomlPath = `${dir}/handler.toml`;
 
     if (!(await Bun.file(cargoTomlPath).exists())) {
       continue;
     }
-    if (!(await Bun.file(handlerTomlPath).exists())) {
-      continue;
-    }
 
     const cargoToml = await Bun.file(cargoTomlPath).text();
-    const handlerToml = await Bun.file(handlerTomlPath).text();
     const cargoPackage = parsePackageName(cargoToml);
-    const handlerId = parseHandlerId(handlerToml);
+    const pluginName = entry.name;
 
-    out.push({ cargoPackage, handlerId });
+    out.push({ cargoPackage, pluginName });
+  }
+
+  out.sort((a, b) => a.pluginName.localeCompare(b.pluginName));
+  return out;
+}
+
+async function discoverHandlerConfigs(
+  repoRoot: string,
+): Promise<HandlerConfig[]> {
+  const handlersRoot = `${repoRoot}handlers`;
+  const entries = await readdir(handlersRoot, { withFileTypes: true });
+  const out: HandlerConfig[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".toml")) {
+      continue;
+    }
+    const handlerTomlPath = `${handlersRoot}/${entry.name}`;
+    const handlerToml = await Bun.file(handlerTomlPath).text();
+    const handlerId = parseHandlerId(handlerToml);
+    const pluginName = parsePluginName(handlerToml);
+    out.push({ handlerId, pluginName, handlerTomlPath });
   }
 
   out.sort((a, b) => a.handlerId.localeCompare(b.handlerId));
   return out;
 }
 
-async function resolveHandlerById(
+async function resolveHandlerConfigById(
   repoRoot: string,
   handlerId: string,
-): Promise<HandlerSpec> {
-  const all = await discoverHandlers(repoRoot);
+): Promise<HandlerConfig> {
+  const all = await discoverHandlerConfigs(repoRoot);
   const found = all.filter((h) => h.handlerId === handlerId);
   if (found.length === 0) {
-    throw new Error(`[dev-handler] handler_id '${handlerId}' was not found in /handlers`);
+    throw new Error(
+      `[dev-handler] handler_id '${handlerId}' was not found in /handlers`,
+    );
   }
   if (found.length > 1) {
     throw new Error(
@@ -168,21 +207,21 @@ async function resolveHandlerById(
   return found[0]!;
 }
 
-async function deployOne(
+async function buildAndDeployPlugin(
   repoRoot: string,
-  handlersDir: string,
+  pluginsDir: string,
   profile: "release" | "dev",
-  spec: HandlerSpec,
+  spec: PluginSpec,
 ): Promise<void> {
   const libStem = spec.cargoPackage.replaceAll("-", "_");
   const sourceSo =
     profile === "release"
       ? `${repoRoot}target/release/lib${libStem}.so`
       : `${repoRoot}target/debug/lib${libStem}.so`;
-  const destSo = `${handlersDir}/${spec.handlerId}.so`;
+  const destSo = `${pluginsDir}/${spec.pluginName}.so`;
 
   console.log(
-    `[dev-handler] building package=${spec.cargoPackage} profile=${profile}`,
+    `[dev-handler] building plugin=${spec.pluginName} package=${spec.cargoPackage} profile=${profile}`,
   );
   if (profile === "release") {
     await $`cargo build --release -p ${spec.cargoPackage}`.cwd(repoRoot);
@@ -194,9 +233,19 @@ async function deployOne(
     throw new Error(`[dev-handler] build finished but missing ${sourceSo}`);
   }
 
-  await $`mkdir -p ${handlersDir}`;
+  await $`mkdir -p ${pluginsDir}`;
   await $`cp ${sourceSo} ${destSo}`;
   console.log(`[dev-handler] deployed ${destSo}`);
+}
+
+async function deployHandlerToml(
+  handlersDir: string,
+  config: HandlerConfig,
+): Promise<void> {
+  const destHandlerToml = `${handlersDir}/${config.handlerId}.toml`;
+  await $`mkdir -p ${handlersDir}`;
+  await $`cp ${config.handlerTomlPath} ${destHandlerToml}`;
+  console.log(`[dev-handler] deployed ${destHandlerToml}`);
 }
 
 async function reloadChainsync(pgurl: string): Promise<void> {
@@ -239,8 +288,8 @@ const { mode, profile, doReload } = parseArgs(process.argv.slice(2));
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const pgurl = process.env.PGURL ?? "postgresql:///postgres";
-let handlersDir = process.env.CHAINSYNC_HANDLERS_DIR;
-if (!handlersDir) {
+let chainsyncDir = process.env.CHAINSYNC_DIR;
+if (!chainsyncDir) {
   try {
     const dataDir = (
       await $`psql ${pgurl} -At -c "SHOW data_directory;"`
@@ -248,28 +297,62 @@ if (!handlersDir) {
         .text()
     ).trim();
     if (dataDir) {
-      handlersDir = `${dataDir}/chainsync/handlers`;
+      chainsyncDir = `${dataDir}/chainsync`;
     }
   } catch {
-    handlersDir = "/home/jk/.pgrx/data-18/chainsync/handlers";
+    chainsyncDir = "/home/jk/.pgrx/data-18/chainsync";
   }
 }
-handlersDir ??= "/home/jk/.pgrx/data-18/chainsync/handlers";
+chainsyncDir ??= "/home/jk/.pgrx/data-18/chainsync";
+const handlersDir = `${chainsyncDir}/handlers`;
+const pluginsDir = `${chainsyncDir}/plugins`;
 
-let specs: HandlerSpec[];
+const pluginSpecs = await discoverPlugins(repoRoot);
+const pluginByName = new Map(pluginSpecs.map((p) => [p.pluginName, p]));
+const handlerConfigs = await discoverHandlerConfigs(repoRoot);
+const handlerById = new Map(handlerConfigs.map((h) => [h.handlerId, h]));
+
+let selectedHandlers: HandlerConfig[] = [];
+const selectedPlugins = new Map<string, PluginSpec>();
+
 if (mode.kind === "single") {
-  specs = [{ cargoPackage: mode.cargoPackage, handlerId: mode.handlerId }];
+  const handlerConfig = await resolveHandlerConfigById(repoRoot, mode.handlerId);
+  selectedHandlers = [handlerConfig];
+  selectedPlugins.set(handlerConfig.pluginName, {
+    cargoPackage: mode.cargoPackage,
+    pluginName: handlerConfig.pluginName,
+  });
 } else if (mode.kind === "by_handler_id") {
-  specs = [await resolveHandlerById(repoRoot, mode.handlerId)];
+  const handlerConfig = await resolveHandlerConfigById(repoRoot, mode.handlerId);
+  const plugin = pluginByName.get(handlerConfig.pluginName);
+  if (!plugin) {
+    throw new Error(
+      `[dev-handler] handler '${handlerConfig.handlerId}' references missing plugin '${handlerConfig.pluginName}' in /plugins`,
+    );
+  }
+  selectedHandlers = [handlerConfig];
+  selectedPlugins.set(plugin.pluginName, plugin);
 } else {
-  specs = await discoverHandlers(repoRoot);
-  if (specs.length === 0) {
+  selectedHandlers = handlerConfigs;
+  if (selectedHandlers.length === 0) {
     throw new Error("[dev-handler] --all found no handlers in /handlers");
   }
+  for (const handlerConfig of selectedHandlers) {
+    const plugin = pluginByName.get(handlerConfig.pluginName);
+    if (!plugin) {
+      throw new Error(
+        `[dev-handler] handler '${handlerConfig.handlerId}' references missing plugin '${handlerConfig.pluginName}' in /plugins`,
+      );
+    }
+    selectedPlugins.set(plugin.pluginName, plugin);
+  }
 }
 
-for (const spec of specs) {
-  await deployOne(repoRoot, handlersDir, profile, spec);
+for (const plugin of selectedPlugins.values()) {
+  await buildAndDeployPlugin(repoRoot, pluginsDir, profile, plugin);
+}
+for (const handler of selectedHandlers) {
+  await deployHandlerToml(handlersDir, handler);
 }
 
 if (doReload) {

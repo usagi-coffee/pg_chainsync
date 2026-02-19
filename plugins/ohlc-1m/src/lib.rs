@@ -5,7 +5,8 @@ use std::sync::Mutex;
 use anyhow::{bail, Context, Result};
 use once_cell::sync::Lazy;
 use pg_chainsync_sdk::{
-    export_plugin, ModuleResponse, Mutation, PluginHandler,
+    export_plugin, plugin_log, ModuleResponse, Mutation, PluginHandler,
+    SetupResponse,
 };
 use serde::{Deserialize, Serialize};
 
@@ -51,15 +52,7 @@ fn state_path(handler_id: i64, event_state_path: Option<&str>) -> String {
         return path.to_string();
     }
 
-    if let Ok(path) = std::env::var("CHAINSYNC_STATE_PATH") {
-        return path;
-    }
-
-    if let Ok(root) = std::env::var("CHAINSYNC_STATE_ROOT") {
-        return format!("{}/{}_state.json", root, handler_id);
-    }
-
-    format!("/tmp/ohlc_state_{}.json", handler_id)
+    format!("/tmp/chainsync_ohlc_{}.json", handler_id)
 }
 
 fn load_state_if_needed(
@@ -68,8 +61,14 @@ fn load_state_if_needed(
 ) -> Result<()> {
     let path = state_path(handler_id, event_state_path);
     let content = match fs::read_to_string(&path) {
-        Ok(v) => v,
-        Err(_) => return Ok(()),
+        Ok(v) => {
+            plugin_log!("loading state path={}", path);
+            v
+        }
+        Err(_) => {
+            plugin_log!("no existing state path={}", path);
+            return Ok(());
+        }
     };
 
     let parsed: State = serde_json::from_str(&content)
@@ -78,7 +77,10 @@ fn load_state_if_needed(
     Ok(())
 }
 
-fn persist_state(handler_id: i64, event_state_path: Option<&str>) -> Result<()> {
+fn persist_state(
+    handler_id: i64,
+    event_state_path: Option<&str>,
+) -> Result<()> {
     let path = state_path(handler_id, event_state_path);
     let tmp = format!("{}.tmp", path);
 
@@ -89,20 +91,30 @@ fn persist_state(handler_id: i64, event_state_path: Option<&str>) -> Result<()> 
     fs::write(&tmp, data).with_context(|| format!("writing {}", tmp))?;
     fs::rename(&tmp, &path)
         .with_context(|| format!("renaming {} -> {}", tmp, path))?;
+    plugin_log!("persisted state path={}", path);
     Ok(())
 }
 
 fn lookup_decimals(prefetched: Option<&serde_json::Value>) -> (u32, u32) {
     let Some(prefetched) = prefetched else {
+        plugin_log!("prefetched missing; using decimals 0/0");
         return (0, 0);
     };
-    let Some(pool_meta) = prefetched.get("pool_meta") else {
+    let Some(pool_meta) = prefetched
+        .get("pool_meta")
+        .or_else(|| prefetched.get("decimals"))
+    else {
+        plugin_log!(
+            "prelookup result missing 'pool_meta'/'decimals'; using decimals 0/0"
+        );
         return (0, 0);
     };
     let Some(rows) = pool_meta.as_array() else {
+        plugin_log!("prelookup rows malformed; using decimals 0/0");
         return (0, 0);
     };
     let Some(first) = rows.first() else {
+        plugin_log!("prelookup rows empty; using decimals 0/0");
         return (0, 0);
     };
 
@@ -156,13 +168,17 @@ fn process_event(input: serde_json::Value) -> Result<ModuleResponse> {
     load_state_if_needed(handler_id, event.state_path.as_deref())?;
 
     if event.event != "evm_log" {
+        plugin_log!("ignore non-evm_log event={}", event.event);
         return Ok(ModuleResponse::Ignore);
     }
 
     let pair_id = event.address.unwrap_or_else(|| "unknown_pair".into());
     let data = match event.data {
         Some(v) => v,
-        None => return Ok(ModuleResponse::Ignore),
+        None => {
+            plugin_log!("ignore missing data pair_id={}", pair_id);
+            return Ok(ModuleResponse::Ignore);
+        }
     };
     let now = event.ingest_unix.unwrap_or_else(|| {
         std::time::SystemTime::now()
@@ -173,8 +189,21 @@ fn process_event(input: serde_json::Value) -> Result<ModuleResponse> {
 
     let (base_decimals, quote_decimals) =
         lookup_decimals(event.prefetched.as_ref());
+    plugin_log!(
+        "pair={} decimals base={} quote={}",
+        pair_id,
+        base_decimals,
+        quote_decimals
+    );
     let (price, vol_base, vol_quote) =
         decode_swap_price_and_volume(&data, base_decimals, quote_decimals)?;
+    plugin_log!(
+        "decoded pair={} price={} volume_base={} volume_quote={}",
+        pair_id,
+        price,
+        vol_base,
+        vol_quote
+    );
     let bucket_start = (now / 60) * 60;
 
     let mut to_emit: Option<serde_json::Value> = None;
@@ -221,6 +250,16 @@ fn process_event(input: serde_json::Value) -> Result<ModuleResponse> {
                     trades: 0,
                 },
             };
+            plugin_log!(
+                "rollover pair={} emit_bucket={} new_bucket={}",
+                pair_id,
+                to_emit
+                    .as_ref()
+                    .and_then(|v| v.get("bucket_start_unix"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                bucket_start
+            );
         }
 
         let candle = &mut entry.candle;
@@ -241,28 +280,70 @@ fn process_event(input: serde_json::Value) -> Result<ModuleResponse> {
                 payload,
             }],
         }),
-        None => Ok(ModuleResponse::Ignore),
+        None => {
+            plugin_log!("no closed candle yet");
+            Ok(ModuleResponse::Ignore)
+        }
     }
 }
 
 impl PluginHandler for OhlcHandler {
+    fn setup(input: serde_json::Value) -> Result<SetupResponse, String> {
+        let state_path = input
+            .get("state_path")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string);
+
+        let should_reset = std::env::var("CHAINSYNC_OHLC_RESET_STATE_ON_SETUP")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+        if let Some(path) = state_path {
+            plugin_log!("setup state_path={}", path);
+            if should_reset {
+                match fs::remove_file(&path) {
+                    Ok(()) => {
+                        plugin_log!("setup removed stale state file {}", path)
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        plugin_log!("setup state file already absent {}", path)
+                    }
+                    Err(err) => {
+                        return Err(format!(
+                            "failed to remove state file '{}': {}",
+                            path, err
+                        ));
+                    }
+                }
+            }
+        } else {
+            plugin_log!("setup: no state_path provided");
+        }
+
+        Ok(SetupResponse::default())
+    }
+
     fn handle_event(
         input: serde_json::Value,
     ) -> Result<ModuleResponse, String> {
-        process_event(input).map_err(|e| e.to_string())
+        match process_event(input) {
+            Ok(response) => Ok(response),
+            Err(error) => {
+                plugin_log!("handler error: {}", error);
+                Err(error.to_string())
+            }
+        }
     }
 }
 
-export_plugin!(
-    OhlcHandler,
-    "ohlc_handler",
-    "0.1.0",
-    include_str!(concat!(env!("OUT_DIR"), "/handler.generated.toml"))
-);
+export_plugin!(OhlcHandler, "ohlc_handler", "0.1.0");
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::MutexGuard;
+
+    static TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
     fn encode_word(value: u128) -> String {
         format!("{value:064x}")
@@ -302,8 +383,19 @@ mod tests {
         })
     }
 
+    fn lock_test_state() -> MutexGuard<'static, ()> {
+        let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        STATE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .active
+            .clear();
+        guard
+    }
+
     #[test]
     fn emits_done_on_minute_rollover() {
+        let _guard = lock_test_state();
         let state_path = std::env::temp_dir().join(format!(
             "ohlc_handler_test_{}_state.json",
             std::process::id()
@@ -338,5 +430,102 @@ mod tests {
         }
 
         let _ = std::fs::remove_file(&state_path);
+    }
+
+    #[test]
+    fn ignores_non_evm_log() {
+        let _guard = lock_test_state();
+        let state_path = std::env::temp_dir().join(format!(
+            "ohlc_handler_test_non_evm_{}_state.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&state_path);
+
+        let mut event = sample_event(1_700_000_000, &state_path);
+        event["event"] = serde_json::json!("svm_log");
+        let out = process_event(event).expect("process event");
+        assert!(matches!(out, ModuleResponse::Ignore));
+
+        let _ = std::fs::remove_file(&state_path);
+    }
+
+    #[test]
+    fn ignores_missing_data() {
+        let _guard = lock_test_state();
+        let state_path = std::env::temp_dir().join(format!(
+            "ohlc_handler_test_missing_data_{}_state.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&state_path);
+
+        let mut event = sample_event(1_700_000_000, &state_path);
+        event["data"] = serde_json::Value::Null;
+        let out = process_event(event).expect("process event");
+        assert!(matches!(out, ModuleResponse::Ignore));
+
+        let _ = std::fs::remove_file(&state_path);
+    }
+
+    #[test]
+    fn errors_on_short_swap_payload() {
+        let _guard = lock_test_state();
+        let state_path = std::env::temp_dir().join(format!(
+            "ohlc_handler_test_short_payload_{}_state.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&state_path);
+
+        let mut event = sample_event(1_700_000_000, &state_path);
+        event["data"] = serde_json::json!("00ff");
+        let err = process_event(event).expect_err("expected decode error");
+        assert!(err.to_string().contains("swap data is too short"));
+
+        let _ = std::fs::remove_file(&state_path);
+    }
+
+    #[test]
+    fn loads_persisted_state_and_rolls_over() {
+        let _guard = lock_test_state();
+        let state_path = std::env::temp_dir().join(format!(
+            "ohlc_handler_test_reload_state_{}_state.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&state_path);
+
+        let first = sample_event(1_700_000_000, &state_path);
+        let out1 = process_event(first).expect("first event");
+        assert!(matches!(out1, ModuleResponse::Ignore));
+
+        STATE.lock().expect("state lock").active.clear();
+
+        let second = sample_event(1_700_000_061, &state_path);
+        let out2 = process_event(second).expect("second event");
+
+        let ModuleResponse::Done { mutations } = out2 else {
+            panic!("expected done");
+        };
+        assert_eq!(mutations.len(), 1);
+        assert_eq!(mutations[0].id, "upsert_ohlc_1m");
+        assert_eq!(
+            mutations[0].payload["bucket_start_unix"].as_u64(),
+            Some(1_699_999_980)
+        );
+        assert_eq!(mutations[0].payload["open"].as_f64(), Some(10.0));
+        assert_eq!(mutations[0].payload["close"].as_f64(), Some(10.0));
+
+        let _ = std::fs::remove_file(&state_path);
+    }
+
+    #[test]
+    fn decodes_uniswap_v2_swap_payload() {
+        // V2-style swap shape:
+        // amount0In=250, amount1In=0, amount0Out=0, amount1Out=1000
+        let data = swap_data(250, 0, 0, 1000);
+        let (price, volume_base, volume_quote) =
+            decode_swap_price_and_volume(&data, 0, 0).expect("decode v2 swap");
+
+        assert_eq!(volume_base, 250.0);
+        assert_eq!(volume_quote, 1000.0);
+        assert_eq!(price, 4.0);
     }
 }

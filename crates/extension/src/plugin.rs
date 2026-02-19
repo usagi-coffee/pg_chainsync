@@ -85,34 +85,16 @@ pub fn validate_handler_exports(path: &Path) -> Result<()> {
         > = library
             .get(b"chainsync_plugin_free_buffer\0")
             .context("missing symbol chainsync_plugin_free_buffer")?;
-        let _handler_toml: libloading::Symbol<
-            unsafe extern "C" fn(out_len: *mut usize) -> *const u8,
+        let _setup: libloading::Symbol<
+            unsafe extern "C" fn(
+                input_ptr: *const u8,
+                input_len: usize,
+                out_ptr: *mut *mut u8,
+                out_len: *mut usize,
+            ) -> i32,
         > = library
-            .get(b"chainsync_handler_toml_v1\0")
-            .context("missing symbol chainsync_handler_toml_v1")?;
+            .get(b"chainsync_setup_v1\0")
+            .context("missing symbol chainsync_setup_v1")?;
     }
     Ok(())
-}
-
-pub fn read_handler_toml(path: &Path) -> Result<String> {
-    // SAFETY: symbol returns read-only static bytes and len is written by callee.
-    unsafe {
-        let library = Library::new(path)
-            .with_context(|| format!("loading plugin {}", path.display()))?;
-        let handler_toml_fn: libloading::Symbol<
-            unsafe extern "C" fn(out_len: *mut usize) -> *const u8,
-        > = library
-            .get(b"chainsync_handler_toml_v1\0")
-            .context("missing symbol chainsync_handler_toml_v1")?;
-        let mut out_len: usize = 0;
-        let ptr = handler_toml_fn(&mut out_len as *mut usize);
-        if ptr.is_null() || out_len == 0 {
-            bail!("handler toml export returned empty payload");
-        }
-        let bytes = std::slice::from_raw_parts(ptr, out_len);
-        let toml = std::str::from_utf8(bytes)
-            .context("handler toml is not utf8")?
-            .to_string();
-        Ok(toml)
-    }
 }

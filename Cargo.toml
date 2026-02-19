@@ -6,8 +6,8 @@ members = [
   "crates/extension",
   "crates/channel",
   "crates/sdk",
-  "handlers/ohlc-1m",
-  "handlers/erc20-transfer",
+  "plugins/ohlc-1m",
+  "plugins/erc20-transfer",
 ]
 
 [profile.dev]

@@ -10,12 +10,12 @@ Build and evolve `pg_chainsync` as a filesystem-first PGRX extension where handl
 - `crates/svm`: shared SVM primitives and connection helpers
 - `crates/channel`: shared channel primitives
 - `crates/sdk`: safe plugin SDK and export macro
-- `handlers/*`: example handler crates
+- `plugins/*`: example plugin crates
 
 ## Core architecture (must preserve)
 
-- Handler definitions live in `<data_directory>/chainsync/handlers/*.so`.
-- Module binary is loaded directly from `<data_directory>/chainsync/handlers`.
+- Handler definitions live in `<data_directory>/chainsync/handlers/*.toml`.
+- Plugin binaries are loaded from `<data_directory>/chainsync/plugins/*.so`.
 - Module workers execute business logic.
 - A dedicated DB executor thread is the single SPI owner.
 - Worker/DB communication is a typed internal bus.
@@ -62,7 +62,7 @@ Protocol requirements:
 
 ## Query and mutation model
 
-- Queries are declared inline in embedded `handler.toml` (`sql_inline`) inside the module `.so`.
+- Queries are declared inline in handler TOML files (`sql_inline`).
 - Host loads and validates query definitions on reload/startup.
 - Host prepares plans and caches handles.
 - Module references only stable IDs (`query_id`/`statement_id`) plus typed params.
@@ -90,7 +90,7 @@ Protocol requirements:
 
 - One SPI owner thread only.
 - All DB writes are host-side and allowlisted.
-- Emit deterministic runtime artifacts (`status/<handler_id>.json`, `logs/<module_name>.log`).
+- Emit deterministic runtime artifacts (`logs/<handler_id>.log`, `state/<handler_id>.bin`).
 - On config/plugin/ABI errors, fail closed for that handler and log reason.
 - One slow/failing handler must not block ingress or sibling handlers (queue isolation/backpressure required).
 

@@ -94,6 +94,14 @@ fn invoke_handler_module(
             serde_json::Value::String(state_path.clone()),
         );
     }
+    if let Some(log_path) = &handler.options.log_path
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert(
+            "log_path".into(),
+            serde_json::Value::String(log_path.clone()),
+        );
+    }
 
     let bytes = serde_json::to_vec(&payload)?;
     let out = module_runtime::invoke(handler, &bytes)?;
