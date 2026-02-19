@@ -1,4 +1,4 @@
-use pgrx::{log, warning};
+use pgrx::warning;
 
 use anyhow::{Context, bail, ensure};
 use solana_client::rpc_config::{
@@ -102,7 +102,6 @@ fn spawn_group(
                 }
             };
 
-            log!("sync: ingress: svm:logs: {}: lane online", key);
             loop {
                 match stream.next().await {
                     Some(Some(svm_log)) => {
@@ -160,19 +159,11 @@ async fn desired_groups(
 }
 
 pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
-    log!("sync: ingress: svm:logs: listener boot");
     let mut running: HashMap<String, (String, JoinHandle<()>)> = HashMap::new();
 
     let Some(initial_groups) = desired_groups(&channel).await else {
         return;
     };
-    log!(
-        "sync: ingress: svm:logs: route groups={} at startup",
-        initial_groups.len()
-    );
-    if initial_groups.is_empty() {
-        log!("sync: ingress: svm:logs: no active routes, listener idle");
-    }
     for (key, group_handlers) in initial_groups {
         let fingerprint = group_fingerprint(&group_handlers);
         let handle = spawn_group(key.clone(), group_handlers, channel.clone());
@@ -186,10 +177,6 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     continue;
                 };
-                log!(
-                    "sync: ingress: svm:logs: route groups={} after reload",
-                    groups.len()
-                );
 
                 let mut keep = HashMap::new();
                 for (key, group_handlers) in groups {

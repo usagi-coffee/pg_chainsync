@@ -1,5 +1,5 @@
 use alloy::network::{AnyHeader, AnyRpcBlock};
-use pgrx::{log, warning};
+use pgrx::warning;
 
 use anyhow::{Context, bail, ensure};
 
@@ -32,12 +32,6 @@ fn group_fingerprint(group_handlers: &[Arc<HandlerRuntime>]) -> String {
         .collect::<Vec<_>>();
     ids.sort();
     ids.join(",")
-}
-
-fn sorted_keys(groups: &HashMap<String, Vec<Arc<HandlerRuntime>>>) -> String {
-    let mut keys = groups.keys().cloned().collect::<Vec<_>>();
-    keys.sort();
-    keys.join(", ")
 }
 
 fn spawn_group(
@@ -87,7 +81,6 @@ fn spawn_group(
                 }
             };
 
-            log!("sync: ingress: evm:blocks: {}: lane online", key);
             loop {
                 match stream.next().await {
                     Some(Some(block)) => {
@@ -147,25 +140,11 @@ async fn desired_groups(
 }
 
 pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
-    log!("sync: ingress: evm:blocks: listener boot");
     let mut running: HashMap<String, (String, JoinHandle<()>)> = HashMap::new();
 
     let Some(initial_groups) = desired_groups(&channel).await else {
         return;
     };
-    log!(
-        "sync: ingress: evm:blocks: route groups={} at startup",
-        initial_groups.len()
-    );
-    if !initial_groups.is_empty() {
-        log!(
-            "sync: ingress: evm:blocks: keys=[{}]",
-            sorted_keys(&initial_groups)
-        );
-    }
-    if initial_groups.is_empty() {
-        log!("sync: ingress: evm:blocks: no active routes, listener idle");
-    }
     for (key, group_handlers) in initial_groups {
         let fingerprint = group_fingerprint(&group_handlers);
         let handle = spawn_group(key.clone(), group_handlers, channel.clone());
@@ -179,16 +158,6 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     continue;
                 };
-                log!(
-                    "sync: ingress: evm:blocks: route groups={} after reload",
-                    groups.len()
-                );
-                if !groups.is_empty() {
-                    log!(
-                        "sync: ingress: evm:blocks: keys=[{}]",
-                        sorted_keys(&groups)
-                    );
-                }
 
                 let mut keep = HashMap::new();
                 for (key, group_handlers) in groups {
@@ -280,12 +249,6 @@ pub async fn try_block(
         if let Ok(Some(block)) = client.get_block(block.into()).await {
             return Ok(block);
         }
-
-        log!(
-            "sync: ingress: evm:blocks: {}: block {} not available yet, retrying",
-            &handler.name,
-            block
-        );
 
         tokio::time::sleep(Duration::from_millis(1000)).await;
         retries = retries + 1;

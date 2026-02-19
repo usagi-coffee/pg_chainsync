@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{OnceLock, RwLock};
 
 use pgrx::bgworkers::*;
 use pgrx::log;
 use pgrx::prelude::*;
 
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio_stream::StreamExt;
 
@@ -26,12 +26,7 @@ use crate::worker::*;
 use alloy::core::hex;
 use serde_json::json;
 
-static PRELOOKUP_CACHE: OnceLock<RwLock<HashMap<i64, serde_json::Value>>> =
-    OnceLock::new();
-
-fn prelookup_cache() -> &'static RwLock<HashMap<i64, serde_json::Value>> {
-    PRELOOKUP_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
-}
+const HANDLER_LANE_QUEUE_CAPACITY: usize = 50_000;
 
 fn resolve_prefetched(
     handler: &Arc<HandlerRuntime>,
@@ -42,15 +37,6 @@ fn resolve_prefetched(
     };
     if prelookups.is_empty() {
         return Ok(None);
-    }
-
-    if let Some(cached) = prelookup_cache()
-        .read()
-        .expect("prelookup cache read")
-        .get(&handler.id)
-        .cloned()
-    {
-        return Ok(Some(cached));
     }
 
     let mut values = serde_json::Map::new();
@@ -69,12 +55,7 @@ fn resolve_prefetched(
         values.insert(lookup_id.clone(), value);
     }
 
-    let prefetched = serde_json::Value::Object(values);
-    prelookup_cache()
-        .write()
-        .expect("prelookup cache write")
-        .insert(handler.id, prefetched.clone());
-    Ok(Some(prefetched))
+    Ok(Some(serde_json::Value::Object(values)))
 }
 
 fn invoke_handler_module(
@@ -116,8 +97,15 @@ fn invoke_handler_module(
             let handler_id = handler.id;
             for mutation in mutations {
                 let mutation_id = mutation.id;
-                let payload =
-                    module_protocol::payload_to_jsonb(mutation.payload)?;
+                let payload = module_protocol::payload_to_jsonb(mutation.payload)
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "mutation '{}' payload encode failed for handler {}: {}",
+                            mutation_id,
+                            handler_id,
+                            error
+                        )
+                    })?;
                 anyhow_pg_try!(|| {
                     prepared::execute_mutation(handler_id, &mutation_id, payload)
                 })
@@ -131,6 +119,62 @@ fn invoke_handler_module(
                 })?;
             }
             Ok(())
+        }
+    }
+}
+
+struct LaneJob {
+    handler: Arc<HandlerRuntime>,
+    payload: serde_json::Value,
+}
+
+async fn process_handler_lane(
+    handler_id: i64,
+    mut rx: mpsc::Receiver<LaneJob>,
+) {
+    while let Some(job) = rx.recv().await {
+        if let Err(error) = invoke_handler_module(&job.handler, job.payload) {
+            warning!(
+                "sync: router: route {} module invocation failed: {}",
+                handler_id,
+                error
+            );
+        }
+    }
+}
+
+fn route_to_handler_lane(
+    lanes: &mut HashMap<i64, (mpsc::Sender<LaneJob>, JoinHandle<()>)>,
+    handler: Arc<HandlerRuntime>,
+    payload: serde_json::Value,
+) {
+    let handler_id = handler.id;
+    let sender = if let Some((tx, _)) = lanes.get(&handler_id) {
+        tx.clone()
+    } else {
+        let (tx, rx) = mpsc::channel::<LaneJob>(HANDLER_LANE_QUEUE_CAPACITY);
+        let task = tokio::spawn(process_handler_lane(handler_id, rx));
+        lanes.insert(handler_id, (tx.clone(), task));
+        tx
+    };
+
+    match sender.try_send(LaneJob { handler, payload }) {
+        Ok(()) => {}
+        Err(mpsc::error::TrySendError::Full(_)) => warning!(
+            "sync: router: handler lane {} queue full; dropping event",
+            handler_id
+        ),
+        Err(mpsc::error::TrySendError::Closed(job)) => {
+            lanes.remove(&handler_id);
+            let (tx, rx) = mpsc::channel::<LaneJob>(HANDLER_LANE_QUEUE_CAPACITY);
+            let task = tokio::spawn(process_handler_lane(handler_id, rx));
+            lanes.insert(handler_id, (tx.clone(), task));
+            if tx.try_send(job).is_err() {
+                warning!(
+                    "sync: router: handler lane {} unavailable after restart; dropping event",
+                    handler_id
+                );
+            }
         }
     }
 }
@@ -172,22 +216,12 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
         .expect("sync: Failed to create async runtime");
 
     log!("sync: worker has started!");
-    prelookup_cache()
-        .write()
-        .expect("prelookup cache write")
-        .clear();
 
-    match anyhow_pg_try!(|| {
+    if let Err(error) = anyhow_pg_try!(|| {
         let handlers = HandlerRuntime::query_all()?;
         prepared::prepare_all_handlers(&handlers)
     }) {
-        Ok(total) => log!("sync: prepared {} handler queries", total),
-        Err(error) => {
-            warning!(
-                "sync: failed to prepare handler queries: {:#}",
-                error
-            )
-        }
+        warning!("sync: failed to load handler queries: {:#}", error)
     }
 
     *WORKER_STATUS.exclusive() = WorkerStatus::RUNNING;
@@ -238,6 +272,9 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
 }
 
 async fn handle_message(mut stream: MessageStream) {
+    let mut lanes: HashMap<i64, (mpsc::Sender<LaneJob>, JoinHandle<()>)> =
+        HashMap::new();
+
     let evm_blocks = Arc::new(AtomicUsize::new(0));
     let evm_logs = Arc::new(AtomicUsize::new(0));
     let evm_blocks_stats = Arc::clone(&evm_blocks);
@@ -298,13 +335,7 @@ async fn handle_message(mut stream: MessageStream) {
                     "number": block.number,
                     "hash": format!("{:#x}", block.hash),
                 });
-                if let Err(error) = invoke_handler_module(&handler, payload) {
-                    warning!(
-                        "sync: router: evm:block route {} module invocation failed: {}",
-                        handler.id,
-                        error
-                    );
-                }
+                route_to_handler_lane(&mut lanes, handler, payload);
             }
             Message::EvmLog(log, handler) => {
                 if handler.options.evm.is_none() {
@@ -332,13 +363,7 @@ async fn handle_message(mut stream: MessageStream) {
                         .map(|d| d.as_secs())
                         .unwrap_or(0),
                 });
-                if let Err(error) = invoke_handler_module(&handler, payload) {
-                    warning!(
-                        "sync: router: evm:log route {} module invocation failed: {}",
-                        handler.id,
-                        error
-                    );
-                }
+                route_to_handler_lane(&mut lanes, handler, payload);
             }
             Message::SvmBlock(block, handler) => {
                 if handler.options.svm.is_none() {
@@ -353,13 +378,7 @@ async fn handle_message(mut stream: MessageStream) {
                     "block_height": block.block_height,
                     "block_hash": block.blockhash,
                 });
-                if let Err(error) = invoke_handler_module(&handler, payload) {
-                    warning!(
-                        "sync: router: svm:block route {} module invocation failed: {}",
-                        handler.id,
-                        error
-                    );
-                }
+                route_to_handler_lane(&mut lanes, handler, payload);
             }
             Message::SvmLog(log, handler) => {
                 if handler.options.svm.is_none() {
@@ -375,13 +394,7 @@ async fn handle_message(mut stream: MessageStream) {
                     "signature": log.value.signature,
                     "logs": log.value.logs,
                 });
-                if let Err(error) = invoke_handler_module(&handler, payload) {
-                    warning!(
-                        "sync: router: svm:log route {} module invocation failed: {}",
-                        handler.id,
-                        error
-                    );
-                }
+                route_to_handler_lane(&mut lanes, handler, payload);
             }
             Message::Shutdown => {
                 break;
@@ -390,4 +403,7 @@ async fn handle_message(mut stream: MessageStream) {
     }
 
     stats.abort();
+    for (_, (_, task)) in lanes {
+        task.abort();
+    }
 }

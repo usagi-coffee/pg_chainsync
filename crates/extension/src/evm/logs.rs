@@ -1,4 +1,4 @@
-use pgrx::{log, warning};
+use pgrx::warning;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -51,12 +51,6 @@ fn group_fingerprint(group_handlers: &[Arc<HandlerRuntime>]) -> String {
     ids.join(",")
 }
 
-fn sorted_keys(groups: &HashMap<String, Vec<Arc<HandlerRuntime>>>) -> String {
-    let mut keys = groups.keys().cloned().collect::<Vec<_>>();
-    keys.sort();
-    keys.join(", ")
-}
-
 fn spawn_group(
     key: String,
     group_handlers: Vec<Arc<HandlerRuntime>>,
@@ -104,7 +98,6 @@ fn spawn_group(
                 }
             };
 
-            log!("sync: ingress: evm:logs: {}: lane online", key);
             loop {
                 match stream.next().await {
                     Some(Some(event_log)) => {
@@ -164,25 +157,11 @@ async fn desired_groups(
 }
 
 pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
-    log!("sync: ingress: evm:logs: listener boot");
     let mut running: HashMap<String, (String, JoinHandle<()>)> = HashMap::new();
 
     let Some(initial_groups) = desired_groups(&channel).await else {
         return;
     };
-    log!(
-        "sync: ingress: evm:logs: route groups={} at startup",
-        initial_groups.len()
-    );
-    if !initial_groups.is_empty() {
-        log!(
-            "sync: ingress: evm:logs: keys=[{}]",
-            sorted_keys(&initial_groups)
-        );
-    }
-    if initial_groups.is_empty() {
-        log!("sync: ingress: evm:logs: no active routes, listener idle");
-    }
     for (key, group_handlers) in initial_groups {
         let fingerprint = group_fingerprint(&group_handlers);
         let handle = spawn_group(key.clone(), group_handlers, channel.clone());
@@ -196,16 +175,6 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     continue;
                 };
-                log!(
-                    "sync: ingress: evm:logs: route groups={} after reload",
-                    groups.len()
-                );
-                if !groups.is_empty() {
-                    log!(
-                        "sync: ingress: evm:logs: keys=[{}]",
-                        sorted_keys(&groups)
-                    );
-                }
 
                 let mut keep = HashMap::new();
                 for (key, group_handlers) in groups {

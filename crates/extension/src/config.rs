@@ -727,13 +727,6 @@ pub fn sync_from_handlers(chainsync_dir: &Path) -> Result<SyncOutcome> {
     let restart_blocks = previous_blocks != next_blocks;
     let restart_logs = previous_logs != next_logs;
 
-    log!(
-        "sync: handlers: active={} restart_blocks={} restart_logs={}",
-        loaded_handlers.len(),
-        restart_blocks,
-        restart_logs
-    );
-
     HandlerRuntime::replace_all(loaded_handlers);
 
     Ok(SyncOutcome {
