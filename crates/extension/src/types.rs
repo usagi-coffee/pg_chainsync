@@ -29,6 +29,7 @@ pub enum Message {
 
     SvmBlock(SvmBlock, Arc<HandlerRuntime>),
     SvmLog(SvmLog, Arc<HandlerRuntime>),
+    CronTick(Arc<HandlerRuntime>),
 
     // Utility messages
     Shutdown,
@@ -89,18 +90,51 @@ pub struct SvmOptions {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HandlerMode {
+    Stream,
+    Cron,
+}
+
+impl Default for HandlerMode {
+    fn default() -> Self {
+        Self::Stream
+    }
+}
+
+impl TryFrom<&str> for HandlerMode {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "stream" => Ok(Self::Stream),
+            "cron" => Ok(Self::Cron),
+            other => Err(format!(
+                "handler.mode must be one of: stream, cron (got '{}')",
+                other
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct HandlerOptions {
+    #[serde(default)]
+    pub mode: HandlerMode,
+
     /// RPC url to use for this handler
     pub rpc: Option<String>,
     /// Websocket ws url to use for this handler
     pub ws: Option<String>,
 
-    /// Lookup query id -> SQL path (relative to handler dir)
-    pub lookup_queries: Option<BTreeMap<String, String>>,
-    /// Mutation query id -> SQL path (relative to handler dir)
-    pub mutation_queries: Option<BTreeMap<String, String>>,
+    /// Query id -> SQL
+    pub queries: Option<BTreeMap<String, String>>,
     /// Query ids to prefetch before first module call
-    pub prelookups: Option<Vec<String>>,
+    pub enrich: Option<Vec<String>>,
+    /// Cron expression (seconds-resolution, e.g. "* * * * * *")
+    pub cron: Option<String>,
+    /// Arbitrary plugin config loaded from [plugin] handler section
+    pub plugin: Option<serde_json::Value>,
     /// Absolute plugin path loaded from config scanner
     pub plugin_path: Option<String>,
     /// Content hash for handler module .so (embedded config included in binary).
@@ -115,7 +149,18 @@ pub struct HandlerOptions {
 }
 
 impl HandlerOptions {
+    pub fn is_cron_handler(&self) -> bool {
+        matches!(self.mode, HandlerMode::Cron)
+    }
+
+    pub fn is_stream_handler(&self) -> bool {
+        matches!(self.mode, HandlerMode::Stream)
+    }
+
     pub fn is_block_handler(&self) -> bool {
+        if !self.is_stream_handler() {
+            return false;
+        }
         if let Some(options) = &self.evm {
             return options.address.is_none()
                 && options.event.is_none()
@@ -131,6 +176,9 @@ impl HandlerOptions {
     }
 
     pub fn is_log_handler(&self) -> bool {
+        if !self.is_stream_handler() {
+            return false;
+        }
         if let Some(options) = &self.evm {
             return options.event.is_some()
                 || options.topic0.is_some()
@@ -144,7 +192,6 @@ impl HandlerOptions {
 
         false
     }
-
 }
 
 impl From<u8> for Signal {
@@ -160,6 +207,7 @@ impl From<u8> for Signal {
 pub trait HandlerRouting {
     fn svm_handlers(&self) -> Vec<HandlerRuntime>;
     fn evm_handlers(&self) -> Vec<HandlerRuntime>;
+    fn cron_handlers(&self) -> Vec<HandlerRuntime>;
 
     fn block_handlers(&self) -> Vec<HandlerRuntime>;
     fn log_handlers(&self) -> Vec<HandlerRuntime>;
@@ -190,6 +238,13 @@ impl HandlerRouting for Vec<HandlerRuntime> {
     fn log_handlers(&self) -> Vec<HandlerRuntime> {
         self.iter()
             .filter(|handler| handler.options.is_log_handler())
+            .cloned()
+            .collect()
+    }
+
+    fn cron_handlers(&self) -> Vec<HandlerRuntime> {
+        self.iter()
+            .filter(|handler| handler.options.is_cron_handler())
             .cloned()
             .collect()
     }

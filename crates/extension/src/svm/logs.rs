@@ -106,8 +106,12 @@ fn spawn_group(
                 match stream.next().await {
                     Some(Some(svm_log)) => {
                         for handler in &group_handlers {
-                            if let Err(error) =
-                                handle_svm_log(handler, svm_log.clone(), &channel).await
+                            if let Err(error) = handle_svm_log(
+                                handler,
+                                svm_log.clone(),
+                                &channel,
+                            )
+                            .await
                             {
                                 warning!(
                                     "sync: ingress: svm:logs: {}: route={} dispatch failed: {}",
@@ -152,7 +156,10 @@ async fn desired_groups(
 
     let mut groups: HashMap<String, Vec<Arc<HandlerRuntime>>> = HashMap::new();
     for handler in handlers {
-        groups.entry(ingress_key(&handler)).or_default().push(handler);
+        groups
+            .entry(ingress_key(&handler))
+            .or_default()
+            .push(handler);
     }
 
     Some(groups)
@@ -182,7 +189,9 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                 for (key, group_handlers) in groups {
                     let fingerprint = group_fingerprint(&group_handlers);
                     match running.remove(&key) {
-                        Some((old_fingerprint, handle)) if old_fingerprint == fingerprint => {
+                        Some((old_fingerprint, handle))
+                            if old_fingerprint == fingerprint =>
+                        {
                             keep.insert(key, (old_fingerprint, handle));
                         }
                         Some((_, handle)) => {
@@ -224,7 +233,10 @@ pub async fn handle_svm_log(
     channel: &Channel,
 ) -> Result<(), anyhow::Error> {
     let Some(_) = &handler.options.svm else {
-        bail!("sync: ingress: svm:logs: {}: missing svm options", &handler.name);
+        bail!(
+            "sync: ingress: svm:logs: {}: missing svm options",
+            &handler.name
+        );
     };
 
     ensure!(
@@ -259,9 +271,14 @@ pub async fn build_stream<'a>(
 ) -> anyhow::Result<
     Pin<Box<dyn Stream<Item = Response<RpcLogsResponse>> + 'a + Send>>,
 > {
-    let options = handler.options.svm.as_ref().expect("SVM options are not set");
+    let options = handler
+        .options
+        .svm
+        .as_ref()
+        .expect("SVM options are not set");
     let filter = build_filter(options);
-    let provider = handler.connect_svm_ws().await.context("Invalid provider")?;
+    let provider =
+        handler.connect_svm_ws().await.context("Invalid provider")?;
     let sub = provider
         .logs_subscribe(filter, build_config(options))
         .await?;

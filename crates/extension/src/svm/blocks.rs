@@ -11,8 +11,8 @@ use solana_transaction_status_client_types::{
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::task::JoinHandle;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio_stream::{Stream, StreamExt, StreamNotifyClose};
 
@@ -111,7 +111,8 @@ fn spawn_group(
                     Some(Some(block)) => {
                         for handler in &group_handlers {
                             if let Err(error) =
-                                handle_block(handler, block.clone(), &channel).await
+                                handle_block(handler, block.clone(), &channel)
+                                    .await
                             {
                                 warning!(
                                     "sync: ingress: svm:blocks: {}: route={} dispatch failed: {}",
@@ -156,7 +157,10 @@ async fn desired_groups(
 
     let mut groups: HashMap<String, Vec<Arc<HandlerRuntime>>> = HashMap::new();
     for handler in handlers {
-        groups.entry(ingress_key(&handler)).or_default().push(handler);
+        groups
+            .entry(ingress_key(&handler))
+            .or_default()
+            .push(handler);
     }
 
     Some(groups)
@@ -186,7 +190,9 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                 for (key, group_handlers) in groups {
                     let fingerprint = group_fingerprint(&group_handlers);
                     match running.remove(&key) {
-                        Some((old_fingerprint, handle)) if old_fingerprint == fingerprint => {
+                        Some((old_fingerprint, handle))
+                            if old_fingerprint == fingerprint =>
+                        {
                             keep.insert(key, (old_fingerprint, handle));
                         }
                         Some((_, handle)) => {
@@ -228,18 +234,23 @@ pub async fn handle_block(
     channel: &Channel,
 ) -> Result<(), anyhow::Error> {
     let Some(block) = block.value.block else {
-        bail!("sync: ingress: svm:blocks: {}: empty block payload", &handler.name);
+        bail!(
+            "sync: ingress: svm:blocks: {}: empty block payload",
+            &handler.name
+        );
     };
 
     let Some(block_height) = block.block_height else {
-        bail!("sync: ingress: svm:blocks: {}: missing block height", &handler.name);
+        bail!(
+            "sync: ingress: svm:blocks: {}: missing block height",
+            &handler.name
+        );
     };
 
     ensure!(
         channel.send(Message::SvmBlock(block, handler.clone())),
         "sync: ingress: svm:blocks: {}: enqueue block {} failed",
-        &handler.name
-        ,
+        &handler.name,
         block_height
     );
 
@@ -292,9 +303,14 @@ pub async fn build_stream<'a>(
 ) -> anyhow::Result<
     Pin<Box<dyn Stream<Item = Response<RpcBlockUpdate>> + 'a + Send>>,
 > {
-    let options = handler.options.svm.as_ref().expect("SVM options are required");
+    let options = handler
+        .options
+        .svm
+        .as_ref()
+        .expect("SVM options are required");
     let filter = build_filter(options);
-    let provider = handler.connect_svm_ws().await.context("Invalid provider")?;
+    let provider =
+        handler.connect_svm_ws().await.context("Invalid provider")?;
     let sub = provider
         .block_subscribe(filter, Some(build_subscribe_config(options)))
         .await?;

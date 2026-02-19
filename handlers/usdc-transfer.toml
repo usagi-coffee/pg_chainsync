@@ -1,24 +1,27 @@
-ws = "${EVM_WS_URL}"
-
 [handler]
 id = "usdc-transfer"
 plugin = "erc20-transfer"
 chain = "evm"
 mode = "stream"
 
+[ingress]
+ws = "${EVM_WS_URL}"
+
 [evm]
 address = "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" # USDC
 event = "Transfer(address,address,uint256)"
 
-[queries.lookups.recovery]
-sql_inline = """
+[runtime]
+enrich = ["recovery"]
+
+[queries]
+recovery = """
 SELECT COALESCE(MAX(block_number), 0)::bigint AS last_block
 FROM erc20_transfers
 WHERE lower(contract) = lower('0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48');
 """
 
-[queries.mutations.upsert_transfer]
-sql_inline = """
+upsert_transfer = """
 INSERT INTO erc20_transfers (
   contract,
   from_address,
@@ -48,5 +51,3 @@ SET
   ingest_unix = EXCLUDED.ingest_unix;
 """
 
-[runtime]
-prelookups = ["recovery"]

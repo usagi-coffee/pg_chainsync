@@ -8,6 +8,7 @@ members = [
   "crates/sdk",
   "plugins/ohlc-1m",
   "plugins/erc20-transfer",
+  "plugins/svm-accounts",
 ]
 
 [profile.dev]

@@ -102,8 +102,12 @@ fn spawn_group(
                 match stream.next().await {
                     Some(Some(event_log)) => {
                         for handler in &group_handlers {
-                            if let Err(error) =
-                                handle_evm_log(handler, event_log.clone(), &channel).await
+                            if let Err(error) = handle_evm_log(
+                                handler,
+                                event_log.clone(),
+                                &channel,
+                            )
+                            .await
                             {
                                 warning!(
                                     "sync: ingress: evm:logs: {}: route={} dispatch failed: {}",
@@ -150,7 +154,10 @@ async fn desired_groups(
 
     let mut groups: HashMap<String, Vec<Arc<HandlerRuntime>>> = HashMap::new();
     for handler in handlers {
-        groups.entry(ingress_key(&handler)).or_default().push(handler);
+        groups
+            .entry(ingress_key(&handler))
+            .or_default()
+            .push(handler);
     }
 
     Some(groups)
@@ -180,7 +187,9 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                 for (key, group_handlers) in groups {
                     let fingerprint = group_fingerprint(&group_handlers);
                     match running.remove(&key) {
-                        Some((old_fingerprint, handle)) if old_fingerprint == fingerprint => {
+                        Some((old_fingerprint, handle))
+                            if old_fingerprint == fingerprint =>
+                        {
                             keep.insert(key, (old_fingerprint, handle));
                         }
                         Some((_, handle)) => {
@@ -222,21 +231,33 @@ pub async fn handle_evm_log(
     channel: &Channel,
 ) -> Result<(), anyhow::Error> {
     let Some(options) = &handler.options.evm else {
-        bail!("sync: ingress: evm:logs: {}: missing evm options", &handler.name);
+        bail!(
+            "sync: ingress: evm:logs: {}: missing evm options",
+            &handler.name
+        );
     };
 
     let Some(transaction) = log.transaction_hash else {
-        warning!("sync: ingress: evm:logs: {}: pending tx, skipping", &handler.name);
+        warning!(
+            "sync: ingress: evm:logs: {}: pending tx, skipping",
+            &handler.name
+        );
         return Ok(());
     };
 
     let Some(block) = log.block_number else {
-        warning!("sync: ingress: evm:logs: {}: pending block, skipping", &handler.name);
+        warning!(
+            "sync: ingress: evm:logs: {}: pending block, skipping",
+            &handler.name
+        );
         return Ok(());
     };
 
     let Some(log_index) = log.log_index else {
-        warning!("sync: ingress: evm:logs: {}: pending log index, skipping", &handler.name);
+        warning!(
+            "sync: ingress: evm:logs: {}: pending log index, skipping",
+            &handler.name
+        );
         return Ok(());
     };
 
@@ -258,7 +279,10 @@ pub async fn handle_evm_log(
         && let Ok(_hash) = topic0.parse::<B256>()
         && !matches!(log.topic0(), Some(_hash))
     {
-        warning!("sync: ingress: evm:logs: {}: topic0 mismatch", &handler.name);
+        warning!(
+            "sync: ingress: evm:logs: {}: topic0 mismatch",
+            &handler.name
+        );
         return Ok(());
     }
 

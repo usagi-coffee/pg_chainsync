@@ -11,6 +11,7 @@ const TRANSFER_TOPIC0: &str =
 #[derive(Debug, Deserialize)]
 struct InputEvent {
     event: String,
+    plugin: Option<PluginOptions>,
     block_number: Option<u64>,
     transaction_hash: Option<String>,
     log_index: Option<u64>,
@@ -18,6 +19,13 @@ struct InputEvent {
     topics: Option<Vec<String>>,
     data: Option<String>,
     ingest_unix: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize, Clone)]
+struct PluginOptions {
+    mutation_id: Option<String>,
+    transfer_topic0: Option<String>,
+    recovery_lookup_id: Option<String>,
 }
 
 struct Erc20TransferHandler;
@@ -39,9 +47,18 @@ fn decode_amount_decimal(data: &str) -> Result<String, String> {
 }
 
 fn setup_response(input: &serde_json::Value) -> SetupResponse {
+    let plugin: PluginOptions = input
+        .get("plugin")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .unwrap_or(None)
+        .unwrap_or_default();
+    let recovery_lookup_id =
+        plugin.recovery_lookup_id.as_deref().unwrap_or("recovery");
     let last_block = input
         .get("prefetched")
-        .and_then(|v| v.get("recovery"))
+        .and_then(|v| v.get(recovery_lookup_id))
         .and_then(|v| v.as_array())
         .and_then(|rows| rows.first())
         .and_then(|v| v.get("last_block"))
@@ -50,14 +67,16 @@ fn setup_response(input: &serde_json::Value) -> SetupResponse {
 
     if last_block <= 0 {
         plugin_log!(
-            "setup: recovery last_block missing/zero; no ingress override"
+            "setup: lookup={} last_block missing/zero; no ingress override",
+            recovery_lookup_id
         );
         return SetupResponse::default();
     }
 
     plugin_log!(
-        "setup: applying recovery override evm.from_block={}",
-        last_block
+        "setup: lookup={} applying recovery override evm.from_block={}",
+        recovery_lookup_id,
+        last_block,
     );
     SetupResponse {
         ingress_overrides: Some(IngressOverrides {
@@ -75,6 +94,11 @@ fn setup_response(input: &serde_json::Value) -> SetupResponse {
 fn process_event(input: serde_json::Value) -> Result<ModuleResponse, String> {
     let parsed: InputEvent =
         serde_json::from_value(input).map_err(|e| e.to_string())?;
+    let plugin = parsed.plugin.clone().unwrap_or_default();
+    let transfer_topic0 =
+        plugin.transfer_topic0.as_deref().unwrap_or(TRANSFER_TOPIC0);
+    let mutation_id =
+        plugin.mutation_id.as_deref().unwrap_or("upsert_transfer");
 
     if parsed.event != "evm_log" {
         plugin_log!("ignoring non-evm_log event");
@@ -89,7 +113,7 @@ fn process_event(input: serde_json::Value) -> Result<ModuleResponse, String> {
         }
     };
 
-    let transfer_topic: B256 = TRANSFER_TOPIC0
+    let transfer_topic: B256 = transfer_topic0
         .parse()
         .map_err(|_| "invalid transfer topic constant".to_string())?;
     let topic0: B256 = topics[0]
@@ -147,7 +171,7 @@ fn process_event(input: serde_json::Value) -> Result<ModuleResponse, String> {
 
     Ok(ModuleResponse::Done {
         mutations: vec![Mutation {
-            id: "upsert_transfer".to_string(),
+            id: mutation_id.to_string(),
             payload,
         }],
     })
@@ -158,9 +182,7 @@ impl PluginHandler for Erc20TransferHandler {
         Ok(setup_response(&input))
     }
 
-    fn handle_event(
-        input: serde_json::Value,
-    ) -> Result<ModuleResponse, String> {
+    fn handle(input: serde_json::Value) -> Result<ModuleResponse, String> {
         match process_event(input) {
             Ok(response) => Ok(response),
             Err(error) => {

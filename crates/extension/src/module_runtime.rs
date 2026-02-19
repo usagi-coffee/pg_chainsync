@@ -32,8 +32,8 @@ pub fn invoke(handler: &HandlerRuntime, payload: &[u8]) -> Result<Vec<u8>> {
 
     // SAFETY: ABI and symbol presence are validated during handler load, and outputs are copied before free.
     unsafe {
-        let lib = Library::new(path)
-            .with_context(|| format!("loading {}", path))?;
+        let lib =
+            Library::new(path).with_context(|| format!("loading {}", path))?;
         let handle: libloading::Symbol<HandleFn> = lib
             .get(b"chainsync_handle_event_v1\0")
             .context("missing chainsync_handle_event_v1")?;
@@ -65,8 +65,8 @@ pub fn setup(handler: &HandlerRuntime, payload: &[u8]) -> Result<Value> {
 
     // SAFETY: ABI and symbol presence are validated during handler load.
     unsafe {
-        let lib = Library::new(path)
-            .with_context(|| format!("loading {}", path))?;
+        let lib =
+            Library::new(path).with_context(|| format!("loading {}", path))?;
         let setup: libloading::Symbol<SetupFn> = lib
             .get(b"chainsync_setup_v1\0")
             .context("missing chainsync_setup_v1")?;

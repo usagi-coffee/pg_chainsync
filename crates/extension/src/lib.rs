@@ -1,7 +1,5 @@
 use pgrx::prelude::*;
-use pgrx::{
-    GucContext, GucFlags, GucRegistry, pg_shmem_init,
-};
+use pgrx::{GucContext, GucFlags, GucRegistry, pg_shmem_init};
 
 #[macro_use]
 pub mod worker;

@@ -10,8 +10,9 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use solana_transaction_status_client_types::option_serializer::OptionSerializer;
 use solana_transaction_status_client_types::{
-    EncodedConfirmedTransactionWithStatusMeta, TransactionDetails, UiConfirmedBlock,
-    UiInnerInstructions, UiInstruction, UiTransactionTokenBalance,
+    EncodedConfirmedTransactionWithStatusMeta, TransactionDetails,
+    UiConfirmedBlock, UiInnerInstructions, UiInstruction,
+    UiTransactionTokenBalance,
 };
 use tokio::sync::OnceCell;
 
@@ -20,8 +21,9 @@ pub type SvmPubSubError = solana_client::pubsub_client::PubsubClientError;
 pub type SvmRpc = solana_client::nonblocking::rpc_client::RpcClient;
 
 pub type SvmBlock = UiConfirmedBlock;
-pub type SvmLog =
-    solana_client::rpc_response::Response<solana_client::rpc_response::RpcLogsResponse>;
+pub type SvmLog = solana_client::rpc_response::Response<
+    solana_client::rpc_response::RpcLogsResponse,
+>;
 
 pub type SvmTransactionDetails = TransactionDetails;
 pub type RawSvmTransaction = EncodedConfirmedTransactionWithStatusMeta;
@@ -68,7 +70,9 @@ pub async fn connect_ws<'a>(
     .await
 }
 
-pub async fn reconnect_ws(url: &str) -> anyhow::Result<SvmPubSub, SvmPubSubError> {
+pub async fn reconnect_ws(
+    url: &str,
+) -> anyhow::Result<SvmPubSub, SvmPubSubError> {
     SvmPubSub::new(url).await
 }
 
@@ -100,11 +104,14 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
             bail!("meta was not in transaction");
         };
 
-        let OptionSerializer::Some(loaded_addresses) = meta.loaded_addresses else {
+        let OptionSerializer::Some(loaded_addresses) = meta.loaded_addresses
+        else {
             bail!("loaded addresses was not in transaction");
         };
 
-        let OptionSerializer::Some(inner_instructions) = meta.inner_instructions else {
+        let OptionSerializer::Some(inner_instructions) =
+            meta.inner_instructions
+        else {
             bail!("inner instructions were not in transaction");
         };
 
@@ -127,29 +134,43 @@ impl TryInto<SvmTransaction> for RawSvmTransaction {
                 .into_iter()
                 .flat_map(|inner| inner.instructions.iter())
             {
-                if let UiInstruction::Compiled(inner_instruction) = inner_instruction
-                    && let Ok(inner_program) =
-                        Pubkey::from_str(&accounts[inner_instruction.program_id_index as usize])
+                if let UiInstruction::Compiled(inner_instruction) =
+                    inner_instruction
+                    && let Ok(inner_program) = Pubkey::from_str(
+                        &accounts[inner_instruction.program_id_index as usize],
+                    )
                     && inner_program == SPL_TOKEN_PROGRAM
-                    && let Ok(slice) = bs58::decode(&inner_instruction.data).into_vec()
+                    && let Ok(slice) =
+                        bs58::decode(&inner_instruction.data).into_vec()
                 {
                     if slice[0] == SPL_INITIALIZE_ACCOUNT {
                         initialized_accounts.push(SvmInitializedAccount {
-                            address: accounts[inner_instruction.accounts[0] as usize].to_owned(),
-                            mint: accounts[inner_instruction.accounts[1] as usize].to_owned(),
-                            owner: accounts[inner_instruction.accounts[2] as usize].to_owned(),
+                            address: accounts
+                                [inner_instruction.accounts[0] as usize]
+                                .to_owned(),
+                            mint: accounts
+                                [inner_instruction.accounts[1] as usize]
+                                .to_owned(),
+                            owner: accounts
+                                [inner_instruction.accounts[2] as usize]
+                                .to_owned(),
                         });
                     } else if slice[0] == SPL_INITIALIZE_ACCOUNT3 {
                         initialized_accounts.push(SvmInitializedAccount {
-                            address: accounts[inner_instruction.accounts[0] as usize].to_owned(),
-                            mint: accounts[inner_instruction.accounts[1] as usize].to_owned(),
+                            address: accounts
+                                [inner_instruction.accounts[0] as usize]
+                                .to_owned(),
+                            mint: accounts
+                                [inner_instruction.accounts[1] as usize]
+                                .to_owned(),
                             owner: bs58::encode(&slice[1..33]).into_string(),
                         });
                     }
                 }
             }
 
-            if let Ok(program) = Pubkey::from_str(&accounts[inst.program_id_index as usize])
+            if let Ok(program) =
+                Pubkey::from_str(&accounts[inst.program_id_index as usize])
                 && program == SPL_TOKEN_PROGRAM
                 && let Some(discriminator) = inst.data.first()
             {

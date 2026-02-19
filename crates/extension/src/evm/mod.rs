@@ -1,9 +1,13 @@
 use crate::types::HandlerRuntime;
 
-pub use evm_core::{EvmBlock, EvmLog, EvmLogResponse, EvmPubSub, EvmPubSubError};
+pub use evm_core::{
+    EvmBlock, EvmLog, EvmLogResponse, EvmPubSub, EvmPubSubError,
+};
 
 impl HandlerRuntime {
-    pub async fn connect_evm(&self) -> anyhow::Result<&EvmPubSub, EvmPubSubError> {
+    pub async fn connect_evm(
+        &self,
+    ) -> anyhow::Result<&EvmPubSub, EvmPubSubError> {
         let url = self
             .options
             .ws
@@ -12,7 +16,9 @@ impl HandlerRuntime {
         evm_core::connect_ws(&self.evm, url).await
     }
 
-    pub async fn reconnect_evm(&self) -> anyhow::Result<EvmPubSub, EvmPubSubError> {
+    pub async fn reconnect_evm(
+        &self,
+    ) -> anyhow::Result<EvmPubSub, EvmPubSubError> {
         let url = self
             .options
             .ws

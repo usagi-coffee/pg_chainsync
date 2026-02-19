@@ -37,10 +37,18 @@ struct InputEvent {
     event: String,
     handler_id: Option<i64>,
     state_path: Option<String>,
+    plugin: Option<PluginOptions>,
     prefetched: Option<serde_json::Value>,
     address: Option<String>,
     data: Option<String>,
     ingest_unix: Option<u64>,
+}
+
+#[derive(Default, Deserialize, Clone)]
+struct PluginOptions {
+    bucket_seconds: Option<u64>,
+    mutation_id: Option<String>,
+    reset_state_on_setup: Option<bool>,
 }
 
 struct OhlcHandler;
@@ -105,16 +113,16 @@ fn lookup_decimals(prefetched: Option<&serde_json::Value>) -> (u32, u32) {
         .or_else(|| prefetched.get("decimals"))
     else {
         plugin_log!(
-            "prelookup result missing 'pool_meta'/'decimals'; using decimals 0/0"
+            "enrich result missing 'pool_meta'/'decimals'; using decimals 0/0"
         );
         return (0, 0);
     };
     let Some(rows) = pool_meta.as_array() else {
-        plugin_log!("prelookup rows malformed; using decimals 0/0");
+        plugin_log!("enrich rows malformed; using decimals 0/0");
         return (0, 0);
     };
     let Some(first) = rows.first() else {
-        plugin_log!("prelookup rows empty; using decimals 0/0");
+        plugin_log!("enrich rows empty; using decimals 0/0");
         return (0, 0);
     };
 
@@ -164,6 +172,7 @@ fn decode_swap_price_and_volume(
 
 fn process_event(input: serde_json::Value) -> Result<ModuleResponse> {
     let event: InputEvent = serde_json::from_value(input)?;
+    let plugin = event.plugin.clone().unwrap_or_default();
     let handler_id = event.handler_id.unwrap_or(0);
     load_state_if_needed(handler_id, event.state_path.as_deref())?;
 
@@ -186,6 +195,7 @@ fn process_event(input: serde_json::Value) -> Result<ModuleResponse> {
             .map(|d| d.as_secs())
             .unwrap_or(0)
     });
+    let bucket_seconds = plugin.bucket_seconds.unwrap_or(60).max(1);
 
     let (base_decimals, quote_decimals) =
         lookup_decimals(event.prefetched.as_ref());
@@ -204,7 +214,7 @@ fn process_event(input: serde_json::Value) -> Result<ModuleResponse> {
         vol_base,
         vol_quote
     );
-    let bucket_start = (now / 60) * 60;
+    let bucket_start = (now / bucket_seconds) * bucket_seconds;
 
     let mut to_emit: Option<serde_json::Value> = None;
 
@@ -276,7 +286,11 @@ fn process_event(input: serde_json::Value) -> Result<ModuleResponse> {
     match to_emit {
         Some(payload) => Ok(ModuleResponse::Done {
             mutations: vec![Mutation {
-                id: "upsert_ohlc_1m".into(),
+                id: plugin
+                    .mutation_id
+                    .as_deref()
+                    .unwrap_or("upsert_ohlc_1m")
+                    .to_string(),
                 payload,
             }],
         }),
@@ -294,12 +308,26 @@ impl PluginHandler for OhlcHandler {
             .and_then(|v| v.as_str())
             .map(ToString::to_string);
 
+        let plugin_options: PluginOptions = input
+            .get("plugin")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .unwrap_or(None)
+            .unwrap_or_default();
+
         let should_reset = std::env::var("CHAINSYNC_OHLC_RESET_STATE_ON_SETUP")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
+        let should_reset =
+            plugin_options.reset_state_on_setup.unwrap_or(should_reset);
 
         if let Some(path) = state_path {
-            plugin_log!("setup state_path={}", path);
+            plugin_log!(
+                "setup state_path={} reset_state_on_setup={}",
+                path,
+                should_reset
+            );
             if should_reset {
                 match fs::remove_file(&path) {
                     Ok(()) => {
@@ -323,9 +351,7 @@ impl PluginHandler for OhlcHandler {
         Ok(SetupResponse::default())
     }
 
-    fn handle_event(
-        input: serde_json::Value,
-    ) -> Result<ModuleResponse, String> {
+    fn handle(input: serde_json::Value) -> Result<ModuleResponse, String> {
         match process_event(input) {
             Ok(response) => Ok(response),
             Err(error) => {

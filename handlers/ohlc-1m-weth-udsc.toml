@@ -1,25 +1,25 @@
-ws = "${EVM_WS_URL}"
-
 [handler]
 id = "ohlc-1m-weth-udsc"
 plugin = "ohlc-1m"
 chain = "evm"
 mode = "stream"
 
+[ingress]
+ws = "${EVM_WS_URL}"
+
 [evm]
 address = "0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc" # WETH/USDC
 event = "Swap(address,uint256,uint256,uint256,uint256,address)" # Uniswap v2
 
 [runtime]
-prelookups = ["pool_meta"]
+enrich = ["pool_meta"]
 
-[queries.lookups.pool_meta]
-sql_inline = """
+[queries]
+pool_meta = """
 SELECT 6 AS base_decimals, 18 AS quote_decimals
 """
 
-[queries.mutations.upsert_ohlc_1m]
-sql_inline = """
+upsert_ohlc_1m = """
 INSERT INTO ohlc_1m (
   pair_id,
   bucket_start_unix,

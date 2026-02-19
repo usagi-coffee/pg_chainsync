@@ -7,6 +7,7 @@ use pgrx::log;
 use pgrx::prelude::*;
 
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio_stream::StreamExt;
@@ -27,31 +28,34 @@ use alloy::core::hex;
 use serde_json::json;
 
 const HANDLER_LANE_QUEUE_CAPACITY: usize = 50_000;
+const CRON_POLL_MS: u64 = 250;
 
 fn resolve_prefetched(
     handler: &Arc<HandlerRuntime>,
 ) -> Result<Option<serde_json::Value>, anyhow::Error> {
     let handler_id = handler.id;
-    let Some(prelookups) = &handler.options.prelookups else {
+    let Some(enrich) = &handler.options.enrich else {
         return Ok(None);
     };
-    if prelookups.is_empty() {
+    if enrich.is_empty() {
         return Ok(None);
     }
 
     let mut values = serde_json::Map::new();
-    for lookup_id in prelookups {
+    for lookup_id in enrich {
         let lookup_id_ref = lookup_id.as_str();
-        let value =
-            anyhow_pg_try!(|| prepared::execute_lookup(handler_id, lookup_id_ref))
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "prefetch lookup '{}' failed for handler {}: {}",
-                    lookup_id,
-                    handler_id,
-                    error
-                )
-            })?;
+        let value = anyhow_pg_try!(|| prepared::execute_lookup(
+            handler_id,
+            lookup_id_ref
+        ))
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "prefetch lookup '{}' failed for handler {}: {}",
+                lookup_id,
+                handler_id,
+                error
+            )
+        })?;
         values.insert(lookup_id.clone(), value);
     }
 
@@ -83,6 +87,11 @@ fn invoke_handler_module(
             serde_json::Value::String(log_path.clone()),
         );
     }
+    if let Some(plugin) = &handler.options.plugin
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("plugin".into(), plugin.clone());
+    }
 
     let bytes = serde_json::to_vec(&payload)?;
     let out = module_runtime::invoke(handler, &bytes)?;
@@ -107,7 +116,11 @@ fn invoke_handler_module(
                         )
                     })?;
                 anyhow_pg_try!(|| {
-                    prepared::execute_mutation(handler_id, &mutation_id, payload)
+                    prepared::execute_mutation(
+                        handler_id,
+                        &mutation_id,
+                        payload,
+                    )
                 })
                 .map_err(|error| {
                     anyhow::anyhow!(
@@ -166,7 +179,8 @@ fn route_to_handler_lane(
         ),
         Err(mpsc::error::TrySendError::Closed(job)) => {
             lanes.remove(&handler_id);
-            let (tx, rx) = mpsc::channel::<LaneJob>(HANDLER_LANE_QUEUE_CAPACITY);
+            let (tx, rx) =
+                mpsc::channel::<LaneJob>(HANDLER_LANE_QUEUE_CAPACITY);
             let task = tokio::spawn(process_handler_lane(handler_id, rx));
             lanes.insert(handler_id, (tx.clone(), task));
             if tx.try_send(job).is_err() {
@@ -176,6 +190,100 @@ fn route_to_handler_lane(
                 );
             }
         }
+    }
+}
+
+async fn request_handlers(channel: &Channel) -> Option<Vec<HandlerRuntime>> {
+    let (tx, rx) = oneshot::channel::<Vec<HandlerRuntime>>();
+    if !channel.send(Message::Handlers(tx)) {
+        return None;
+    }
+    rx.await.ok()
+}
+
+async fn listen_cron(channel: Arc<Channel>) {
+    let mut next_runs: HashMap<i64, chrono::DateTime<chrono::Utc>> =
+        HashMap::new();
+    let mut cron_specs: HashMap<i64, String> = HashMap::new();
+    let mut interval =
+        tokio::time::interval(Duration::from_millis(CRON_POLL_MS));
+
+    loop {
+        interval.tick().await;
+
+        let Some(handlers) = request_handlers(&channel).await else {
+            warning!("sync: cron: failed to load handlers");
+            continue;
+        };
+
+        let now = chrono::Utc::now();
+        let mut active_ids = std::collections::HashSet::new();
+
+        for handler in
+            handlers.into_iter().filter(|h| h.options.is_cron_handler())
+        {
+            active_ids.insert(handler.id);
+            let Some(cron_expr) = handler.options.cron.clone() else {
+                warning!(
+                    "sync: cron: handler {} missing runtime.cron",
+                    handler.name
+                );
+                continue;
+            };
+
+            let schedule = match cron_expr.parse::<cron::Schedule>() {
+                Ok(v) => v,
+                Err(error) => {
+                    warning!(
+                        "sync: cron: handler {} invalid cron '{}': {}",
+                        handler.name,
+                        cron_expr,
+                        error
+                    );
+                    continue;
+                }
+            };
+
+            if cron_specs.get(&handler.id) != Some(&cron_expr) {
+                cron_specs.insert(handler.id, cron_expr.clone());
+                if let Some(next) = schedule.after(&now).next() {
+                    next_runs.insert(handler.id, next);
+                } else {
+                    warning!(
+                        "sync: cron: handler {} has no future schedule for '{}'",
+                        handler.name,
+                        cron_expr
+                    );
+                    next_runs.remove(&handler.id);
+                }
+                continue;
+            }
+
+            let Some(next) = next_runs.get(&handler.id).copied() else {
+                if let Some(next) = schedule.after(&now).next() {
+                    next_runs.insert(handler.id, next);
+                }
+                continue;
+            };
+
+            if now < next {
+                continue;
+            }
+
+            if !channel.send(Message::CronTick(Arc::new(handler.clone()))) {
+                warning!("sync: cron: enqueue failed");
+                return;
+            }
+
+            if let Some(next_after) = schedule.after(&now).next() {
+                next_runs.insert(handler.id, next_after);
+            } else {
+                next_runs.remove(&handler.id);
+            }
+        }
+
+        next_runs.retain(|id, _| active_ids.contains(id));
+        cron_specs.retain(|id, _| active_ids.contains(id));
     }
 }
 
@@ -205,8 +313,7 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
     if let Err(error) = anyhow_pg_try!(|| {
         let config_dir = config::resolve_config_dir()?;
         config::sync_from_handlers(&config_dir).map(|_| ())
-    })
-    {
+    }) {
         warning!("sync: failed to sync handlers with {}", error);
     }
 
@@ -258,6 +365,9 @@ pub extern "C-unwind" fn background_worker_sync(_arg: pg_sys::Datum) {
              _ = svm::logs::listen(Arc::clone(&channel), svm_logs_rx) => {
                  log!("sync: stopped listening to transactions... exiting");
              },
+             _ = listen_cron(Arc::clone(&channel)) => {
+                 log!("sync: stopped cron scheduler... exiting");
+             },
         }
 
         if channel.send(Message::Shutdown) {
@@ -282,8 +392,10 @@ async fn handle_message(mut stream: MessageStream) {
 
     let svm_blocks = Arc::new(AtomicUsize::new(0));
     let svm_logs = Arc::new(AtomicUsize::new(0));
+    let cron_ticks = Arc::new(AtomicUsize::new(0));
     let svm_blocks_stats = Arc::clone(&svm_blocks);
     let svm_logs_stats = Arc::clone(&svm_logs);
+    let cron_ticks_stats = Arc::clone(&cron_ticks);
 
     // Spawn stats logger
     let stats = tokio::spawn(async move {
@@ -292,11 +404,12 @@ async fn handle_message(mut stream: MessageStream) {
         loop {
             interval.tick().await;
             log!(
-                "sync: router: throughput evm(blocks/logs)={}/{} per min svm(blocks/logs)={}/{} per min",
+                "sync: router: throughput evm(blocks/logs)={}/{} per min svm(blocks/logs)={}/{} per min cron(ticks)={} per min",
                 evm_blocks_stats.swap(0, Ordering::Relaxed),
                 evm_logs_stats.swap(0, Ordering::Relaxed),
                 svm_blocks_stats.swap(0, Ordering::Relaxed),
-                svm_logs_stats.swap(0, Ordering::Relaxed)
+                svm_logs_stats.swap(0, Ordering::Relaxed),
+                cron_ticks_stats.swap(0, Ordering::Relaxed)
             );
         }
     });
@@ -308,8 +421,9 @@ async fn handle_message(mut stream: MessageStream) {
         };
 
         match message {
-            Message::Handlers(oneshot) => match anyhow_pg_try!(|| HandlerRuntime::query_all())
-            {
+            Message::Handlers(oneshot) => match anyhow_pg_try!(|| {
+                HandlerRuntime::query_all()
+            }) {
                 Ok(handlers) => {
                     if oneshot.send(handlers).is_err() {
                         warning!("sync: router: failed to return route table");
@@ -324,7 +438,10 @@ async fn handle_message(mut stream: MessageStream) {
             },
             Message::EvmBlock(block, handler) => {
                 if handler.options.evm.is_none() {
-                    error!("sync: router: evm:block route {} has non-evm config", handler.name);
+                    error!(
+                        "sync: router: evm:block route {} has non-evm config",
+                        handler.name
+                    );
                 }
 
                 evm_blocks.fetch_add(1, Ordering::Relaxed);
@@ -339,7 +456,10 @@ async fn handle_message(mut stream: MessageStream) {
             }
             Message::EvmLog(log, handler) => {
                 if handler.options.evm.is_none() {
-                    error!("sync: router: evm:log route {} has non-evm config", handler.name);
+                    error!(
+                        "sync: router: evm:log route {} has non-evm config",
+                        handler.name
+                    );
                 }
 
                 evm_logs.fetch_add(1, Ordering::Relaxed);
@@ -367,7 +487,10 @@ async fn handle_message(mut stream: MessageStream) {
             }
             Message::SvmBlock(block, handler) => {
                 if handler.options.svm.is_none() {
-                    error!("sync: router: svm:block route {} has non-svm config", handler.name);
+                    error!(
+                        "sync: router: svm:block route {} has non-svm config",
+                        handler.name
+                    );
                 }
 
                 svm_blocks.fetch_add(1, Ordering::Relaxed);
@@ -382,7 +505,10 @@ async fn handle_message(mut stream: MessageStream) {
             }
             Message::SvmLog(log, handler) => {
                 if handler.options.svm.is_none() {
-                    error!("sync: router: svm:log route {} has non-svm config", handler.name);
+                    error!(
+                        "sync: router: svm:log route {} has non-svm config",
+                        handler.name
+                    );
                 }
 
                 svm_logs.fetch_add(1, Ordering::Relaxed);
@@ -393,6 +519,31 @@ async fn handle_message(mut stream: MessageStream) {
                     "slot": log.context.slot,
                     "signature": log.value.signature,
                     "logs": log.value.logs,
+                });
+                route_to_handler_lane(&mut lanes, handler, payload);
+            }
+            Message::CronTick(handler) => {
+                if !handler.options.is_cron_handler() {
+                    error!(
+                        "sync: router: cron route {} has non-cron config",
+                        handler.name
+                    );
+                }
+
+                cron_ticks.fetch_add(1, Ordering::Relaxed);
+
+                let payload = json!({
+                    "event": "cron_tick",
+                    "handler_id": handler.id,
+                    "tick_unix": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                    "rpc": handler.options.rpc.clone(),
+                    "ws": handler.options.ws.clone(),
+                    "svm": handler.options.svm.clone(),
+                    "evm": handler.options.evm.clone(),
+                    "cron": handler.options.cron.clone(),
                 });
                 route_to_handler_lane(&mut lanes, handler, payload);
             }

@@ -16,7 +16,7 @@ use tokio::sync::OnceCell;
 
 use crate::module_runtime;
 use crate::plugin;
-use crate::types::{HandlerOptions, HandlerRuntime};
+use crate::types::{HandlerMode, HandlerOptions, HandlerRuntime};
 
 #[derive(Deserialize, Clone)]
 struct HandlerHeader {
@@ -27,28 +27,25 @@ struct HandlerHeader {
 }
 
 #[derive(Deserialize, Clone)]
-struct QueryDefinition {
-    sql: Option<String>,
-    sql_inline: Option<String>,
-}
-
-#[derive(Deserialize, Clone)]
-struct QuerySection {
-    lookups: Option<BTreeMap<String, QueryDefinition>>,
-    mutations: Option<BTreeMap<String, QueryDefinition>>,
-}
-
-#[derive(Deserialize, Clone)]
 struct RuntimeSection {
-    prelookups: Option<Vec<String>>,
+    enrich: Option<Vec<String>>,
+    cron: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]
-struct HandlerToml {
-    handler: HandlerHeader,
+#[serde(deny_unknown_fields)]
+struct IngressSection {
     rpc: Option<String>,
     ws: Option<String>,
-    queries: Option<QuerySection>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+struct HandlerToml {
+    handler: HandlerHeader,
+    plugin: Option<toml::value::Table>,
+    ingress: Option<IngressSection>,
+    queries: Option<toml::value::Table>,
     runtime: Option<RuntimeSection>,
     evm: Option<crate::types::EvmOptions>,
     svm: Option<crate::types::SvmOptions>,
@@ -138,16 +135,38 @@ fn resolve_opt(value: Option<String>) -> Result<Option<String>> {
     value.map(|v| resolve_env(&v)).transpose()
 }
 
+fn resolve_env_in_toml(value: &mut toml::Value) -> Result<()> {
+    match value {
+        toml::Value::String(raw) => {
+            *raw = resolve_env(raw)?;
+        }
+        toml::Value::Array(items) => {
+            for item in items {
+                resolve_env_in_toml(item)?;
+            }
+        }
+        toml::Value::Table(table) => {
+            for (_, value) in table.iter_mut() {
+                resolve_env_in_toml(value)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn hash_file(path: &Path) -> Result<String> {
     let mut hasher = DefaultHasher::new();
-    let bytes =
-        fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let bytes = fs::read(path)
+        .with_context(|| format!("reading {}", path.display()))?;
     path.to_string_lossy().hash(&mut hasher);
     bytes.hash(&mut hasher);
     Ok(format!("{:016x}", hasher.finish()))
 }
 
-fn discover_plugins(chainsync_dir: &Path) -> Result<HashMap<String, LoadedPlugin>> {
+fn discover_plugins(
+    chainsync_dir: &Path,
+) -> Result<HashMap<String, LoadedPlugin>> {
     let plugins_dir = chainsync_dir.join("plugins");
     fs::create_dir_all(&plugins_dir)
         .with_context(|| format!("creating {}", plugins_dir.display()))?;
@@ -224,85 +243,59 @@ fn discover_handler_files(chainsync_dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn materialize_query_sql(
-    queries: &QuerySection,
-) -> Result<(
-    Option<BTreeMap<String, String>>,
-    Option<BTreeMap<String, String>>,
-)> {
-    let mut lookups: Option<BTreeMap<String, String>> = None;
-    let mut mutations: Option<BTreeMap<String, String>> = None;
+    queries: &toml::value::Table,
+) -> Result<Option<BTreeMap<String, String>>> {
+    let mut merged = BTreeMap::new();
 
-    if let Some(lookup_defs) = &queries.lookups {
-        let mut map = BTreeMap::new();
-        for (id, def) in lookup_defs {
-            let has_path = def.sql.is_some();
-            let has_inline = def.sql_inline.is_some();
-            if has_path == has_inline {
-                bail!(
-                    "lookup query '{}' must define exactly one of sql or sql_inline",
-                    id
-                );
-            }
-            if let Some(path) = &def.sql {
-                bail!(
-                    "lookup query '{}' uses sql='{}', but v2 requires sql_inline in handler TOML",
-                    id,
-                    path
-                );
-            } else if let Some(sql_inline) = &def.sql_inline {
-                map.insert(id.clone(), sql_inline.clone());
-            }
-        }
-        lookups = Some(map);
+    for (id, value) in queries {
+        let toml::Value::String(sql) = value else {
+            bail!(
+                "queries.{} must be an inline SQL string",
+                id
+            );
+        };
+        merged.insert(id.clone(), sql.clone());
     }
 
-    if let Some(mutation_defs) = &queries.mutations {
-        let mut map = BTreeMap::new();
-        for (id, def) in mutation_defs {
-            let has_path = def.sql.is_some();
-            let has_inline = def.sql_inline.is_some();
-            if has_path == has_inline {
-                bail!(
-                    "mutation query '{}' must define exactly one of sql or sql_inline",
-                    id
-                );
-            }
-            if let Some(path) = &def.sql {
-                bail!(
-                    "mutation query '{}' uses sql='{}', but v2 requires sql_inline in handler TOML",
-                    id,
-                    path
-                );
-            } else if let Some(sql_inline) = &def.sql_inline {
-                map.insert(id.clone(), sql_inline.clone());
-            }
-        }
-        mutations = Some(map);
-    }
+    let queries = if merged.is_empty() {
+        None
+    } else {
+        Some(merged)
+    };
 
-    Ok((lookups, mutations))
+    Ok(queries)
 }
 
-fn validate_prelookups(
-    prelookups: &Option<Vec<String>>,
-    lookup_queries: &Option<BTreeMap<String, String>>,
+fn validate_enrich(
+    enrich: &Option<Vec<String>>,
+    queries: &Option<BTreeMap<String, String>>,
 ) -> Result<()> {
-    let Some(prelookups) = prelookups else {
+    let Some(enrich) = enrich else {
         return Ok(());
     };
-    let Some(lookup_queries) = lookup_queries else {
-        bail!("runtime.prelookups declared but no queries.lookups are defined");
+    let Some(queries) = queries else {
+        bail!("runtime.enrich declared but no queries are defined");
     };
 
-    for prelookup in prelookups {
-        if !lookup_queries.contains_key(prelookup) {
-            bail!(
-                "runtime.prelookups references undefined lookup query '{}'",
-                prelookup
-            );
+    for enrich in enrich {
+        if !queries.contains_key(enrich) {
+            bail!("runtime.enrich references undefined query '{}'", enrich);
         }
     }
 
+    Ok(())
+}
+
+fn validate_cron(mode: &HandlerMode, cron: &Option<String>) -> Result<()> {
+    if !matches!(mode, HandlerMode::Cron) {
+        return Ok(());
+    }
+    let Some(expr) = cron else {
+        bail!("handler.mode=cron requires runtime.cron");
+    };
+    let _ = expr
+        .parse::<cron::Schedule>()
+        .with_context(|| format!("invalid runtime.cron '{}'", expr))?;
     Ok(())
 }
 
@@ -316,6 +309,14 @@ fn parse_handler(
     let parsed: HandlerToml = toml::from_str(&source)
         .with_context(|| format!("parsing {}", handler_file.display()))?;
 
+    let ingress_rpc = parsed.ingress.as_ref().and_then(|i| i.rpc.clone());
+    let ingress_ws = parsed.ingress.as_ref().and_then(|i| i.ws.clone());
+
+    let effective_rpc = ingress_rpc;
+    let effective_ws = ingress_ws;
+    let effective_evm = parsed.evm.clone();
+    let effective_svm = parsed.svm.clone();
+
     if parsed.handler.id.trim().is_empty() {
         bail!("handler.id is empty");
     }
@@ -325,19 +326,20 @@ fn parse_handler(
     if parsed.handler.chain != "evm" && parsed.handler.chain != "svm" {
         bail!("handler.chain must be one of: evm, svm");
     }
-    if parsed.handler.chain == "evm" && parsed.evm.is_none() {
+    if parsed.handler.chain == "evm" && effective_evm.is_none() {
         bail!("handler.chain=evm requires [evm] section");
     }
-    if parsed.handler.chain == "svm" && parsed.svm.is_none() {
+    if parsed.handler.chain == "svm" && effective_svm.is_none() {
         bail!("handler.chain=svm requires [svm] section");
     }
-    if parsed.handler.chain == "evm"
-        && parsed.ws.as_deref().is_none_or(|v| v.trim().is_empty())
+    let mode = HandlerMode::try_from(parsed.handler.mode.as_str())
+        .map_err(anyhow::Error::msg)?;
+
+    if matches!(mode, HandlerMode::Stream)
+        && parsed.handler.chain == "evm"
+        && effective_ws.as_deref().is_none_or(|v| v.trim().is_empty())
     {
-        bail!("handler.chain=evm requires top-level ws");
-    }
-    if parsed.handler.mode != "stream" {
-        bail!("handler.mode must be 'stream' in v2");
+        bail!("handler.chain=evm requires ingress.ws in stream mode");
     }
 
     let plugin = plugins.get(&parsed.handler.plugin).with_context(|| {
@@ -348,13 +350,29 @@ fn parse_handler(
         )
     })?;
 
-    let (lookup_queries, mutation_queries) = match parsed.queries {
+    let queries = match parsed.queries {
         Some(ref queries) => materialize_query_sql(queries)?,
-        None => (None, None),
+        None => None,
     };
 
-    let prelookups = parsed.runtime.and_then(|runtime| runtime.prelookups);
-    validate_prelookups(&prelookups, &lookup_queries)?;
+    let enrich = parsed
+        .runtime
+        .as_ref()
+        .and_then(|runtime| runtime.enrich.clone());
+    let cron = parsed
+        .runtime
+        .as_ref()
+        .and_then(|runtime| runtime.cron.clone());
+    validate_enrich(&enrich, &queries)?;
+    validate_cron(&mode, &cron)?;
+
+    let plugin_config = if let Some(table) = parsed.plugin {
+        let mut value = toml::Value::Table(table);
+        resolve_env_in_toml(&mut value)?;
+        Some(serde_json::to_value(value)?)
+    } else {
+        None
+    };
 
     let mut content_hasher = DefaultHasher::new();
     source.hash(&mut content_hasher);
@@ -367,11 +385,13 @@ fn parse_handler(
         module_name: handler_id.clone(),
         content_hash: content_hash.clone(),
         options: HandlerOptions {
-            rpc: resolve_opt(parsed.rpc)?,
-            ws: resolve_opt(parsed.ws)?,
-            lookup_queries,
-            mutation_queries,
-            prelookups,
+            mode,
+            rpc: resolve_opt(effective_rpc)?,
+            ws: resolve_opt(effective_ws)?,
+            queries,
+            enrich,
+            cron,
+            plugin: plugin_config,
             plugin_path: Some(plugin.path.to_string_lossy().into_owned()),
             content_hash: Some(content_hash),
             state_path: Some(
@@ -388,8 +408,8 @@ fn parse_handler(
                     .to_string_lossy()
                     .into_owned(),
             ),
-            evm: parsed.evm,
-            svm: parsed.svm,
+            evm: effective_evm,
+            svm: effective_svm,
         },
     })
 }
@@ -399,8 +419,9 @@ fn write_handler_status(
     status: &RuntimeStatus,
 ) -> Result<()> {
     let logs_dir = chainsync_dir.join("logs");
-    fs::create_dir_all(&logs_dir)
-        .with_context(|| format!("creating logs directory {}", logs_dir.display()))?;
+    fs::create_dir_all(&logs_dir).with_context(|| {
+        format!("creating logs directory {}", logs_dir.display())
+    })?;
     let state_dir = chainsync_dir.join("state");
     fs::create_dir_all(&state_dir).with_context(|| {
         format!("creating state directory {}", state_dir.display())
@@ -426,7 +447,9 @@ fn write_handler_status(
     Ok(())
 }
 
-fn run_handler_setup(handler: &HandlerRuntime) -> Result<Option<IngressOverrides>> {
+fn run_handler_setup(
+    handler: &HandlerRuntime,
+) -> Result<Option<IngressOverrides>> {
     let prefetched = setup_prefetched(&handler.options)?;
     let payload = serde_json::json!({
         "handler_id": handler.id,
@@ -434,6 +457,7 @@ fn run_handler_setup(handler: &HandlerRuntime) -> Result<Option<IngressOverrides
         "state_path": handler.options.state_path,
         "log_path": handler.options.log_path,
         "prefetched": prefetched,
+        "plugin": handler.options.plugin.clone(),
     });
     let bytes = serde_json::to_vec(&payload)?;
     let response = module_runtime::setup(handler, &bytes)?;
@@ -445,21 +469,23 @@ fn run_handler_setup(handler: &HandlerRuntime) -> Result<Option<IngressOverrides
     Ok(parsed.ingress_overrides)
 }
 
-fn setup_prefetched(options: &HandlerOptions) -> Result<Option<serde_json::Value>> {
-    let Some(prelookups) = &options.prelookups else {
+fn setup_prefetched(
+    options: &HandlerOptions,
+) -> Result<Option<serde_json::Value>> {
+    let Some(enrich) = &options.enrich else {
         return Ok(None);
     };
-    if prelookups.is_empty() {
+    if enrich.is_empty() {
         return Ok(None);
     }
-    let Some(lookups) = &options.lookup_queries else {
+    let Some(queries) = &options.queries else {
         return Ok(None);
     };
 
     let mut values = serde_json::Map::new();
-    for lookup_id in prelookups {
-        let sql = lookups.get(lookup_id).with_context(|| {
-            format!("setup prelookup '{}' not found in lookup queries", lookup_id)
+    for query_id in enrich {
+        let sql = queries.get(query_id).with_context(|| {
+            format!("setup enrich '{}' not found in queries", query_id)
         })?;
         let normalized = sql.trim().trim_end_matches(';');
         let wrapped = format!(
@@ -467,12 +493,12 @@ fn setup_prefetched(options: &HandlerOptions) -> Result<Option<serde_json::Value
             normalized
         );
         let result = Spi::get_one::<JsonB>(&wrapped)
-            .with_context(|| format!("executing setup prelookup '{}'", lookup_id))?
+            .with_context(|| format!("executing setup enrich '{}'", query_id))?
             .context(format!(
-                "setup prelookup '{}' did not return jsonb",
-                lookup_id
+                "setup enrich '{}' did not return jsonb",
+                query_id
             ))?;
-        values.insert(lookup_id.clone(), result.0);
+        values.insert(query_id.clone(), result.0);
     }
 
     Ok(Some(serde_json::Value::Object(values)))
@@ -608,62 +634,60 @@ pub fn sync_from_handlers(chainsync_dir: &Path) -> Result<SyncOutcome> {
     let previous_snapshots = routing_snapshots(&previous_handlers);
 
     for handler_file in handler_files {
-        let result =
-            parse_handler(chainsync_dir, &handler_file, &plugins).and_then(
-                |handler| {
-                    if !seen.insert(handler.id.clone()) {
-                        bail!("duplicate handler.id {}", handler.id);
-                    }
-                    let was_known =
-                        previous_handler_names.contains(&handler.id);
-                    let previous_hash = previous_hashes.get(&handler.id);
-                    let changed = !matches!(
-                        previous_hash,
-                        Some(existing) if existing == &handler.content_hash
-                    );
+        let result = parse_handler(chainsync_dir, &handler_file, &plugins)
+            .and_then(|handler| {
+                if !seen.insert(handler.id.clone()) {
+                    bail!("duplicate handler.id {}", handler.id);
+                }
+                let was_known = previous_handler_names.contains(&handler.id);
+                let previous_hash = previous_hashes.get(&handler.id);
+                let changed = !matches!(
+                    previous_hash,
+                    Some(existing) if existing == &handler.content_hash
+                );
 
-                    let mut runtime = HandlerRuntime {
-                        id: stable_handler_id(&handler.id),
-                        name: handler.id.clone(),
-                        status: "STOPPED".to_string(),
-                        options: handler.options,
-                        evm: OnceCell::const_new(),
-                        svm_ws: OnceCell::const_new(),
-                        svm_rpc: OnceCell::const_new(),
-                    };
-                    if let Some(overrides) =
-                        run_handler_setup(&runtime).with_context(|| {
+                let mut runtime = HandlerRuntime {
+                    id: stable_handler_id(&handler.id),
+                    name: handler.id.clone(),
+                    status: "STOPPED".to_string(),
+                    options: handler.options,
+                    evm: OnceCell::const_new(),
+                    svm_ws: OnceCell::const_new(),
+                    svm_rpc: OnceCell::const_new(),
+                };
+                if let Some(overrides) = run_handler_setup(&runtime)
+                    .with_context(|| {
                         format!("running setup for handler {}", runtime.name)
-                    })? {
-                        apply_ingress_overrides(&mut runtime.options, overrides);
-                    }
-                    loaded_handlers.push(runtime);
+                    })?
+                {
+                    apply_ingress_overrides(&mut runtime.options, overrides);
+                }
+                loaded_handlers.push(runtime);
 
-                    if !was_known {
-                        log!("sync: handlers: registered {}", handler.id);
-                        let status = RuntimeStatus {
-                            handler_id: handler.id.clone(),
-                            module_name: Some(handler.module_name.clone()),
-                            status: "REGISTERED".into(),
-                            last_error: None,
-                        };
-                        write_handler_status(chainsync_dir, &status)?;
-                        statuses.push(status);
-                    } else if changed {
-                        log!("sync: handlers: updated {}", handler.id);
-                        let status = RuntimeStatus {
-                            handler_id: handler.id.clone(),
-                            module_name: Some(handler.module_name.clone()),
-                            status: "UPDATED".into(),
-                            last_error: None,
-                        };
-                        write_handler_status(chainsync_dir, &status)?;
-                        statuses.push(status);
-                    }
+                if !was_known {
+                    log!("sync: handlers: registered {}", handler.id);
+                    let status = RuntimeStatus {
+                        handler_id: handler.id.clone(),
+                        module_name: Some(handler.module_name.clone()),
+                        status: "REGISTERED".into(),
+                        last_error: None,
+                    };
+                    write_handler_status(chainsync_dir, &status)?;
+                    statuses.push(status);
+                } else if changed {
+                    log!("sync: handlers: updated {}", handler.id);
+                    let status = RuntimeStatus {
+                        handler_id: handler.id.clone(),
+                        module_name: Some(handler.module_name.clone()),
+                        status: "UPDATED".into(),
+                        last_error: None,
+                    };
+                    write_handler_status(chainsync_dir, &status)?;
+                    statuses.push(status);
+                }
 
-                    Ok(handler.id)
-                },
-            );
+                Ok(handler.id)
+            });
 
         if let Err(error) = result {
             warning!(

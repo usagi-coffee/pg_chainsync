@@ -33,7 +33,9 @@ pub fn log_message(message: &str) {
         line.push_str(message);
         line.push('\n');
 
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+        if let Ok(mut file) =
+            OpenOptions::new().create(true).append(true).open(&path)
+        {
             let _ = file.write_all(line.as_bytes());
         } else {
             eprintln!("[chainsync-sdk] {}", message);
@@ -100,7 +102,7 @@ pub struct SvmIngressOverrides {
 }
 
 pub trait PluginHandler {
-    fn handle_event(input: Value) -> Result<ModuleResponse, String>;
+    fn handle(input: Value) -> Result<ModuleResponse, String>;
 
     fn setup(_input: Value) -> Result<SetupResponse, String> {
         Ok(SetupResponse::default())
@@ -154,7 +156,7 @@ macro_rules! export_plugin {
             {
                 Ok(input) => {
                     $crate::set_log_path_from_input(&input);
-                    match <$handler as $crate::PluginHandler>::handle_event(input) {
+                    match <$handler as $crate::PluginHandler>::handle(input) {
                         Ok(output) => output,
                         Err(error) => $crate::ModuleResponse::Error {
                             message: error,

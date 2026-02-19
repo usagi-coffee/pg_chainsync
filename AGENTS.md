@@ -27,7 +27,7 @@ Build and evolve `pg_chainsync` as a filesystem-first PGRX extension where handl
 - Do not introduce SQL status APIs (`list_jobs`, `job_status`, etc.).
 - Do not allow arbitrary SQL from modules.
 - Do not let modules call SPI directly.
-- Do not break ABI compatibility rules without explicit ABI version bump/update.
+- Break ABI compatibility rules without explicit ABI version bump/update as we are in the experimental stage.
 - Keep unsafe FFI handling centralized in SDK/runtime glue, not in plugin business logic.
 - Support `setup` hook only; do not rely on `cleanup` hooks.
 
@@ -62,12 +62,12 @@ Protocol requirements:
 
 ## Query and mutation model
 
-- Queries are declared inline in handler TOML files (`sql_inline`).
+- Queries are declared inline in handler TOML files under `[queries]`.
 - Host loads and validates query definitions on reload/startup.
 - Host prepares plans and caches handles.
 - Module references only stable IDs (`query_id`/`statement_id`) plus typed params.
 - Host executes prepared plans transactionally.
-- Host supports prelookup enrichment before first module invocation.
+- Host supports first-call enrichment before first module invocation.
 
 ## Resume model
 
@@ -76,7 +76,7 @@ Protocol requirements:
 
 ## First-call enrichment model
 
-- Support handler-configured `prelookups` resolved by host before first module call.
+- Support handler-configured `enrich` resolved by host before first module call.
 - Pass prefetched values and handler `state_path` in module input payload.
 - Keep `NeedLookup` path available for misses or conditional secondary data.
 

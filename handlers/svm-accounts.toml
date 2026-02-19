@@ -1,0 +1,37 @@
+[handler]
+id = "svm-accounts"
+plugin = "svm-accounts"
+chain = "svm"
+mode = "cron"
+
+[ingress]
+rpc = "${HELIUS_RPC_URL}"
+
+[svm]
+program = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+accounts_data_slice = { offset = 64, length = 8 }
+accounts_filters = [
+  { dataSize = 165 },
+  { memcmp = { offset = 0, bytes = "${TOKEN_MINT}" } }
+]
+
+[runtime]
+cron = "* * * * * *"
+
+[plugin]
+limit = 2000
+decimals = 6
+
+[queries]
+upsert_account = """
+INSERT INTO accounts (address, balance, ui_balance)
+VALUES (
+  ($1->>'address')::text,
+  ($1->>'balance')::numeric,
+  ($1->>'balance')::numeric / POWER(10::numeric, ($1->>'decimals')::smallint)
+)
+ON CONFLICT (address) DO UPDATE
+SET balance = EXCLUDED.balance,
+    ui_balance = EXCLUDED.ui_balance;
+"""
+

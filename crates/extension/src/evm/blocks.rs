@@ -5,8 +5,8 @@ use anyhow::{Context, bail, ensure};
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::task::JoinHandle;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio_stream::{StreamExt, StreamNotifyClose};
 
@@ -86,7 +86,8 @@ fn spawn_group(
                     Some(Some(block)) => {
                         for handler in &group_handlers {
                             if let Err(error) =
-                                handle_block(handler, block.clone(), &channel).await
+                                handle_block(handler, block.clone(), &channel)
+                                    .await
                             {
                                 warning!(
                                     "sync: ingress: evm:blocks: {}: route={} dispatch failed: {}",
@@ -133,7 +134,10 @@ async fn desired_groups(
 
     let mut groups: HashMap<String, Vec<Arc<HandlerRuntime>>> = HashMap::new();
     for handler in handlers {
-        groups.entry(ingress_key(&handler)).or_default().push(handler);
+        groups
+            .entry(ingress_key(&handler))
+            .or_default()
+            .push(handler);
     }
 
     Some(groups)
@@ -163,7 +167,9 @@ pub async fn listen(channel: Arc<Channel>, mut signals: BusReader<Signal>) {
                 for (key, group_handlers) in groups {
                     let fingerprint = group_fingerprint(&group_handlers);
                     match running.remove(&key) {
-                        Some((old_fingerprint, handle)) if old_fingerprint == fingerprint => {
+                        Some((old_fingerprint, handle))
+                            if old_fingerprint == fingerprint =>
+                        {
                             keep.insert(key, (old_fingerprint, handle));
                         }
                         Some((_, handle)) => {

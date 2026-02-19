@@ -25,7 +25,9 @@ pub async fn connect_ws<'a>(
     .await
 }
 
-pub async fn reconnect_ws(url: &str) -> anyhow::Result<EvmPubSub, EvmPubSubError> {
+pub async fn reconnect_ws(
+    url: &str,
+) -> anyhow::Result<EvmPubSub, EvmPubSubError> {
     alloy::providers::ProviderBuilder::<Identity, Identity, AnyNetwork>::default()
         .connect_ws(alloy::providers::WsConnect::new(url))
         .await

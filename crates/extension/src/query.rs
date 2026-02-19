@@ -22,7 +22,9 @@ impl HandlerRuntime {
     }
 
     pub fn query_all() -> Result<Vec<HandlerRuntime>, anyhow::Error> {
-        Ok(handlers_store().read().expect("handlers store read").clone())
+        Ok(handlers_store()
+            .read()
+            .expect("handlers store read")
+            .clone())
     }
 }
-

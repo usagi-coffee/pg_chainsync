@@ -29,7 +29,7 @@
 - SQL is executed by host-side Rust via SPI from allowlisted query registry.
 - Queries are prepared/cached as plans at runtime (`reload`/startup).
 - Lifecycle hook policy: `setup` only (no `cleanup` hook guarantee).
-- Host performs optional prelookup enrichment before first module call.
+- Host performs optional enrichment before first module call.
 - Shared ingress deduplicates subscriptions/decode and fans out one event to many handlers.
 
 ## Requirements
@@ -96,18 +96,22 @@ SELECT chainsync.reload();
 - `[handler].id`
 - `[handler].plugin`
 - `[handler].chain` = `"evm" | "svm"`
-- `[handler].mode` = `"stream"`
+- `[handler].mode` = `"stream" | "cron"`
 - Plugin file is `<data_directory>/chainsync/plugins/<handler.plugin>.so`
 
 ### Optional keys
 
-- top-level: `rpc`, `ws`
+- `[ingress].rpc`, `[ingress].ws`
+- `[runtime].cron` (required when `mode = "cron"`, 6-field cron with seconds, example: `"* * * * * *"`)
+- `[plugin]` (arbitrary plugin options injected into `setup`/`handle_event` payload as `plugin`)
 
 ### Validation
 
 - `handler.chain = "evm"` requires `[evm]`
 - `handler.chain = "svm"` requires `[svm]`
-- `handler.mode` must be `"stream"` in v2
+- `handler.mode` must be one of: `"stream"`, `"cron"`
+- `handler.mode = "stream"` with `handler.chain = "evm"` requires `ingress.ws`
+- `handler.mode = "cron"` requires `[runtime].cron` as a valid cron expression
 - `${ENV_VAR}` placeholders are resolved from process environment
 
 ### Example handler TOML
@@ -119,14 +123,19 @@ plugin = "erc20-transfer"
 chain = "evm"
 mode = "stream"
 
+[ingress]
 ws = "${EVM_WS_URL}"
+
+[plugin]
+recovery_table = "erc20_transfers"
+min_confirms = 1
 
 [evm]
 address = "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
 event = "Transfer(address,address,uint256)"
 
-[queries.mutations.upsert_transfer]
-sql_inline = """
+[queries]
+upsert_transfer = """
 INSERT INTO erc20_transfers (contract, tx_hash, log_index, amount_raw)
 VALUES (($1->>'contract')::text, ($1->>'tx_hash')::text, ($1->>'log_index')::bigint, ($1->>'amount_raw')::numeric)
 ON CONFLICT (contract, tx_hash, log_index) DO UPDATE
@@ -134,10 +143,14 @@ SET amount_raw = EXCLUDED.amount_raw;
 """
 
 [runtime]
-prelookups = []
+enrich = []
 ```
 
-In file-based handler mode, queries must use `sql_inline` (no external `queries/*.sql` files).
+In file-based handler mode, queries must be inline SQL in `handler.toml` (no external `queries/*.sql` files).
+Only this form is supported:
+
+- `[queries]`
+- `query_id = """..."""` (usable by `runtime.enrich` and by module `Done { mutations: [{ id, payload }] }`)
 
 ## Runtime artifacts per handler
 
@@ -234,9 +247,9 @@ Notes:
 Plugins do not run SQL directly.
 Host executes allowlisted lookup/mutation queries declared in handler TOML.
 
-## Prelookup enrichment (first-call context)
+## Enrichment (first-call context)
 
-Handlers can declare prelookups that the host resolves before the first module call for each event.
+Handlers can declare `enrich` query IDs that the host resolves before the first module call for each event.
 
 Typical usage:
 
@@ -246,8 +259,8 @@ Typical usage:
 Flow:
 
 1. Event arrives.
-2. Host runs handler-configured prelookup query IDs via prepared SPI plans.
-3. Host caches prelookup results per handler worker process.
+2. Host runs handler-configured enrich query IDs via prepared SPI plans.
+3. Host caches enrich results per handler worker process.
 4. Host builds event payload with `prefetched` and `state_path`.
 5. Module receives enriched first call and can skip extra lookup roundtrip.
 6. Module uses `prefetched` values directly when available.
@@ -279,7 +292,7 @@ At runtime:
 Typical flow:
 
 1. Event arrives for ERC-20 transfer.
-2. Host enriches payload with prelookup results (for example recovery checkpoint).
+2. Host enriches payload with `enrich` results (for example recovery checkpoint).
 3. Module decodes topics/data and emits `Done` with `upsert_transfer`.
 4. Host applies mutation query transactionally.
 

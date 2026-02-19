@@ -43,16 +43,17 @@ fn stable_name(handler_id: i64, kind: &str, query_id: &str) -> String {
 
 #[derive(Default, Clone)]
 struct HandlerPrepared {
-    lookups: HashMap<String, String>,
-    mutations: HashMap<String, MutationPrepared>,
+    queries: HashMap<String, QueryPrepared>,
 }
 
 #[derive(Clone)]
-struct MutationPrepared {
+struct QueryPrepared {
+    lookup_stmt: String,
     sql: String,
 }
 
-static PREPARED: OnceLock<RwLock<HashMap<i64, HandlerPrepared>>> = OnceLock::new();
+static PREPARED: OnceLock<RwLock<HashMap<i64, HandlerPrepared>>> =
+    OnceLock::new();
 
 fn prepared_store() -> &'static RwLock<HashMap<i64, HandlerPrepared>> {
     PREPARED.get_or_init(|| RwLock::new(HashMap::new()))
@@ -76,25 +77,6 @@ fn prepare_named_statement(name: &str, sql: &str) -> Result<()> {
     Ok(())
 }
 
-fn prepare_mutation_statement(name: &str, sql: &str) -> Result<()> {
-    // Mutation SQL receives payload as $1 and expects jsonb operators (->, ->>),
-    // so parameter type must be explicit at PREPARE time.
-    Spi::run(
-        format!(
-            "DO $$ BEGIN \
-             IF EXISTS (SELECT 1 FROM pg_prepared_statements WHERE name = '{name}') THEN \
-               DEALLOCATE {name}; \
-             END IF; \
-             END $$;"
-        )
-        .as_str(),
-    )
-    .with_context(|| format!("deallocating statement {}", name))?;
-    Spi::run(&format!("PREPARE {}(jsonb) AS {}", name, sql))
-        .with_context(|| format!("preparing statement {}", name))?;
-    Ok(())
-}
-
 fn prepare_lookup_statement(name: &str, sql: &str) -> Result<()> {
     let normalized = sql.trim().trim_end_matches(';');
     let wrapped = format!(
@@ -109,27 +91,20 @@ pub fn prepare_handler_queries(handler: &HandlerRuntime) -> Result<usize> {
 
     let mut handler_prepared = HandlerPrepared::default();
 
-    if let Some(lookups) = &handler.options.lookup_queries {
-        for (query_id, sql_text) in lookups {
-            let sql = resolve_env_sql(sql_text)
-                .with_context(|| format!("resolving lookup sql '{}'", query_id))?;
-            let name = stable_name(handler.id, "lookup", query_id);
-            prepare_lookup_statement(&name, &sql)?;
-            handler_prepared.lookups.insert(query_id.clone(), name);
-            prepared += 1;
-        }
-    }
-
-    if let Some(mutations) = &handler.options.mutation_queries {
-        for (query_id, sql_text) in mutations {
+    if let Some(queries) = &handler.options.queries {
+        for (query_id, sql_text) in queries {
             let sql = resolve_env_sql(sql_text).with_context(|| {
-                format!("resolving mutation sql '{}'", query_id)
+                format!("resolving query sql '{}'", query_id)
             })?;
-            let name = stable_name(handler.id, "mutation", query_id);
-            prepare_mutation_statement(&name, &sql)?;
-            handler_prepared
-                .mutations
-                .insert(query_id.clone(), MutationPrepared { sql });
+            let lookup_name = stable_name(handler.id, "query_lookup", query_id);
+            prepare_lookup_statement(&lookup_name, &sql)?;
+            handler_prepared.queries.insert(
+                query_id.clone(),
+                QueryPrepared {
+                    lookup_stmt: lookup_name,
+                    sql,
+                },
+            );
             prepared += 1;
         }
     }
@@ -149,8 +124,9 @@ pub fn prepare_all_handlers(handlers: &[HandlerRuntime]) -> Result<usize> {
         .expect("prepared plans lock")
         .clear();
     for handler in handlers {
-        total += prepare_handler_queries(handler)
-            .with_context(|| format!("preparing queries for {}", handler.name))?;
+        total += prepare_handler_queries(handler).with_context(|| {
+            format!("preparing queries for {}", handler.name)
+        })?;
     }
     Ok(total)
 }
@@ -160,14 +136,14 @@ pub fn execute_mutation(
     mutation_id: &str,
     payload: JsonB,
 ) -> Result<()> {
-    let mutation_sql = {
+    let query_sql = {
         let guard = prepared_store().read().expect("prepared plans lock");
         let Some(handler) = guard.get(&handler_id) else {
             anyhow::bail!("no prepared queries for handler {}", handler_id);
         };
-        let Some(query) = handler.mutations.get(mutation_id) else {
+        let Some(query) = handler.queries.get(mutation_id) else {
             anyhow::bail!(
-                "mutation id '{}' not prepared for handler {}",
+                "query id '{}' not prepared for handler {}",
                 mutation_id,
                 handler_id
             );
@@ -175,33 +151,30 @@ pub fn execute_mutation(
         query.sql.clone()
     };
 
-    Spi::run_with_args(
-        mutation_sql.as_str(),
-        &vec![DatumWithOid::from(payload)],
-    )
-    .with_context(|| format!("executing mutation {}", mutation_id))?;
+    Spi::run_with_args(query_sql.as_str(), &vec![DatumWithOid::from(payload)])
+        .with_context(|| format!("executing query {}", mutation_id))?;
     Ok(())
 }
 
 pub fn execute_lookup(handler_id: i64, lookup_id: &str) -> Result<Value> {
-    let sql_name = {
+    let lookup_stmt = {
         let guard = prepared_store().read().expect("prepared plans lock");
         let Some(handler) = guard.get(&handler_id) else {
             anyhow::bail!("no prepared queries for handler {}", handler_id);
         };
-        let Some(name) = handler.lookups.get(lookup_id) else {
+        let Some(query) = handler.queries.get(lookup_id) else {
             anyhow::bail!(
-                "lookup id '{}' not prepared for handler {}",
+                "query id '{}' not prepared for handler {}",
                 lookup_id,
                 handler_id
             );
         };
-        name.clone()
+        query.lookup_stmt.clone()
     };
 
     let result =
-        Spi::get_one::<JsonB>(format!("EXECUTE {}", sql_name).as_str())
-            .with_context(|| format!("executing lookup {}", lookup_id))?
-            .context("lookup did not return JSON value")?;
+        Spi::get_one::<JsonB>(format!("EXECUTE {}", lookup_stmt).as_str())
+            .with_context(|| format!("executing query {}", lookup_id))?
+            .context("query did not return JSON value")?;
     Ok(result.0)
 }
